@@ -88,6 +88,9 @@ test("complete producer and Host preserve action semantics when diagnostic lanes
   assert.deepEqual(evaluateTurnEnvelope({operation: "compose_complete", payload: complete, scheduler_execution_args: ""}), complete);
   const host = evaluateTurnEnvelope({operation: "host_dispatch_context", payload: complete, envelope: current});
   assert.equal(host.primary_action, (source.interaction_contract as JsonObject).agent_channel.primary_action);
+  assert.deepEqual(host.work_identity, {goal_id: "goal-turn-envelope", agent_id: "agent-ts", todo_id: "todo-1"});
+  assert.equal(Object.hasOwn(evaluateTurnEnvelope({operation: "host_context", payload: complete, envelope: current}),
+    "work_identity"), false);
   assert.equal(evaluateTurnEnvelope({operation: "complete_host_lineage", payload: complete, envelope: current}).goal_id,
     source.goal_id);
   assert.deepEqual(source, before);

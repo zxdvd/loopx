@@ -1657,6 +1657,12 @@ function completeHostDecision(request: JsonObject): JsonObject {
   return completeHostSource(request).decision;
 }
 
+function completeWorkIdentity(decision: JsonObject): JsonObject {
+  return {goal_id: decision.goal_id ?? null,
+    agent_id: object(decision.agent_identity).agent_id ?? null,
+    todo_id: selectedWorkTodoId(decision) ?? ""};
+}
+
 function completeTaskTextSha256(decision: JsonObject, todoId: unknown): string | null {
   const context = object(object(object(decision.interaction_contract).agent_channel).work_context);
   const declared = {...object(decision.selected_todo),
@@ -2079,10 +2085,10 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     return {ok: true};
   }
   if (operation === "complete_host_lineage") {
-    const decision = completeHostDecision(request);
-    return {goal_id: scalarString(decision.goal_id, "Turn Goal identity").trim(),
-      agent_id: scalarString(object(decision.agent_identity).agent_id, "Turn Agent identity").trim(),
-      todo_id: (selectedWorkTodoId(decision) ?? "").trim()};
+    const identity = completeWorkIdentity(completeHostDecision(request));
+    return {goal_id: scalarString(identity.goal_id, "Turn Goal identity").trim(),
+      agent_id: scalarString(identity.agent_id, "Turn Agent identity").trim(),
+      todo_id: scalarString(identity.todo_id, "Turn Todo identity").trim()};
   }
   if (operation === "host_context" || operation === "host_dispatch_context") {
     const {decision, projection} = completeHostSource(request);
@@ -2094,7 +2100,8 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     return {primary_action: object(projection.action).primary_action ?? null,
       replan_admitted: Object.keys(object(projection.replan_action_packet)).length > 0,
       checkpointed_write_approval: Object.hasOwn(object(projection.boundary), "checkpointed_boundary_authority"),
-      execution_profile_present: Object.keys(object(decision.execution_profile)).length > 0};
+      execution_profile_present: Object.keys(object(decision.execution_profile)).length > 0,
+      ...(operation === "host_dispatch_context" ? {work_identity: completeWorkIdentity(decision)} : {})};
   }
   if (operation === "driver_route") return {route: turnEnvelopeRoute(requireJsonObject(request.envelope, "Turn route envelope"),
     request.historical_route_text === undefined ? undefined : requireJsonObject(request.historical_route_text, "historical route text"))};

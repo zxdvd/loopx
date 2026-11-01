@@ -395,3 +395,20 @@ def test_complete_cli_input_rejects_corruption_before_provider(tmp_path, complet
         asyncio.run(execute(provider, cfg, req))
     assert provider.calls == []
     assert not cfg.state_dir.exists()
+
+
+def test_complete_tool_identity_uses_the_shared_source_owner(complete_host_request):
+    from loopx_ark_turn.config import require_request
+    from tests.control_plane.test_turn_host_decision_capture import _fixture_module
+
+    class ExecutorLayout(dict):
+        def get(self, key, *default):
+            if key in {"goal_id", "agent_id", "action"}:
+                raise AssertionError("provider decoded the historical executor layout")
+            return super().get(key, *default)
+
+    request, _ = complete_host_request
+    request = {**request, "turn_envelope": ExecutorLayout(request["turn_envelope"])}
+    fixture = _fixture_module()
+    assert require_request(request) == {"KEY": request["turn_key"],
+        "GOAL_ID": fixture.GOAL_ID, "AGENT_ID": fixture.AGENT_ID, "TODO_ID": fixture.TODO_ID}

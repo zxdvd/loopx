@@ -7,8 +7,9 @@ This adapter does not activate a native Goal or add a second scheduler.
 
 ## Install and select
 
-Install both packages from the same checkout containing the shared
-`loopx.control_plane.turn_driver.host_candidate` contract:
+Install both packages from the same integrated LoopX 2.2 checkout containing
+`loopx.extensions.turn_host.extract_turn_work_identity`. The version floor alone
+does not establish that an older wheel contains this shared contract:
 
 ```bash
 uv pip install -e . -e packages/loopx-ark-turn

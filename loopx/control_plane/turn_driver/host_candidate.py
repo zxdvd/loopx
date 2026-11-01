@@ -103,6 +103,29 @@ def complete_host_input(request: Mapping[str, Any]) -> dict[str, Any] | None:
     return _captured_model_input(request)
 
 
+def extract_turn_work_identity(request: Mapping[str, Any]) -> dict[str, Any]:
+    """Read tool binding from the same dispatch owner without copying authority.
+
+    Complete input uses the selected-work owner. Historical requests keep raw
+    identity values so provider string/NUL checks retain their original meaning.
+    This read grants no tool or work permission.
+    """
+    try:
+        checked = _complete_host_source(request, operation="host_dispatch_context")
+    except RuntimeError as exc:
+        raise ValueError("complete Turn contract rejected") from exc
+    if checked is not None:
+        identity = checked["work_identity"]
+        if not isinstance(identity, dict):
+            raise RuntimeError("complete Turn work identity must be an object")
+        return dict(identity)
+    extract_turn_authority(request)
+    envelope = _mapping(request.get("turn_envelope"))
+    selected = _mapping(_mapping(envelope.get("action")).get("selected_todo"))
+    return {"goal_id": envelope.get("goal_id"), "agent_id": envelope.get("agent_id"),
+        "todo_id": selected.get("todo_id")}
+
+
 def _captured_model_input(request: Mapping[str, Any]) -> dict[str, Any]:
     """Transport original-reader metadata after complete-source validation."""
     envelope = _mapping(request.get("turn_envelope"))

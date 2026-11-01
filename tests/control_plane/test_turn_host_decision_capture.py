@@ -293,6 +293,7 @@ def test_capture_compacts_layout_without_changing_values(tmp_path, caller):
 @pytest.mark.parametrize("adaptive", [False, True])
 def test_complete_session_lineage_preserves_saved_host_sessions(complete_host_request, tmp_path, adaptive):
     from loopx.control_plane.quota.turn_envelope import build_turn_envelope, compose_turn_decision
+    from loopx.extensions.turn_host import extract_turn_work_identity
     from loopx.control_plane.turn_driver.codex_sessions import (
         _lineage, _store_codex_cli_session, load_codex_cli_session, codex_cli_session_binding,
     )
@@ -311,6 +312,10 @@ def test_complete_session_lineage_preserves_saved_host_sessions(complete_host_re
     expected = {"goal_id": fixture.GOAL_ID, "agent_id": fixture.AGENT_ID,
                 "todo_id": "todo_adaptive_owner" if adaptive else fixture.TODO_ID}
     historical = {key: value for key, value in request.items() if key != "work_contract"}
+    assert extract_turn_work_identity(request) == expected
+    # Historical optional hosts read the declared id directly; changing their
+    # adaptive fallback would be a separate compatibility change.
+    assert extract_turn_work_identity(historical) == {**expected, "todo_id": fixture.TODO_ID}
     for scope in ("todo", "agent"):
         assert _lineage(request, session_scope=scope) == expected
         assert _lineage(historical, session_scope=scope) == expected
@@ -333,12 +338,47 @@ def test_complete_session_lineage_preserves_saved_host_sessions(complete_host_re
             assert saved.read_bytes() == before
 
 
+def test_historical_tool_identity_preserves_raw_values(complete_host_request):
+    from copy import deepcopy
+    from hashlib import sha256
+    from loopx.control_plane.quota.turn_envelope import turn_envelope_action_signature_document
+    from loopx.extensions.turn_host import extract_turn_work_identity
+
+    original, _ = complete_host_request
+    fixture = _fixture_module()
+    for field in ("goal_id", "agent_id", "todo_id"):
+        for value in (None, False, 0, 23, [], " \ufeffraw identity "):
+            request = deepcopy({key: value for key, value in original.items() if key != "work_contract"})
+            envelope = request["turn_envelope"]
+            target = envelope["action"]["selected_todo"] if field == "todo_id" else envelope
+            target[field] = value
+            digest = "sha256:" + sha256(json.dumps(turn_envelope_action_signature_document(envelope),
+                sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+            envelope["action_signature"].update(source_hash=digest, envelope_hash=digest, matches=True)
+            expected = {"goal_id": fixture.GOAL_ID, "agent_id": fixture.AGENT_ID, "todo_id": fixture.TODO_ID,
+                        field: value}
+            assert extract_turn_work_identity(request) == expected
+
+
+def test_complete_tool_identity_never_falls_back_to_historical_input(complete_host_request):
+    from copy import deepcopy
+    from loopx.extensions.turn_host import extract_turn_work_identity
+
+    request, contract = complete_host_request
+    before = deepcopy(request)
+    for invalid in (None, {**contract, "reason": "changed source"},
+                    {**contract, "schema_version": "unsupported_fixture_version"}):
+        with pytest.raises(ValueError, match="complete Turn contract rejected"):
+            extract_turn_work_identity({**request, "work_contract": invalid})
+    assert request == before
+
+
 def test_complete_host_rejects_self_consistent_wrong_effect_identity(complete_host_request):
     from copy import deepcopy
     from hashlib import sha256
     from loopx.control_plane.quota.turn_envelope import turn_envelope_action_signature_document
     from loopx.control_plane.turn_driver.codex_sessions import _lineage
-    from loopx.control_plane.turn_driver.host_candidate import complete_host_input
+    from loopx.control_plane.turn_driver.host_candidate import complete_host_input, extract_turn_work_identity
 
     original, _ = complete_host_request
     for field in ("goal_id", "agent_id", "todo_id"):
@@ -356,6 +396,8 @@ def test_complete_host_rejects_self_consistent_wrong_effect_identity(complete_ho
         for consume in (_lineage, complete_host_input):
             with pytest.raises(RuntimeError, match="lineage differs"):
                 consume(request)
+        with pytest.raises(ValueError, match="complete Turn contract rejected"):
+            extract_turn_work_identity(request)
 
 
 @pytest.mark.parametrize("from_journal", [False, True])

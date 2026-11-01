@@ -207,6 +207,65 @@ def test_complete_cli_input_without_exact_lifetime_cannot_open_memory(config, pr
     assert not Path(config.state_dir).exists()
 
 
+def test_complete_identity_reaches_the_unchanged_lifetime_gate(complete_host_request):
+    from loopx_memt_turn.host import work_identity
+
+    class ExecutorLayout(dict):
+        def get(self, key, *default):
+            if key in {"goal_id", "agent_id", "action"}:
+                raise AssertionError("provider decoded the historical executor layout")
+            return super().get(key, *default)
+
+    request, _ = complete_host_request
+    request = {**request, "turn_envelope": ExecutorLayout(request["turn_envelope"])}
+    # The actual CLI still has no admitted exact lifetime. Moving its identity
+    # reader must reach this same refusal, never manufacture a Goal instance.
+    with pytest.raises(AdapterError, match="exact_goal_instance_required"):
+        work_identity(request)
+
+
+@pytest.mark.parametrize("invalidate_source", [False, True])
+def test_generation_validation_retains_the_complete_source(complete_host_request, monkeypatch, invalidate_source):
+    from types import SimpleNamespace
+    from loopx_memt_turn import host
+
+    request, _ = complete_host_request
+    request = copy.deepcopy(request)
+    vision = {"schema_version": "goal_vision_replan_contract_v0", "state": "active",
+        "vision_patch": {"acceptance_summary": "Validate the preserved work."},
+        "path_delta": {"outcome": "replan", "prior_assumption": "Existing work remains useful.",
+            "observed_reality": "The artifact is independently checked.",
+            "changed": ["Use the verified artifact for the next work step."],
+            "evidence_refs": ["fixture:checked-work"]}}
+    candidate = {"result_kind": "replan_required", "classification": "validated_fixture_replan",
+        "summary": "Original work remains useful.", "next_action": "Continue the original work.",
+        "path_delta_mode": "material_replan", "agent_vision_json": json.dumps(vision),
+        "work_evidence": ["fixture:artifact"], "validation_evidence": ["fixture:checked-work"]}
+
+    class Session:
+        def chat(self, *_args, **_kwargs):
+            return {"turn_completed": True, "answer": json.dumps(candidate)}
+
+    real_build = host.build_result
+
+    def build_then_invalidate(*args, **kwargs):
+        result = real_build(*args, **kwargs)
+        if invalidate_source:
+            request["work_contract"]["reason"] = "source changed after candidate conversion"
+        return result
+
+    monkeypatch.setattr(host, "build_result", build_then_invalidate)
+    # This exercises the converter only. It does not supply a synthetic lifetime
+    # to the actual CLI or qualify opening/exporting native memory.
+    config = SimpleNamespace(max_new_tokens=128, max_tool_calls=4)
+    call = host.generate(Session(), None, request, config)
+    if invalidate_source:
+        with pytest.raises(AdapterError, match="invalid_typed_candidate"):
+            asyncio.run(call)
+    else:
+        assert asyncio.run(call)["result_kind"] == "replan_required"
+
+
 def test_lifecycle_only_profile_cannot_supply_an_executable_turn(tmp_path):
     from tests.control_plane.test_turn_host_decision_capture import _fixture_module
     from loopx.control_plane.projects.registry_codec import source_session_registry_transaction
