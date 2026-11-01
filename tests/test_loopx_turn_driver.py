@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import os
+import shlex
 import subprocess
 import sys
 from collections.abc import Mapping
@@ -1656,6 +1657,7 @@ def test_quota_cli_without_scheduler_context_fails_closed(tmp_path: Path) -> Non
     assert hint["codex_app"]["applicability"] == "blocked_invalid_context"
 
 
+@pytest.mark.parametrize("context_delivery", ["off", "on"])
 @pytest.mark.parametrize(
     "profile_args",
     (
@@ -1666,32 +1668,80 @@ def test_quota_cli_without_scheduler_context_fails_closed(tmp_path: Path) -> Non
 def test_quota_cli_codex_app_profile_is_explicit_and_applicable(
     tmp_path: Path,
     profile_args: list[str],
+    context_delivery: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from loopx.cli import build_parser
+    from loopx.control_plane.turn_driver.codex_context import codex_context_hook
+
+    monkeypatch.setenv("CODEX_THREAD_ID", "profile-fixture")
+    monkeypatch.delenv("CODEX_ROLLOUT_TRACE_ROOT", raising=False)
     project, runtime, registry = _write_live_fixture(tmp_path)
-    output = io.StringIO()
+    state = project / ".codex/goals/loopx-turn-fixture/ACTIVE_GOAL_STATE.md"
+    original = state.read_bytes()
 
-    with contextlib.redirect_stdout(output):
-        exit_code = cli_main(
-            [
-                "--registry",
-                str(registry),
-                "--runtime-root",
-                str(runtime),
-                "--format",
-                "json",
-                "quota",
-                "should-run",
-                "--goal-id",
-                "loopx-turn-fixture",
-                "--agent-id",
-                "codex-fixture",
-                *profile_args,
-            ]
+    def invoke(arguments: list[str]) -> tuple[int, dict[str, Any]]:
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = cli_main(
+                ["--registry", str(registry), "--runtime-root", str(runtime),
+                 "--format", "json", *arguments]
+            )
+        return code, json.loads(output.getvalue())
+
+    native_args = []
+    if context_delivery == "on":
+        context, captures = tmp_path / "context", tmp_path / "captures"
+        context.mkdir(mode=0o700)
+        captures.mkdir(mode=0o700)
+        codex_context_hook(str(context), {
+            "session_id": "profile-fixture", "cwd": str(project),
+            "hook_event_name": "SessionStart", "source": "startup",
+        })
+        native_args = ["--codex-context-dir", str(context),
+                       "--decision-output-root", str(captures)]
+
+    exit_code, payload = invoke([
+        "quota", "should-run", "--goal-id", "loopx-turn-fixture",
+        "--agent-id", "codex-fixture", "--turn-instance-id", "profile-turn",
+        "--context-delivery", context_delivery, *profile_args, *native_args,
+    ])
+    assert exit_code == 0 and payload["ok"], payload
+    ledger = runtime / "goals/loopx-turn-fixture/rollout-event-log.jsonl"
+    recorded = ledger.read_bytes()
+    admissions = [event for line in recorded.splitlines()
+                  if (event := json.loads(line))["event_kind"] == "quota_should_run"
+                  and event.get("run_id") == "profile-turn"]
+    assert len(admissions) == 1
+    if context_delivery == "on":
+        assert payload["mode"] == "full"
+        command, observed, digest = payload["recovery"]["command"], b"", None
+        while True:
+            arguments = shlex.split(command)[1:]
+            assert build_parser().parse_args(arguments).quota_command == "context-read"
+            code, page = invoke(arguments)
+            assert code == 0 and page["ok"], page
+            assert page["offset"] == len(observed)
+            digest = digest or page["sha256"]
+            assert page["sha256"] == digest
+            observed += page["content"].encode("utf-8")
+            if page["eof"]:
+                assert len(observed) == page["total_bytes"]
+                break
+            command = page["next_command"]
+        payload = json.loads(observed)
+        assert payload["heartbeat_receipt"]["turn_instance_id"] == "profile-turn"
+    else:
+        assert "recovery" not in payload
+    assert ledger.read_bytes() == recorded
+    assert state.read_bytes() == original
+    runs = runtime / "goals/loopx-turn-fixture/runs/index.jsonl"
+    if runs.exists():
+        assert not any(
+            json.loads(line).get("classification") == "quota_slot_spent"
+            for line in runs.read_text().splitlines()
         )
-
-    payload = json.loads(output.getvalue())
     hint = payload["scheduler_hint"]
-    assert exit_code == 0, payload
     assert "execution_context" not in hint
     assert "execution_phase" not in hint
     assert hint["codex_app"]["applicability"] == "applicable"
