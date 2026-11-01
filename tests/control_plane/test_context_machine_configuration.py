@@ -82,6 +82,33 @@ def test_machine_catalog_discovers_context_delivery_without_activation(tmp_path)
     assert not (runtime / "context-delivery").exists()
 
 
+@pytest.mark.parametrize("mode", ["on", "off"])
+def test_context_mode_does_not_depend_on_an_unrelated_executor(tmp_path, mode):
+    registry, runtime = tmp_path / "absent.json", tmp_path / "runtime"
+    path = runtime / "machine/configuration.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"schema_version": "loopx_machine_configuration_v0", "namespaces": {
+        "context_delivery": {"schema_version": CONTEXT_DELIVERY_MACHINE_SCHEMA, "mode": mode},
+        "steward_executor": {"schema_version": "steward_executor_machine_defaults_v1",
+                             "executor_endpoint": "future_executor"},
+    }}))
+    original = path.read_bytes()
+    code, result = _run_cli(registry, runtime, "quota", "context-config", "--codex-app",
+        "--goal-id", "fixture", "--agent-id", "worker")
+    if mode == "on" and os.name != "posix":
+        assert code != 0 and "unsupported" in result["reason"], result
+    else:
+        assert code == 0, result
+        assert result["context_delivery"]["enabled"] is (mode == "on"), result
+    assert path.read_bytes() == original
+    assert not registry.exists()
+    assert not (runtime / "goals").exists()
+    if mode == "off":
+        assert not (runtime / "context-delivery").exists()
+    elif os.name == "posix":
+        assert (runtime / "context-delivery").stat().st_mode & 0o077 == 0
+
+
 @pytest.mark.parametrize("invalid", [True, False, None, 1, "auto", "codex_app_heartbeat"])
 def test_invalid_machine_mode_never_writes(tmp_path, invalid):
     registry, runtime = tmp_path / "absent.json", tmp_path / "runtime"
@@ -370,6 +397,57 @@ def test_explicit_on_first_use_uses_same_private_default_without_machine_setting
     assert argv[argv.index("--context-delivery") + 1] == "on"
     assert not registry.exists() and not (runtime / "machine/configuration.json").exists()
     assert not list(root.iterdir()), "setup does not manufacture retained-input evidence"
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("native_id", [None, "uninitialized-native-session"])
+@pytest.mark.skipif(os.name != "posix", reason="Native captured delivery uses POSIX private directories")
+def test_default_guard_without_native_session_delivers_current_source_once(tmp_path, monkeypatch, provider, native_id):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    if native_id is not None:
+        monkeypatch.setenv("CODEX_THREAD_ID", native_id)
+    monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    original = state.read_bytes()
+    turn = "sessionless-original-turn"
+    code, wire = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+        "--turn-instance-id", turn, cwd=project, raw_guard=False)
+    assert code == 0 and wire["mode"] == "full", wire
+    assert "baseline_reference" not in wire
+    code, page = _run_cli(registry, runtime, "quota", "context-read",
+        "--reference-file", wire["recovery"]["reference_file"],
+        "--select", "/goal_id", "--select", "/heartbeat_receipt",
+        "--select", "/interaction_contract/cli_channel", "--page-bytes", "64000",
+        "--max-page-output-bytes", "64000", cwd=project)
+    assert code == 0 and page["ok"] and page["eof"], page
+    values = {row["pointer"]: row["value"] for row in json.loads(page["content"])["selections"]}
+    assert values["/goal_id"] == GOAL_ID
+    assert values["/heartbeat_receipt"]["turn_instance_id"] == turn
+    assert values["/interaction_contract/cli_channel"]["settlement_plan"]
+    assert _heartbeat_receipt_count(runtime, turn) == 1 and _spend_run_count(runtime) == 0
+    assert state.read_bytes() == original
+    assert not list((runtime / "context-delivery").rglob("session.json"))
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Native captured delivery checks POSIX private directories")
+def test_sessionless_fallback_does_not_hide_an_unsafe_context_root(tmp_path, monkeypatch):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    project, runtime, registry = _write_fixture(tmp_path, provider="sqlite")
+    unsafe = tmp_path / "unsafe-context"
+    unsafe.mkdir()
+    unsafe.chmod(0o755)
+    turn = "unsafe-sessionless-turn"
+    code, failure = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+        "--turn-instance-id", turn, "--codex-context-root", str(unsafe), cwd=project, raw_guard=False)
+    assert code == 1 and failure["error_code"] == "quota_decision_transport_failed", failure
+    assert _heartbeat_receipt_count(runtime, turn) == 1 and _spend_run_count(runtime) == 0
+    assert not list(unsafe.iterdir())
 
 
 def test_explicit_on_unknown_host_fails_before_first_use_directory_creation(tmp_path):
