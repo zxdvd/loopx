@@ -2256,17 +2256,27 @@ def test_blocked_wait_transports_complete_lifecycle_facts_without_prose(
 
 
 def test_settlement_read_snapshot_is_explicit_and_preserves_complete_facts() -> None:
-    from loopx.control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
+    from loopx.control_plane.effect_runtime import (
+        MAX_REQUEST_BYTES, EffectRuntimeRejected, effect_runtime_result,
+    )
 
     request = {"schema_version": "loopx_quota_blocked_wait_request_v0",
                "todos": [{"todo_id": TODO_ID, "role": "agent", "status": "open",
                           "task_class": "advancement_task", "note": "Complete source. " * 150_000}],
                "todo_id": TODO_ID, "observed_at": "2026-01-01T00:00:00Z",
                "allow_turn_settlement_retry": True}
-    assert len(json.dumps(request).encode()) > 2 * 1024 * 1024
+    # Keep the original >2 MiB observation. Main's measured ordinary transport
+    # now supports 8 MiB; snapshot-only qualification must exceed that actual
+    # boundary rather than treating the retired 2 MiB ceiling as current.
+    assert 2 * 1024 * 1024 < len(json.dumps(request).encode()) <= MAX_REQUEST_BYTES
+    ordinary = effect_runtime_result("quota.settlement.read", request)
+    note = request["todos"][0]["note"]
+    request["todos"][0]["note"] = note * (MAX_REQUEST_BYTES // len(note.encode()) + 1)
+    assert len(json.dumps(request).encode()) > MAX_REQUEST_BYTES
     with pytest.raises(EffectRuntimeRejected, match="request is oversized"):
         effect_runtime_result("quota.settlement.read", request)
     result = effect_runtime_result("quota.settlement.read", request, large_local_snapshot=True)
+    assert result == ordinary
     assert result == {"schema_version": "quota_blocked_retry_v0", "source": "turn_settlement",
                       "todo_id": TODO_ID, "resume_when": "resume_at:2026-01-01T00:05:00Z",
                       "observed_at": "2026-01-01T00:00:00Z", "due_at": "2026-01-01T00:05:00Z"}

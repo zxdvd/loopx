@@ -71,6 +71,10 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, *, 
     ), state_path=state, provider=provider)
 
     def call(*args: str, expected_code: int = 0) -> dict:
+        # These policy oracles inspect the complete authority decision, as the
+        # shared guard fixture does. Native transport tests explicitly opt in.
+        if args[:2] == ("quota", "should-run") and "--context-delivery" not in args:
+            args = (*args, "--context-delivery", "off")
         result = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry),
             "--runtime-root", str(runtime), "--format", "json", *args], cwd=ROOT,
             capture_output=True, text=True, timeout=60)

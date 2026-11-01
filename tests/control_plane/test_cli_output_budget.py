@@ -326,6 +326,28 @@ def _invoke_cli(args: list[str]) -> tuple[int, str]:
     return exit_code, output.getvalue()
 
 
+def _read_current_quota_source(payload: dict) -> dict:
+    if payload.get("schema_version") != "context_capture_navigation_v1":
+        return payload
+    # Native defaults return navigation, not another admission. Exercise its
+    # current full reader without prefetching or claiming baseline retention.
+    command = payload["recovery"]["command"]
+    observed = bytearray()
+    while True:
+        argv = shlex.split(command)[1:]
+        assert argv[argv.index("quota") + 1] == "context-read"
+        code, text = _invoke_cli(argv)
+        assert code == 0, text
+        page = json.loads(text)
+        assert page["ok"] and page["offset"] == len(observed)
+        observed.extend(page["content"].encode("utf-8"))
+        if page["eof"]:
+            assert len(observed) == page["total_bytes"]
+            return json.loads(observed)
+        assert page["next_offset"] == len(observed)
+        command = page["next_command"]
+
+
 def _quota_payload_without_rollout_receipt(text: str) -> dict[str, object]:
     payload = json.loads(text)
     # Each invocation captures a new rollout receipt, which participates in
@@ -2084,9 +2106,12 @@ def test_todo_list_explicit_limit_bounds_monitor_and_blocker_lanes(
 
 
 
+@pytest.mark.parametrize("context_delivery", ["off", "on"])
 def test_turn_envelope_cli_preserves_codex_app_scheduler_binding(
-    tmp_path: Path,
+    tmp_path: Path, context_delivery: str,
 ) -> None:
+    if context_delivery == "on" and os.name != "posix":
+        pytest.skip("native context delivery requires the POSIX host transport")
     project, runtime, registry_path, state_file = _write_fixture(
         tmp_path,
         SCENARIOS[0],
@@ -2100,10 +2125,20 @@ def test_turn_envelope_cli_preserves_codex_app_scheduler_binding(
         output_format="json",
     )["quota_should_run_turn_envelope"]
 
-    exit_code, text = _invoke_cli([*command, "--codex-app"])
+    turn = "budget-native-host-binding"
+    command.extend(["--context-delivery", context_delivery])
+    if context_delivery == "on":
+        # Own the synthetic native context; do not borrow the test process's
+        # real desktop session or machine-configured context root.
+        context = runtime / "native-context"
+        context.mkdir(mode=0o700)
+        command.extend(["--codex-context-dir", str(context)])
+    exit_code, text = _invoke_cli(
+        [*command, "--codex-app", "--turn-instance-id", turn]
+    )
 
     assert exit_code == 0, text
-    payload = json.loads(text)
+    payload = _read_current_quota_source(json.loads(text))
     # The compatibility spelling now returns the complete original decision.
     # Check its actual host binding without executing another admission as a
     # purported recovery read of this observation.
@@ -2112,6 +2147,7 @@ def test_turn_envelope_cli_preserves_codex_app_scheduler_binding(
     assert_complete_turn_decision(payload)
     assert payload["goal_id"] == GOAL_ID
     assert payload["agent_identity"]["agent_id"] == AGENT_IDS[0]
+    assert payload["heartbeat_receipt"]["turn_instance_id"] == turn
     scheduler_args = shlex.split(payload["contract_binding"]["scheduler_execution_args"])
     assert "--codex-app" in scheduler_args
     assert payload["scheduler_hint"]["app_automation"]
@@ -2225,11 +2261,16 @@ def test_first_class_runtime_profiles_fit_thin_prompt_budget_and_cli_round_trip(
                     AGENT_IDS[0],
                     "--runtime-profile",
                     profile.value,
+                    "--turn-instance-id",
+                    f"budget-profile-{index}",
+                    "--context-delivery",
+                    "off",
                 ]
             )
 
             assert exit_code == 0, text
-            payload = json.loads(text)
+            payload = _read_current_quota_source(json.loads(text))
+            assert payload["heartbeat_receipt"]["turn_instance_id"] == f"budget-profile-{index}"
             assert payload["scheduler_hint"].get("action") != (
                 "repair_scheduler_execution_context"
             )

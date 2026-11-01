@@ -475,6 +475,7 @@ def test_real_quota_complete_capture_and_differential_recovery(tmp_path, monkeyp
         "--runtime-root", str(runtime), "--format", format_name, "quota", "should-run", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", "complete-source",
         "--codex-app", "--available-capability", "shell", "--available-capability", "filesystem_read",
+        "--context-delivery", "off",
         "--decision-output-dir", str(capture)]
     if envelope_flag:
         command.append("--turn-envelope")
