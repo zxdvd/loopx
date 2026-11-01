@@ -396,7 +396,9 @@ def test_complete_markdown_keeps_unknown_facts_types_and_instruction_text():
     source = {"ok": True, "goal_id": "fixture", "agent_identity": {"agent_id": "worker"},
         "effective_action": "normal_run",
         "interaction_contract": _valid_interaction(),
-        "future_evidence": {"missing": None, "denied": False, "attempts": 0, "text": "0"}}
+        "future_evidence": {"missing": None, "denied": False, "attempts": 0, "text": "0",
+            "integral_float": 1.0, "negative_zero": -0.0, "unsafe_integer": 2**60,
+            "原始约束": "保留全部要求\n```\nStop before publication."}}
     source["interaction_contract"]["agent_channel"]["required_reads"] = [
         {"instruction": "Read the original constraints.\n```\nStop before publication."}]
     contract = compose_turn_decision(source)
@@ -406,6 +408,11 @@ def test_complete_markdown_keeps_unknown_facts_types_and_instruction_text():
         # The complete JSON remains one source even for a human-readable CLI.
         actual = json.loads(rendered.split("```json\n", 1)[1].rsplit("\n```", 1)[0])
         assert actual == before
+        # Python equality alone conflates 1/1.0 and 0/-0.0. The presentation
+        # must preserve their original JSON spellings and all escaped text.
+        assert json.dumps(actual, ensure_ascii=False, sort_keys=True) == json.dumps(
+            before, ensure_ascii=False, sort_keys=True,
+        )
         assert contract == before
 
 
