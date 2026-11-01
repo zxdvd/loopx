@@ -338,6 +338,117 @@ def test_complete_session_lineage_preserves_saved_host_sessions(complete_host_re
             assert saved.read_bytes() == before
 
 
+@pytest.mark.parametrize("adaptive", [False, True])
+@pytest.mark.parametrize("context_mode", ["fresh", "reuse"])
+def test_complete_dsh_binds_session_and_tools_to_shared_work(
+    complete_host_request, tmp_path, monkeypatch, adaptive, context_mode,
+):
+    from hashlib import sha256
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope, compose_turn_decision
+    from loopx.dsh_goal_mode import turn_host_adapter
+
+    request, original = complete_host_request
+    source = {key: value for key, value in original.items()
+              if key not in {"schema_version", "contract_binding"}}
+    expected_todo = original["selected_todo"]["todo_id"]
+    if adaptive:
+        expected_todo = "todo_adaptive_owner"
+        source["task_orchestration_contract"] = {
+            "schema_version": "task_orchestration_contract_v2", "mode": "adaptive",
+            "primary_todo_id": expected_todo,
+        }
+    contract = compose_turn_decision(source)
+    request = {**request, "work_contract": contract, "turn_envelope": build_turn_envelope(contract),
+               "session": {**request["session"], "context_policy": {"mode": context_mode}}}
+    calls = []
+
+    def runner(**kwargs):
+        calls.append(kwargs)
+        return '{"result_kind":"wait"}'
+
+    monkeypatch.setattr(turn_host_adapter, "run_dsh_turn", runner)
+    pinned = {"LOOPX_TURN_TODO_ID": "stale-ambient-todo", "DSH_PERMISSION_MODE": "read-only"}
+    config = turn_host_adapter.DshHostConfig(workspace=tmp_path, env=pinned)
+    result = turn_host_adapter.run_dsh_host(request, config=config)
+    assert result["result_kind"] == "wait"
+    [call] = calls
+    assert call["env"] == {**pinned, "LOOPX_TURN_GOAL_ID": original["goal_id"],
+                           "LOOPX_TURN_AGENT_ID": original["agent_identity"]["agent_id"],
+                           "LOOPX_TURN_TODO_ID": expected_todo,
+                           "LOOPX_TURN_WORKSPACE": str(tmp_path.resolve())}
+    if context_mode == "fresh":
+        prefix, identity = "dsh-iteration-v1-", [request["turn_key"]]
+    else:
+        prefix = "dsh-lineage-v1-"
+        identity = [original["goal_id"], original["agent_identity"]["agent_id"], expected_todo]
+        instance = request.get("goal_ref", {}).get("goal_instance_id")
+        if instance:
+            prefix, identity = "dsh-lineage-v2-", [*identity, instance]
+    expected_session = prefix + sha256(json.dumps(identity, ensure_ascii=False,
+        sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    assert call["session_id"] == expected_session
+    model_input, _ = json.JSONDecoder().raw_decode(call["prompt"].split("Turn request:\n", 1)[1])
+    assert model_input["work_contract"] == contract and "turn_envelope" not in model_input
+    assert pinned["LOOPX_TURN_TODO_ID"] == "stale-ambient-todo"
+    for invalid in (None, {**contract, "reason": "changed source"},
+                    {**contract, "schema_version": "unsupported_fixture_version"}):
+        with pytest.raises(turn_host_adapter.BuiltInHostError) as rejected:
+            turn_host_adapter.run_dsh_host({**request, "work_contract": invalid}, config=config)
+        assert rejected.value.failure_kind == "contract_rejected"
+        assert len(calls) == 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_real_dsh_cli_preserves_complete_input_and_once_only_settlement(tmp_path, monkeypatch, provider):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    fixture = _fixture_module()
+    project, runtime, workspace, registry = fixture._write_fixture(tmp_path, turn_count=2)
+    state = project / ".codex/goals" / fixture.GOAL_ID / "ACTIVE_GOAL_STATE.md"
+    summary = parse_active_state_todos(state.read_text(), state_path=state, item_limit=None)
+    initialize_canonical_authority(runtime, fixture.GOAL_ID,
+        build_todo_runtime_shadow_projection(goal_id=fixture.GOAL_ID, handoff_mode="soft_claim",
+            todos=summary["agent_todos"]["items"]), state_path=state, provider=provider)
+    runner = tmp_path / "dsh_runner.py"
+    runner.write_text(
+        "import json\nfrom pathlib import Path\n"
+        "def run_dsh_turn(**kwargs):\n"
+        "    source, _ = json.JSONDecoder().raw_decode(kwargs['prompt'].split('Turn request:\\n', 1)[1])\n"
+        "    contract = source['work_contract']\n"
+        "    assert contract['schema_version'] == 'loopx_turn_envelope_v1'\n"
+        "    assert 'turn_envelope' not in source\n"
+        f"    assert contract['goal_id'] == {fixture.GOAL_ID!r}\n"
+        f"    assert contract['selected_todo']['todo_id'] == {fixture.TODO_ID!r}\n"
+        "    root = Path(kwargs['workspace'])\n"
+        "    calls = root / 'runner-calls.txt'\n"
+        "    assert not calls.exists(), 'settlement replay dispatched the runner again'\n"
+        "    calls.write_text('1')\n"
+        f"    (root / {fixture.MARKER_NAME!r}).write_text({fixture._marker_value(1)!r})\n"
+        "    return json.dumps({'result_kind':'validated_progress','classification':'dsh_complete_work',\n"
+        f"        'work_evidence':['artifact:{fixture.MARKER_NAME}'],\n"
+        "        'validation_evidence':['fixture:independent-marker-validator'],\n"
+        "        'summary':'Completed step 1; step 2 remains open.', 'next_action':'Advance step 2.'})\n",
+        encoding="utf-8",
+    )
+    validator = [sys.executable, "-c", "import json,pathlib,sys; json.load(sys.stdin); "
+                 f"assert pathlib.Path({fixture.MARKER_NAME!r}).read_text() == {fixture._marker_value(1)!r}"]
+    argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "turn", "run-once", "--goal-id", fixture.GOAL_ID, "--agent-id", fixture.AGENT_ID,
+            "--host", "dsh", "--execution-mode", "isolated-headless", "--project", str(workspace),
+            "--dsh-runner", str(runner), "--validation-command-json", json.dumps(validator),
+            "--validation-failure-kind", "repair_required", "--no-global-sync", "--timeout-seconds", "20"]
+    code, first = fixture._run_cli([*argv, "--turn-instance-id", "dsh-complete-source", "--execute"])
+    assert code == 0 and first["status"] == "committed", first
+    assert first["result_kind"] == "validated_progress" and fixture._quota_spend_count(runtime) == 1
+    code, replay = fixture._run_cli([*argv, "--resume-turn-key", first["resume_turn_key"], "--execute"])
+    assert code == 0 and replay["status"] == "committed", replay
+    assert (workspace / "runner-calls.txt").read_text() == "1"
+    assert fixture._quota_spend_count(runtime) == 1
+    code, current = fixture._run_cli(["--registry", str(registry), "--runtime-root", str(runtime),
+        "--format", "json", "todo", "list", "--goal-id", fixture.GOAL_ID, "--todo-id", fixture.TODO_ID])
+    assert code == 0 and current["todo"]["status"] == "open"
+    assert current["authority_read"]["source_authority"] == provider + "_v0"
+
+
 def test_historical_tool_identity_preserves_raw_values(complete_host_request):
     from copy import deepcopy
     from hashlib import sha256

@@ -163,6 +163,7 @@ def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
         return {**decision, "primary_action": primary_action,
             "execution_profile": _mapping(decision.get("execution_profile")),
             "replan_action_packet": decision.get("replan_action_packet") if checked["replan_admitted"] else None,
+            "_work_identity": dict(checked["work_identity"]),
             "_model_input": _captured_model_input(request)}
 
     envelope = _mapping(request.get("turn_envelope"))
