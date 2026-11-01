@@ -126,6 +126,51 @@ the original-quota outcome/full-cost comparison. Both optional packages require
 the same integrated Core checkout; a version floor alone cannot prove seam
 availability in a previously published wheel.
 
+The bundled DSH follow-through (`e838e7594`) integrates target main `8ac384cdc` and replaces
+its complete-input session/tool identity reads with the same checked selected-work
+facts. Previously, adaptive complete work could select a different primary Todo
+while DSH still bound tools and its reusable session to the old declared Todo.
+The existing dispatch check now retains its already-returned identity privately
+for that invocation; DSH reuses it for both bindings without another RPC. This
+metadata is absent from final model input. The two historical DSH decoders are
+consolidated into one raw-value adapter, preserving its false-like coercion,
+component positions, Goal-instance hash and fresh-iteration hash. It remains
+only for requests without `work_contract`, until their original-version recovery
+window is reconciled; a supplied invalid complete contract never falls back.
+
+At frozen `ae8ee460a` and the candidate, four identical synthetic requests from
+real File/SQLite CLI plans exercise normal and adaptive work through the actual
+DSH adapter. Each retains one dispatch RPC; canonical argument/result JSON sizes
+remain identical. Final prompts are byte-identical by digest:
+
+| Source | Normal prompt bytes | Adaptive prompt bytes | Added internal authority JSON bytes |
+| --- | ---: | ---: | ---: |
+| File | 32,377 | 32,517 | 114 / 115 |
+| SQLite | 32,425 | 32,565 | 114 / 115 |
+
+The final column is a Python-object JSON size proxy, not allocations or wire
+traffic. Ordinary session/tool identities remain identical; adaptive bindings
+intentionally change from the old Todo to the selected primary Todo. The probe
+leaves state unchanged and spends nothing. It qualifies this caller correction,
+not packet compression, latency, model billing or accepted-outcome/full-cost benefit.
+
+The added regressions first produce four adaptive failures and seven passing
+controls. The combined DSH and complete-source suites then pass 367 cases;
+two additional real File/SQLite CLI cases pass through the built-in DSH runner,
+independent validation, committed writeback and replay with one runner invocation
+and one debit. Providers remain synthetic. The optional Ark/MemT suites pass
+44/65 cases against the current Core. MemT initially lacked its pinned client;
+after installing that client only in the isolated test overlay, five CLI cases
+still imported an older installed Core from their task working directories.
+The child import probe reproduced the missing seam, and explicitly binding the
+test child's Python source path fixed those five cases without changing the
+product or user configuration. Both initial failures remain evidence.
+This uses the existing CLI/Chat Host owner and adds no capability, setting,
+user step or activation default. No live SDK service or installed-host adoption
+is qualified. Native-child, steward and
+other historical consumers, the five output-budget holds, eight broader failures
+and C1's original-quota acceptance remain open.
+
 The blocks below preserve the candidate narrative moved out of the normative
 RFC during this integration. Their measurements, proposals and present-tense
 statements belong to their original checkpoints; they are not fresh claims for

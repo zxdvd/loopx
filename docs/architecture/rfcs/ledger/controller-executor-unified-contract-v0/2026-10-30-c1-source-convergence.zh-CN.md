@@ -100,6 +100,40 @@ provider 的身份 decoder 及 MemT 失效来源接受行为上失败。Core cap
 打包／安装资格及原 quota 成果／完整成本对照。两个可选包须使用同一份已集成的
 Core 源码；版本下限不能证明已发布旧 wheel 含有所需接缝。
 
+随包 DSH 后续切片（`e838e7594`）集成目标 main `8ac384cdc`，让完整输入的 Session／工具身份
+复用同一次已校验的 selected-work 事实。此前完整契约的 adaptive 工作可能选择另一
+主 Todo，DSH 却仍把工具和可复用会话绑定到旧声明 Todo。既有 dispatch 检查现在
+仅为本次调用保留已经返回的私有身份事实，DSH 两处绑定复用它，不增加 RPC；该
+元数据不进入最终模型输入。两个历史 DSH decoder 合并为一个 raw-value adapter，
+保留 false-like 转换、组件位置、Goal-instance hash 和 fresh-iteration hash。
+它只用于未携带 `work_contract` 的历史请求，待原版本恢复窗口对账后退出；已提供
+但无效的完整契约不会回退。
+
+冻结 `ae8ee460a` 与候选使用同四份真实 File／SQLite CLI plan 生成的合成输入，
+通过实际 DSH adapter 对照普通与 adaptive 工作。每份仍只有一次 dispatch RPC，
+canonical 参数／返回 JSON 大小均未改变；最终提示经 digest 核对逐字节相同：
+
+| 来源 | 普通提示字节 | Adaptive 提示字节 | 内部 authority JSON 增加字节 |
+| --- | ---: | ---: | ---: |
+| File | 32,377 | 32,517 | 114／115 |
+| SQLite | 32,425 | 32,565 | 114／115 |
+
+最后一列是 Python 对象 JSON 大小代理，不是内存分配或 wire 流量。普通会话／工具
+身份保持相同；adaptive 绑定有意从旧 Todo 改为当前所选主 Todo。探针未改状态、
+未扣额；它验证该 caller 修正，不认证 packet 压缩、延迟、模型费用或同等成果／
+完整成本收益。
+
+新增回归先得到 4 项 adaptive 失败、7 项对照通过，随后 DSH 与完整来源组合有
+367 项通过；另加 2 项真实 File／SQLite CLI 用例，经过随包 DSH runner、独立
+校验、已提交写回及重放，runner 调用与扣额均只有一次。Provider 为合成实现。
+可选 Ark／MemT 用例针对当前 Core 分别有 44／65 项通过。MemT 最初缺少已固定的
+client；仅在隔离测试 overlay 安装该 client 后，5 项 CLI 用例仍从任务工作目录
+导入旧 installed Core。子进程 import 探针复现缺失接缝，显式绑定测试子进程的
+Python 源路径后这 5 项通过，未改变产品或用户配置；两次初始失败均保留。
+切片复用既有 CLI／Chat Host owner，不增加能力、设置、用户步骤或激活默认值；
+未认证实际 SDK 服务或 installed Host 采用。Native-child、steward 等历史消费者、
+原 5 项输出预算门、8 项扩大矩阵失败，以及 C1 的原 quota 验收继续开放。
+
 以下区块保存本次集成从规范 RFC 移出的候选叙述。测量、提议和现在时陈述属于各自原
 检查点，不是对本次集成源码的新结论。当前行为以规范 RFC 和具名 owner 为准。尤其不能
 由已退出的 scope 原型恢复强制模型阅读计划。既有负结果、原 quota 对照与 reader 退出
