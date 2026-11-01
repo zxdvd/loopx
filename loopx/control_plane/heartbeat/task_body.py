@@ -68,6 +68,16 @@ def bind_exact_turn_settlement_task_body(
             placeholder,
             render_turn_bootstrap(value=turn_instance_id),
         )
+    # This literal belongs to the shared rendered dispatch rule. Qualify its
+    # existing locator instead of appending the same settlement source again.
+    # Other templates keep the explicit locator below; no saved body is edited.
+    dispatch = "Settle current settlement_plan.ordered_steps"
+    if dispatch in bound:
+        return bound.replace(
+            dispatch,
+            "Settle current interaction_contract.cli_channel.settlement_plan.ordered_steps",
+            1,
+        )
     return f"{bound}\n\nSettlement source: `interaction_contract.cli_channel.settlement_plan.ordered_steps`."
 
 
