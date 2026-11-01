@@ -134,6 +134,30 @@ Python 源路径后这 5 项通过，未改变产品或用户配置；两次初�
 未认证实际 SDK 服务或 installed Host 采用。Native-child、steward 等历史消费者、
 原 5 项输出预算门、8 项扩大矩阵失败，以及 C1 的原 quota 验收继续开放。
 
+Native-child 元数据后续切片（`3d58796d7`）集成目标 main `07149df68`。请求构造、持久 Host
+attempt 及两种 Codex transport 调用的 `configured_native_child_limit`，在存在
+`work_contract` 时改读原始完整 interaction context；只有历史请求读取 v0
+context。既有整数 decoder、完整来源校验、launch fence 和原生 receipt 准入
+不变；这是本地运输读取，不是第二个 authority 或新默认值。共享来源校验原本就会
+拒绝不一致的投影，不能据此认定此前放行过错误子任务。v0 envelope 仍保留用于
+签名兼容数据，其整体运输尚未退出。
+
+新增 on/off 回归先因读取历史字段失败。真实子进程与持久读回保留启用时的观测、
+关闭时的隔离、父任务结果和私有正文排除；损坏完整输入在第二次进程或 receipt
+之前被拒绝。首轮扩大验证有 195 项通过，两个新 fixture 被完整 Goal 来源门拒绝；
+补齐 fixture 的真实文件及完整 revision 后修正的是夹具，产品门禁未改。
+修正后的 native-child 模块 38 项通过；相同三个模块的最终完整重跑 197 项通过，
+用时 149.37 秒。Owned operation Host 模块 34 项通过，
+两个明确要求真实模型 opt-in 的资格用例跳过，没有启动 live Host。
+
+冻结集成 `5d9dbb811` 与候选的八份固定请求，来自前述真实 File／SQLite
+普通／adaptive CLI fixture，并通过既有 owner 重组加入合成 on/off capability
+context。元数据读取仍为零 RPC，完整输入准备仍为一次 RPC。全部配对的请求
+字节（40,202–40,778）、提示字节（30,744–31,030）、schema 摘要及 canonical
+参数／返回大小都相同。这不是 packet 缩减、延迟、内存分配、账单或完整 Host
+成本测量。原 5 项输出预算门、8 项扩大矩阵失败、其他 consumer／writer 迁移及
+原 quota 成果／完整成本验收继续开放，历史失败保留。
+
 以下区块保存本次集成从规范 RFC 移出的候选叙述。测量、提议和现在时陈述属于各自原
 检查点，不是对本次集成源码的新结论。当前行为以规范 RFC 和具名 owner 为准。尤其不能
 由已退出的 scope 原型恢复强制模型阅读计划。既有负结果、原 quota 对照与 reader 退出

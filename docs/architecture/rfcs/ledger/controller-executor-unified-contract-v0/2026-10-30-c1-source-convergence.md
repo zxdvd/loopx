@@ -171,6 +171,37 @@ is qualified. Native-child, steward and
 other historical consumers, the five output-budget holds, eight broader failures
 and C1's original-quota acceptance remain open.
 
+The native-child metadata follow-through (`3d58796d7`) integrates target main `07149df68`.
+`configured_native_child_limit`, called by request construction, durable Host
+attempts and both Codex transports, now reads the original complete interaction
+context when `work_contract` is present. Only historical requests read the v0
+context. The existing integer decoder, complete-source verification, launch
+fences and native receipt admission are unchanged; this is a local transport
+read, not a second authority or a new default. The shared source verifier already
+rejects inconsistent projections, so this does not establish a prior wrong-child
+admission. The remaining v0 envelope still supplies signed compatibility data.
+
+New on/off regressions first fail on the historical field access. Real subprocess
+and durable readback checks then preserve the enabled observations, disabled
+isolation, parent result and private-content exclusion. Corrupt complete input
+is refused before another process or receipt. The first wider run passes 195
+cases but rejects both new fixtures at the complete Goal-source gate; delivering
+the actual fixture file and full revision repairs the fixture, without changing
+that product gate. The corrected native-child module passes 38 cases; the full
+same three-module rerun passes 197 in 149.37 seconds. The owned
+operation Host suite passes 34, with its two explicitly live-model qualification
+cases skipped; no live host was launched.
+
+At frozen integration `5d9dbb811` and the candidate, eight fixed requests combine
+the earlier real File/SQLite normal/adaptive CLI fixtures with synthetic on/off
+capability context recomposed by the existing owner. Metadata reads use zero
+RPCs; complete input preparation still uses one. Request bytes (40,202–40,778),
+prompt bytes (30,744–31,030), schema hashes and canonical argument/result sizes
+are identical in every matched case. This is no packet reduction, latency,
+allocation, invoice or full-Host cost measurement. The five output-budget holds,
+eight broader failures, other consumer/writer migration and original-quota
+outcome/full-cost acceptance remain open; the historical failures are retained.
+
 The blocks below preserve the candidate narrative moved out of the normative
 RFC during this integration. Their measurements, proposals and present-tense
 statements belong to their original checkpoints; they are not fresh claims for
