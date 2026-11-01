@@ -37,7 +37,7 @@ grows 3,187→3,235 characters while staying below its unchanged 4,000 host limi
 These are generated-input measurements, not a full base-repository rerun,
 control-packet compression, model adoption, token savings or outcome benefit.
 
-The consumer checks pass 114 prompt/platform cases with one platform skip and
+At that checkpoint, the consumer checks pass 114 prompt/platform cases with one platform skip and
 12 real isolated File/SQLite CLI final-input/recovery cases using synthetic host
 executables. The output/differential
 matrix still has five failing tests: complete quota Markdown 30,462>10,000,
@@ -46,6 +46,31 @@ multi-agent probe 25,933>13,000. Its other 219 cases pass, with one skip. No
 budget or population is relaxed, and the historical restoration allowance is
 not inherited by the new wording. C1 cutover, remaining readers and the original
 quota single-session outcomes/full-cost comparison remain open.
+
+The subsequent Markdown increment (`b852af5f7`, integrating target main
+`035f7ac66`) removes nested pretty-print padding through the existing complete
+Turn renderer used by both ordinary quota and the alias. Each root field has
+its own line; every nested value, source clause and binding remains in one
+parseable JSON block. JSON output, captures, native host input, legacy rendering
+and decision/settlement owners are unchanged. The same-source comparison with
+the frozen `f3ae16362` renderer includes the final stdout newline:
+
+| Synthetic source | Previous Markdown bytes | Current Markdown bytes | Saved bytes | Complete JSON bytes |
+| --- | ---: | ---: | ---: | ---: |
+| Small | 30,462 | 24,531 | 5,931 | 24,252 |
+| Crowded | 47,237 | 37,846 | 9,391 | 37,555 |
+| Crowded with Vision | 55,893 | 45,249 | 10,644 | 44,954 |
+
+Line counts fall from 860/1,214/1,361 to 69/72/73. Markdown still adds
+279/291/295 bytes over the corresponding complete compact JSON; this removes
+presentation padding, not semantic control-packet content. The complete-source
+module passes 63 cases, including unknown facts, integral floats, signed zero,
+unsafe integers and escaped instruction text. The integrated bounded-reader
+buffer checks pass two cases. The output/differential matrix remains
+219 passed, five failed and one skipped: small Markdown is now 24,531>10,000;
+the other four failures retain their preceding sizes and limits. Historical
+failures remain failures. No ceiling, fixture population or requirement changes,
+and no model, invoice, installed-adoption or long-horizon benefit is qualified.
 
 The blocks below preserve the candidate narrative moved out of the normative
 RFC during this integration. Their measurements, proposals and present-tense
