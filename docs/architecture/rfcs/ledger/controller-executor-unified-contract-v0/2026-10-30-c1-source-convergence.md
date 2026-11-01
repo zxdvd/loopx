@@ -202,6 +202,26 @@ allocation, invoice or full-Host cost measurement. The five output-budget holds,
 eight broader failures, other consumer/writer migration and original-quota
 outcome/full-cost acceptance remain open; the historical failures are retained.
 
+The later source-checkout recheck at `d1046499a` runs both complete
+`test_context_delivery_cli` and `test_loopx_turn_driver` modules: 253 pass and
+only the two profile-alias cases fail. Their actual CLI response rejects capture
+without a Turn identity before the test can inspect `scheduler_hint`; it is not
+evidence of a scheduler-policy failure. The fixture now supplies an original
+Turn and independently covers explicit delivery off and native delivery on for
+both aliases. The on cases follow the declared original-capture reader through
+contiguous UTF-8 pages, retaining all scheduler assertions. They verify one
+admission, no spend and unchanged Goal/event-log bytes after recovery.
+
+The same complete modules then pass 257 cases in 118.43 seconds, with no skips
+or errors; the focused four-case matrix also passes. This increment changes
+tests only and introduces no production setting, default, caller protocol or
+runtime behavior. The six older context-delivery failures remain historical
+negative evidence; their individual causes were not reassigned by this recheck.
+The five output-budget holds, remaining actual consumer/writer migration,
+supported-reader exit and original-quota outcome/full-cost qualification remain
+open. A passing source-checkout cohort proves neither installed-host adoption
+nor packet-size, model-retention or net-cost benefit.
+
 The blocks below preserve the candidate narrative moved out of the normative
 RFC during this integration. Their measurements, proposals and present-tense
 statements belong to their original checkpoints; they are not fresh claims for

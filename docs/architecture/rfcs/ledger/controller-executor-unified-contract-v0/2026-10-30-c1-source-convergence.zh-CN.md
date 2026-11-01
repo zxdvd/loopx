@@ -158,6 +158,21 @@ context。元数据读取仍为零 RPC，完整输入准备仍为一次 RPC。�
 成本测量。原 5 项输出预算门、8 项扩大矩阵失败、其他 consumer／writer 迁移及
 原 quota 成果／完整成本验收继续开放，历史失败保留。
 
+后续在源码 `d1046499a` 完整复跑 `test_context_delivery_cli` 与
+`test_loopx_turn_driver` 两个模块，得到 253 项通过，仅两个 profile alias 用例
+失败。实际 CLI 返回先因 capture 缺少 Turn 身份拒绝请求，测试才无法读取
+`scheduler_hint`；这不能证明调度策略失败。现为 fixture 提供原始 Turn，两个
+alias 分别验证显式 delivery off 与 native delivery on。开启用例沿声明的原始
+capture reader 连续读取 UTF-8 页，保留全部调度断言，并验证只有一次 admission、
+恢复后没有 spend、Goal 与事件账本字节不变。
+
+相同两个完整模块随后 257 项通过，用时 118.43 秒，无跳过或错误；聚焦的四项
+矩阵也通过。本次增量仅修改测试，不引入生产设置、默认值、caller 协议或运行时
+行为。原六项 context-delivery 失败保留为历史负例，本次未重新归因其逐项原因。
+原五项输出预算门、其他实际 consumer／writer 迁移、supported reader 退出及原
+quota 成果／完整成本资格继续开放。源码用例通过不证明 installed Host 采用，
+也不证明 packet 体积、模型保留上下文或净成本收益。
+
 以下区块保存本次集成从规范 RFC 移出的候选叙述。测量、提议和现在时陈述属于各自原
 检查点，不是对本次集成源码的新结论。当前行为以规范 RFC 和具名 owner 为准。尤其不能
 由已退出的 scope 原型恢复强制模型阅读计划。既有负结果、原 quota 对照与 reader 退出
