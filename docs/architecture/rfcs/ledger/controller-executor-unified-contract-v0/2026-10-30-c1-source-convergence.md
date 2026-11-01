@@ -20,6 +20,33 @@ hash references and one absent-authoring CLI case; those failures remain evidenc
 and require separate corrected validation. This is source/transport evidence,
 not installed adoption, accepted model outcomes or complete-cost qualification.
 
+The 2026-11-01 heartbeat consumer increment (`18b55e04d`) reuses the existing
+heartbeat rule owner for routing, safety and complete work guidance in captured
+native Goal input. Fresh on/off prompts share that wording; historical saved
+bodies are not rewritten. Clause review retains the actor, authority, required
+reads, original/cumulative outcomes, ordering, evidence, continuation and stops.
+This removes a separately maintained prose copy, not a decision or settlement
+owner, and changes no activation default or protocol.
+
+With the same CLI caller, 320-character scope, explicit CLI and five capability
+flags, substituting only frozen `958eef4c` renderers gives 5,041/5,080 normalized
+characters unbound/bound; the candidate gives 4,859/4,898 under the unchanged
+4,900 allowance. Each candidate body saves 180 UTF-8 bytes. The longer-route
+negatives remain over budget at 5,051/5,090. Captured native Goal input instead
+grows 3,187→3,235 characters while staying below its unchanged 4,000 host limit.
+These are generated-input measurements, not a full base-repository rerun,
+control-packet compression, model adoption, token savings or outcome benefit.
+
+The consumer checks pass 114 prompt/platform cases with one platform skip and
+12 real isolated File/SQLite CLI final-input/recovery cases using synthetic host
+executables. The output/differential
+matrix still has five failing tests: complete quota Markdown 30,462>10,000,
+crowded plans 24,044/27,508>22,500, complete alias 24,252>13,000 and its separate
+multi-agent probe 25,933>13,000. Its other 219 cases pass, with one skip. No
+budget or population is relaxed, and the historical restoration allowance is
+not inherited by the new wording. C1 cutover, remaining readers and the original
+quota single-session outcomes/full-cost comparison remain open.
+
 The blocks below preserve the candidate narrative moved out of the normative
 RFC during this integration. Their measurements, proposals and present-tense
 statements belong to their original checkpoints; they are not fresh claims for
