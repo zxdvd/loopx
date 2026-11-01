@@ -72,6 +72,60 @@ the other four failures retain their preceding sizes and limits. Historical
 failures remain failures. No ceiling, fixture population or requirement changes,
 and no model, invoice, installed-adoption or long-horizon benefit is qualified.
 
+The optional Host increment (`8316c9fa5`, subsequently integrating target main
+`5a9c0a612`) moves Ark and MemT tool identity to the existing complete dispatch
+owner through `extensions.turn_host.extract_turn_work_identity`. Complete input
+uses the selected-work owner, including adaptive primary work; historical input
+retains the providers' raw declared values and strict string/NUL checks. Session
+lineage keeps its historical normalization. Fresh-context, source/projection
+integrity and MemT exact-Goal-lifetime refusal remain in force. This retires two
+provider-side identity decoders, not the remaining DSH, native-child, steward and
+session-recovery compatibility readers or the executor's v0 transport.
+
+MemT candidate validation now retains the original request and complete source.
+A real candidate conversion followed by source invalidation was previously
+accepted by this local check; it now rejects. This does not establish that outer
+Core settlement previously accepted that candidate. Actual CLI input still lacks
+an admitted MemT lifetime and cannot open memory; converter tests do not invent
+one. SDK tests use isolated synthetic protocol peers, not a GPU or model service.
+
+A matched comparison calls the actual Ark identity consumer at frozen
+`46bdaddb3` and the candidate on identical synthetic File/SQLite CLI requests:
+
+| Cost observation | Before | Candidate |
+| --- | ---: | ---: |
+| Checked identity RPCs per request | 1 | 1 |
+| Canonical JSON argument bytes, File / SQLite | 41,286 / 41,338 | unchanged |
+| Canonical JSON result bytes | 211 | 324 |
+| Complete-source deep copies for identity | 1 | 0 |
+
+The avoided copy's source is 28,432/28,458 canonical JSON bytes; this is a source
+size proxy, not allocated-memory measurement. Every dispatch-context response
+now carries the three identity facts, adding 113 bytes even for its other callers.
+Model prompts remain byte-identical at 33,020/33,046 bytes, verified by digest.
+These counts exclude RPC framing and establish neither latency nor net model,
+token, invoice or long-horizon benefit. Complete packet compression is unchanged.
+
+Ark/MemT suites pass 41/43 cases after baseline 39/37 passes. The added tests first
+failed on both providers' identity decoders and on MemT's invalidated-source
+acceptance. Core capture/Host checks pass 58 cases, including File/SQLite actual
+CLI input, adaptive identity, raw historical values and refusal without fallback.
+After integrating main, the envelope/interaction/conversation owners pass 122
+TypeScript cases. The native steward fixture initially has ten startup failures
+because it inherits an ambient conversation-provider override that its fake peer
+does not echo. Removing only that override in the test child process gives ten
+passes; no user configuration or production provider check is changed. The first
+failure is retained as test-environment evidence, not a passing execution.
+An initial assertion incorrectly imposed complete-input adaptive selection on
+historical provider decoding; its two failures were corrected and remain recorded.
+The broader local matrices expose six context-delivery and two driver-profile
+failures, all eight reproduced at frozen `46bdaddb3`; the five output-budget
+failures also remain. They are not qualifying passes. C1 still requires these
+delivery gaps, supported-reader retirement, packaged/installed qualification and
+the original-quota outcome/full-cost comparison. Both optional packages require
+the same integrated Core checkout; a version floor alone cannot prove seam
+availability in a previously published wheel.
+
 The blocks below preserve the candidate narrative moved out of the normative
 RFC during this integration. Their measurements, proposals and present-tense
 statements belong to their original checkpoints; they are not fresh claims for

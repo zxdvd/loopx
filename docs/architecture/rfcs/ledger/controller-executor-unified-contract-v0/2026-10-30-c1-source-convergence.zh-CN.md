@@ -57,6 +57,49 @@ JSON 多 279／291／295 字节；减少的是展示缩进，不是语义 contro
 另四项失败保留上一检查点的大小和门槛。历史失败仍是失败，未改变上限、
 fixture 规模或要求；不据此认证模型、费用、安装采用或长程收益。
 
+可选 Host 切片（`8316c9fa5`，随后集成目标 main `5a9c0a612`）让 Ark、MemT
+的工具身份通过 `extensions.turn_host.extract_turn_work_identity` 读取既有完整
+dispatch owner。完整输入复用 selected-work owner，包含 adaptive 主任务；历史
+输入保留 provider 原始声明值及严格 string／NUL 检查。Session lineage 保持原有
+归一化方式。Fresh context、来源／投影完整性及 MemT 精确 Goal 生命周期拒绝门
+均保留。本次退出两个 provider 自行解码身份的调用点；DSH、native-child、steward、
+session-recovery 的兼容 reader 和 executor 的 v0 运输仍未退出。
+
+MemT 候选校验现在保留原请求与完整来源。真实候选转换完成后再使来源失效，原本
+仍被该本地检查接受的结果现在会被拒绝；这不证明外层 Core 结算此前会接受它。
+实际 CLI 输入仍没有已准入的 MemT 生命周期，不能打开记忆；converter 测试没有
+补造该身份。SDK 用例使用隔离合成协议对端，不运行 GPU 或模型服务。
+
+同源对照在冻结 `46bdaddb3` 与候选上调用真实 Ark 身份消费函数，输入是完全相同的
+合成 File／SQLite CLI 请求：
+
+| 成本观察 | 原实现 | 候选 |
+| --- | ---: | ---: |
+| 每个请求的身份检查 RPC | 1 | 1 |
+| Canonical JSON 参数字节，File／SQLite | 41,286／41,338 | 未改变 |
+| Canonical JSON 返回字节 | 211 | 324 |
+| 为读取身份进行的完整来源深拷贝 | 1 | 0 |
+
+省去的拷贝来源为 28,432／28,458 canonical JSON 字节；这是来源大小代理，不是
+内存分配测量。全部 dispatch-context 返回现在携带三个身份事实，其他调用方也
+多付 113 字节。模型提示经 digest 核对仍逐字节相同，为 33,020／33,046 字节。
+上述数字不含 RPC framing，不认证延迟、模型净收益、token、费用或长程收益；
+完整 packet 压缩没有变化。
+
+Ark／MemT 基线分别 39／37 项通过，修复后 41／43 项通过。新增用例先在两个
+provider 的身份 decoder 及 MemT 失效来源接受行为上失败。Core capture／Host
+检查 58 项通过，包含 File／SQLite 真实 CLI 输入、adaptive 身份、历史原始值及
+禁止回退的拒绝路径。集成 main 后，envelope／interaction／conversation owner
+的 TypeScript 用例 122 项通过。Native steward fixture 最初有 10 项启动失败，
+因为继承的会话 provider 环境覆盖未被合成对端回显；只在测试子进程移除该覆盖后
+10 项通过，未改变用户配置或生产 provider 检查。首轮失败保留为测试环境证据，
+不算通过。初始断言曾把完整输入的 adaptive 选择强加给历史 provider
+解码，已修正这两项失败并保留记录。扩大本地矩阵暴露 6 项 context-delivery、
+2 项 driver-profile 失败；冻结 `46bdaddb3` 可复现全部 8 项，原有 5 项输出预算失败
+也继续保留，均不算资格通过。C1 仍需解决这些交付缺口、supported reader 退出、
+打包／安装资格及原 quota 成果／完整成本对照。两个可选包须使用同一份已集成的
+Core 源码；版本下限不能证明已发布旧 wheel 含有所需接缝。
+
 以下区块保存本次集成从规范 RFC 移出的候选叙述。测量、提议和现在时陈述属于各自原
 检查点，不是对本次集成源码的新结论。当前行为以规范 RFC 和具名 owner 为准。尤其不能
 由已退出的 scope 原型恢复强制模型阅读计划。既有负结果、原 quota 对照与 reader 退出
