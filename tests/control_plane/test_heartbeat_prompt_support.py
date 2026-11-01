@@ -25,7 +25,10 @@ from loopx.control_plane.heartbeat.host import (
     uses_ark_managed_agent_goal_host,
     uses_native_goal_host_loop,
 )
-from loopx.control_plane.heartbeat.rules import SCOPE_BOUNDED_WORK_RULE
+from loopx.control_plane.heartbeat.rules import (
+    SCOPE_BOUNDED_PROGRESS_RULE,
+    SCOPE_BOUNDED_WORK_RULE,
+)
 from loopx.control_plane.heartbeat.task_body import render_heartbeat_generator_inputs_markdown
 from loopx.control_plane.heartbeat.visible_goal import (
     build_visible_goal_initial_runtime_capability_projection,
@@ -405,7 +408,9 @@ def test_sizing_guidance_survives_prompt_compaction(mode: str) -> None:
     payload = build_heartbeat_prompt(goal_id="sizing-fixture", **{mode: True})
     body = payload["task_body"]
     # Compaction must not discard how to size work while keeping only "one step".
-    assert body.count(SCOPE_BOUNDED_WORK_RULE) == 1
+    assert body.count(SCOPE_BOUNDED_PROGRESS_RULE) == 1
+    assert "work_context" in body and "required_reads" in body
+    assert "before acting" in body if mode == "thin" else "before work" in body
     assert "bounded slice" not in body
     assert payload["interface_budget"]["within_budget"] is True
     # This is guidance, not a new execution profile, scheduler or authority field.

@@ -563,6 +563,16 @@ reader 覆盖仍保留。八项聚焦用例通过，使用注入的记录 runner
 File/SQLite 原生输入检查确认不支持的内层版本在 Codex prompt 执行或 DSH runner
 加载前拒绝，且不扣额。完整契约/context/DSH/stdio 集合 352 项通过，TypeScript
 检查及聚焦 lint 通过。这只证明上述交互语义，不代表所有必需字段或打包宿主已验收。
+Heartbeat 模板现统一提供按顺序结算的执行要求；精确 Turn 绑定只补充 canonical
+来源定位，不再重复执行和禁止静态重建的条款。Thin 将完整 capture 与所需上下文的
+行动前读取合并，复用未变的进展／outcome 条款。原完整路由 fixture（320 字符
+scope、显式 CLI、五项能力）中，未绑定提示从 4,981 降至 4,895 个预算字符，通过
+原 4,900 上限；精确 Turn 变体从 5,198 降至 4,987，仍超过该上限。超长路由反例
+仍拒绝；没有缩短路由、能力、fixture 规模或修改上限。提示／平台集合 115 项通过、
+1 项跳过。这只证明展示和条款保留，不代表模型采用或费用收益。其余原 CLI 预算
+仍有四项失败。与 opaque reader reference 整合还暴露两项过时的 digest 字段断言；
+File/SQLite 消费者现读取已钉住的 machine descriptor，保留原 receipt，并确认
+capture 字节改变后拒绝读取，不产生新 admission 或 spend。
 剩余 cache 一致性调查、其他旧 reader 断言、分阶段指令等价和实际 optional/external
 消费者、版本准入及打包宿主连续性仍未完成。缺少显式原生 runtime 的 operation SDK
 检查属于未测，不能算资格。默认 writer 变更尚未交付；PR 因作者实现未完而保持

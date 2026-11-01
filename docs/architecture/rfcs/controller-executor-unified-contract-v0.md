@@ -753,6 +753,21 @@ reject an unsupported inner version before Codex prompt execution or DSH runner
 loading, without spend. The complete-contract/context/DSH/stdio selection passes
 352 cases; TypeScript checking and focused lint pass. This qualifies these
 interaction semantics, not every required field or packaged-host adoption.
+Heartbeat templates now own the ordered settlement instruction; exact-Turn
+binding adds only its canonical source locator, instead of repeating the
+execution and no-static-reconstruction clauses. Thin prompts combine complete
+capture and required-context reads before action, while sharing the unchanged
+progress/outcome clauses. On the unchanged full-route fixture (320-character
+scope, explicit CLI and five capabilities), the unbound prompt falls from 4,981
+to 4,895 budget characters under the original 4,900 ceiling. The exact-Turn
+variant falls from 5,198 to 4,987 and still fails that ceiling. The padded-route
+negative remains rejected; no route, capability, fixture population or limit
+was shortened. The prompt/platform selection passes 115 checks with one skip.
+These are presentation and clause-retention results, not model adoption or cost
+benefit. Four other original CLI-budget failures remain open. Integration with
+opaque reader references also exposed two obsolete digest-field assertions;
+their File/SQLite consumers now read the pinned machine descriptor, preserve
+the original receipt and reject byte-changed captures without admission or spend.
 Remaining cache consistency investigation, other old reader expectations, staged instruction parity and
 actual optional/external consumers, version admission and packaged host
 continuity remain unfinished. Operation-SDK checks without an explicit native
