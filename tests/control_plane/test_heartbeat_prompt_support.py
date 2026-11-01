@@ -93,10 +93,13 @@ def test_native_profile_long_routes_retain_one_complete_settlement_contract() ->
         "selection_command", "settlement_plan.ordered_steps", "next_cli_actions",
         "identities/effect ids and actual outcomes", "Preserve command flags",
         "truthful evidence", "ambiguous effects need readback/recovery",
-        "retain original and cumulative outcome requirements",
         "root continuation, budget or stop criteria",
     ):
         assert obligation in body, obligation
+    assert any(clause in body for clause in (
+        "retain original and cumulative outcome requirements",
+        "keep original/cumulative outcome requirements",
+    ))
 
 
 @pytest.mark.parametrize("mode,limit", [

@@ -1751,8 +1751,9 @@ def test_thin_json_budget_retains_full_supported_scope(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("route_padding, within_budget", [("", True), ("x" * 48, False)])
+@pytest.mark.parametrize("bound_turn", [None, "2026-11-01T17:44:12.398Z"])
 def test_thin_budget_covers_complete_capability_and_cli_routes(
-    tmp_path: Path, route_padding: str, within_budget: bool,
+    tmp_path: Path, route_padding: str, within_budget: bool, bound_turn: str | None,
 ) -> None:
     # Exercise the actual CLI composition, not a shortened instruction or an
     # estimated sum. An oversized route must still report a budget failure.
@@ -1770,6 +1771,8 @@ def test_thin_budget_covers_complete_capability_and_cli_routes(
         capabilities = ("shell", "filesystem", "network", "external_evidence_poll", "browser")
         for capability in capabilities:
             command.extend(["--available-capability", capability])
+        if bound_turn is not None:
+            command.extend(["--turn-instance-id", bound_turn])
         exit_code, text = _invoke_cli(command)
         assert exit_code == 0, text
         payload = json.loads(text)
@@ -1781,6 +1784,11 @@ def test_thin_budget_covers_complete_capability_and_cli_routes(
         assert "ambiguous effects need readback/recovery, not blind retry" in body
         assert "refresh-state --goal-outcome-update-json" in body
         assert "Local outcomes never replace root continuation, budget or stop criteria." in body
+        if bound_turn is not None:
+            assert bound_turn in body
+            assert "LOOPX_TURN=<current_time_iso>" not in body
+            assert '$LOOPX_TURN = "<current_time_iso>"' not in body
+            assert "interaction_contract.cli_channel.settlement_plan.ordered_steps" in body
         # Preserve the historical 4,500-character failure as a characterized
         # input; the allowance changes, not the complete emitted instructions.
         assert budget["budget_char_count"] > 4500
