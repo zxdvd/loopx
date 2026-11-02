@@ -173,6 +173,32 @@ capture reader 连续读取 UTF-8 页，保留全部调度断言，并验证只�
 quota 成果／完整成本资格继续开放。源码用例通过不证明 installed Host 采用，
 也不证明 packet 体积、模型保留上下文或净成本收益。
 
+后续 plan 切片仅在 `build_loopx_turn_plan` 收到完整契约时删除重复的
+`consumer_version` RPC。既有 `driver_lineage` 已调用同一 TypeScript 版本、
+完整性、source/projection 和 selected-work owner；历史输入仍保留独立版本诊断。
+不增加校验实现、跨调用缓存、字段、协议版本、激活默认值或权限。
+
+八份固定输入来自真实隔离 File／SQLite CLI plan，覆盖完整／历史来源及
+fresh／resume 会话策略。相对冻结 `0cd09b46c`，最终 plan、Host 请求、Codex
+提示和 schema 全部逐字节相同。完整 plan 的 RPC 从两次变为一次，测量的
+plan／request／prompt／schema 序列从三次变为两次；规范 RPC 参数加返回 JSON
+在 File 下为 92,598→81,554B，SQLite 下为 92,838→81,752B，分别少
+11,044／11,086B（11.93%／11.94%）。历史对照仍为三次且字节完全相同。
+四份完整模型输入都保留完整原契约和 fixture Goal；探针未扣额或调用模型。
+CSV、SQLite 整数合计和 Decimal 比率独立复核八组对照一致。
+
+六项 plan 矩阵先有五项重复调用失败、一项历史对照通过，修改后六项通过。
+不支持的 adapter 版本、改动的来源正文、自洽重签却替换原动作的 adapter、显式
+null 完整契约仍经同一 owner 拒绝。这只是运输组件成本，不含 framing、延迟、
+内存分配、模型用量和成果；最终模型输入没有缩减。五项原输出预算门、原 quota
+单会话对照和完整 C1 资格继续开放，不能把本次缩减与不同分母的物理包或选择
+读取数字直接相加。
+
+完整 Turn driver、原生 Codex CLI 和完整来源三个模块有 334 项通过，耗时
+202.77 秒，无跳过或错误，包含真实 File／SQLite 交付、验证、失败 attempt
+恢复和原 Turn 结算；未启动 live Host。这验证有界源码切片，不结清其余 C1
+cutover，也不产生新的精确 head merge-readiness 回执。
+
 以下区块保存本次集成从规范 RFC 移出的候选叙述。测量、提议和现在时陈述属于各自原
 检查点，不是对本次集成源码的新结论。当前行为以规范 RFC 和具名 owner 为准。尤其不能
 由已退出的 scope 原型恢复强制模型阅读计划。既有负结果、原 quota 对照与 reader 退出

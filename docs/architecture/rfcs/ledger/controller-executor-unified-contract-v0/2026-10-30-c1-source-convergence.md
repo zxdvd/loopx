@@ -222,6 +222,41 @@ supported-reader exit and original-quota outcome/full-cost qualification remain
 open. A passing source-checkout cohort proves neither installed-host adoption
 nor packet-size, model-retention or net-cost benefit.
 
+The subsequent planning increment removes a redundant `consumer_version` RPC
+only when `build_loopx_turn_plan` receives a complete contract. Its existing
+`driver_lineage` operation already calls the same TypeScript version, integrity,
+source/projection and selected-work owners. Historical inputs retain their
+standalone version diagnostics. There is no new validation implementation,
+cross-invocation cache, field, protocol version, activation default or authority.
+
+Eight fixed inputs originate from real isolated File/SQLite CLI plans and cover
+complete/historical sources with fresh/resume session policies. Against frozen
+`0cd09b46c`, all final plans, Host requests, Codex prompts and schemas remain
+byte-identical. Complete planning uses one RPC instead of two; the measured
+plan/request/prompt/schema sequence uses two instead of three. Its canonical
+RPC argument-plus-result JSON changes from 92,598 to 81,554 bytes for File and
+92,838 to 81,752 for SQLite, saving 11,044/11,086 bytes (11.93%/11.94%). Historical
+controls retain their three RPCs and exact bytes. Every complete model input
+still contains the full original contract and fixture Goal; the probes spend
+nothing and invoke no model. CSV, SQLite integer totals and Decimal ratios
+independently agree on the eight matched comparisons.
+
+The six-case planning matrix first has five duplicate-call failures and one
+passing historical control; all six then pass. Unsupported adapter versions,
+changed source content, a self-consistently rehashed but substituted adapter and
+an explicitly null complete contract still refuse through the shared owner.
+These are component transport costs, excluding framing, latency, allocations,
+model usage and outcomes. Final model input is unchanged; the five output holds,
+original-quota single-session comparison and complete C1 qualification remain
+open. This saving cannot be added to the physical packet or selective-read
+figures as though they shared a denominator.
+
+The full Turn driver, native Codex CLI and complete-source modules pass 334
+cases in 202.77 seconds, with no skips or errors. These include real File/SQLite
+delivery, validation, failed-attempt recovery and original-Turn settlement; no
+live Host was launched. This qualifies the bounded source increment, not the
+remaining C1 cutover or a new exact-head merge-readiness receipt.
+
 The blocks below preserve the candidate narrative moved out of the normative
 RFC during this integration. Their measurements, proposals and present-tense
 statements belong to their original checkpoints; they are not fresh claims for
