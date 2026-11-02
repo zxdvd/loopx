@@ -54,6 +54,112 @@ def complete_host_request(tmp_path, monkeypatch, request):
     assert fixture._quota_spend_count(runtime) == 0  # Adapter results are not Core settlement.
 
 
+def _pending_goal_contract(original):
+    from copy import deepcopy
+    from loopx.control_plane.quota.turn_envelope import compose_turn_decision, build_turn_envelope
+
+    source = deepcopy({key: value for key, value in original.items()
+                       if key not in {"schema_version", "contract_binding"}})
+    agent = source["interaction_contract"]["agent_channel"]
+    goal = next(row for row in agent["work_context"]["sources"] if row["source"] == "goal_state")
+    # Keep source positions: other exact references still belong to this capture.
+    # A valid source commitment does not fulfill the pending narrative read.
+    goal["content"] = {key: value for key, value in goal["content"].items()
+                       if key in {"state_file", "revision"}}
+    agent["required_reads"] = [*agent.get("required_reads", []),
+                               {key: value for key, value in goal.items() if key != "content"}]
+    contract = compose_turn_decision(source)
+    return contract, build_turn_envelope(contract)
+
+
+@pytest.mark.parametrize("launch", ["runner", "argv"])
+@pytest.mark.parametrize("mode", ["current", "pending_goal", "historical"])
+def test_generic_dispatch_checks_complete_goal_before_host(
+    complete_host_request, tmp_path, launch, mode,
+):
+    from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
+    from loopx.control_plane.turn_driver.executor import run_loopx_turn_once
+
+    request, original = complete_host_request
+    if mode == "pending_goal":
+        contract, envelope = _pending_goal_contract(original)
+    else:
+        contract, envelope = original, request["turn_envelope"]
+    plan = build_loopx_turn_plan(envelope, host="generic-cli", execution_mode="isolated-headless",
+        turn_instance_id="generic-goal-interlock",
+        **({} if mode == "historical" else {"work_contract": contract}))
+    assert plan["route"]["would_invoke_host"] is True
+    calls = []
+    marker = tmp_path / "host-started"
+
+    def runner(_request):
+        calls.append(_request)
+        raise RuntimeError("synthetic stop after dispatch observation")
+
+    def unexpected_settlement(*_args, **_kwargs):
+        raise AssertionError("a failed Host observation must not settle work")
+
+    host = {"host_runner": runner} if launch == "runner" else {"host_argv": [
+        sys.executable, "-c",
+        "from pathlib import Path; import sys; sys.stdin.read(); "
+        f"Path({str(marker)!r}).write_text('started'); raise SystemExit(9)",
+    ]}
+
+    def execute():
+        return run_loopx_turn_once(plan, **host, project=tmp_path / "project",
+            runtime_root=tmp_path / "generic-runtime", goal_id=original["goal_id"],
+            timeout_seconds=5, execute=True, writeback=unexpected_settlement,
+            spend=unexpected_settlement, scheduler=unexpected_settlement)
+
+    if mode == "pending_goal":
+        with pytest.raises(RuntimeError, match="Goal"):
+            execute()
+        assert calls == [] and not marker.exists()
+    else:
+        result = execute()
+        assert result["effects"]["host_invoked"] is True
+        assert len(calls) == (1 if launch == "runner" else 0)
+        assert marker.exists() is (launch == "argv")
+
+
+def test_typed_result_recovery_does_not_start_a_pending_goal_host(
+    complete_host_request, tmp_path,
+):
+    from loopx.control_plane.turn_driver.executor import _host_result_stage, TRANSACTION_PHASES
+    from loopx.control_plane.turn_driver.host_candidate import build_result
+
+    request, original = complete_host_request
+    contract, envelope = _pending_goal_contract(original)
+    request = {**request, "work_contract": contract, "turn_envelope": envelope}
+    vision = {"schema_version": "goal_vision_replan_contract_v0", "state": "active",
+        "vision_patch": {"acceptance_summary": "Validate the preserved work."},
+        "path_delta": {"outcome": "replan", "prior_assumption": "Existing work remains useful.",
+            "observed_reality": "The artifact is independently checked.",
+            "changed": ["Use the verified artifact for the next work step."],
+            "evidence_refs": ["fixture:checked-work"]}}
+    candidate = build_result(request, {"result_kind": "replan_required",
+        "classification": "validated_fixture_replan", "summary": "Original work remains useful.",
+        "next_action": "Continue the original work.", "path_delta_mode": "material_replan",
+        "agent_vision_json": json.dumps(vision), "work_evidence": ["fixture:artifact"],
+        "validation_evidence": ["fixture:checked-work"]})
+    plan = {**request, "transaction": {"turn_key": request["turn_key"]}}
+    journal = {"completed_phases": list(TRANSACTION_PHASES[:2]), "host_result": candidate}
+    effects = {"host_invoked": False, "state_written": False,
+               "quota_spent": False, "scheduler_acknowledged": False}
+    saved = []
+
+    def no_new_host(_request):
+        raise AssertionError("an existing typed result must not start another Host")
+
+    result, phases, terminal = _host_result_stage(plan, request,
+        host_runner=no_new_host, argv=None, completion_lifecycle_configured=False,
+        project=tmp_path, timeout_seconds=5, journal=journal,
+        persist_journal=lambda value: saved.append(dict(value)), effects=effects)
+    assert terminal is None and result["result_kind"] == "replan_required"
+    assert "typed_result" in phases and not effects["host_invoked"]
+    assert saved and "host_attempt_count" not in journal
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("first_attempt_fails", [False, True])
 @pytest.mark.parametrize("legacy_pretty", [False, True])

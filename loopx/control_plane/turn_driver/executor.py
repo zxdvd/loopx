@@ -951,6 +951,12 @@ def _host_result_stage(
         else None
     )
     if "typed_result" not in completed_phases:
+        # Every new Host attempt shares the complete-source dispatch interlock,
+        # including custom runners and external argv. Existing typed results
+        # retain their recovery path without starting another model attempt.
+        from .host_candidate import _complete_host_source
+
+        _complete_host_source(request, operation="host_dispatch_context")
         journal["host_attempt_count"] = int(journal.get("host_attempt_count") or 0) + 1
         persist_journal(journal)
         from ...extensions.codex_native_child import configured_native_child_limit
