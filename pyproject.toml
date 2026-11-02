@@ -212,7 +212,6 @@ relative_files = true
 python_version = "3.11"
 strict = true
 files = [
-  "loopx/cli_commands/todo_event.py",
   "loopx/control_plane/__init__.py",
   "loopx/control_plane/coordination/canonical_snapshot.py",
   "loopx/control_plane/coordination/local_authority_shadow_outbox.py",
@@ -225,7 +224,6 @@ files = [
   "loopx/control_plane/testing/authority_e2e_fixtures.py",
   "loopx/control_plane/testing/authority_e2e_ladder.py",
   "loopx/control_plane/testing/authority_e2e_row_support.py",
-  "loopx/control_plane/todos/markdown.py",
   "loopx/control_plane/work_items/delivery_batch_scale.py",
   "loopx/control_plane/work_items/delivery_outcome.py",
   "loopx/control_plane/work_items/lifecycle.py",
