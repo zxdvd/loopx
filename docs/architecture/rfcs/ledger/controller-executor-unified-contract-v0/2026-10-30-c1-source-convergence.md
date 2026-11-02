@@ -1258,3 +1258,30 @@ delivery prerequisite. General capability-read interlocks, current-condition
 revalidation, packaged adoption, real-model adherence and complete costs still
 need their own evidence. Replan material-reading invocations retain their staged
 reader and work restrictions. C1 remains unqualified.
+
+### Current preference initial-read integration
+
+The C1 candidate incorporates the existing selector repair from
+[#7935](https://github.com/loopx-project/loopx/pull/7935): the initial read carries
+the preference owner's complete current scoped view, including corrections,
+retirement, empty replacements, provenance and advisory authority. It reuses the
+same selector and source owner. It does not change activation, grant authority,
+or replace a later action's required fresh scoped read.
+
+Integration checks reuse the native capture reader and executor projection,
+rather than requiring the retired capsule at the complete-source root or treating
+navigation as an inline decision. The checks retain the delivery-off progressive
+Goal read and verify the native default's complete inline Goal, canonical task,
+later requirement change, damaged preference storage and signature refusal.
+Five old layout assumptions fail on the pre-integration candidate too; after
+adapting the tests, six complete modules pass 143 cases. Actual native exec and
+CodeMode paths pass two cases with a deterministic loopback provider; six
+TypeScript modules pass 124 cases. These counts describe those scopes only.
+
+The complete CLI budget module still has four failing test groups, 39 passes
+and one environment-dependent skip. Its observed small Markdown, crowded plans
+and compatibility-view limits remain exceeded; the original five size holds and
+their historical measurements are retained. No ceiling, fixture workload or
+production prompt was reduced to hide a failure. This is source integration,
+not a passing whole-C1 quality receipt, merge readiness, installed adoption,
+natural-model behavior or a full-cost benefit claim.

@@ -21,6 +21,7 @@ from loopx.control_plane.todos.goal_todo_projection import retained_todo_summary
 from loopx.control_plane.turn_driver.codex_cli import _prompt
 from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request
 from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority, render_prompt
+from tests.control_plane.test_cli_output_budget import _read_current_quota_source
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -215,7 +216,8 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
 
     envelope = guard("--turn-envelope")
     before = state.read_bytes()
-    # Run the actual default product prompt's guard: no capture/envelope opt-in.
+    # Run the actual default product prompt, including its native capture
+    # transport. Read only this invocation's complete current source.
     code, generated = run_json_cli_result("heartbeat-prompt", "--goal-id", "requirements-goal",
         "--agent-id", "agent-a", "--codex-app", "--cli-bin", str(cli_bin),
         registry_path=registry, runtime_root=runtime)
@@ -223,7 +225,8 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     body = generated["task_body"]
     assert "work_context" in body
     script = re.search(r"```sh\n(.*?)\n```", body, re.S).group(1)
-    assert "--turn-envelope" not in script and "--decision-output-root" not in script
+    assert "--turn-envelope" not in script
+    assert "--context-delivery on" in script and "--decision-output-root" in script
     env = {
         **os.environ,
         "LOOPX_REGISTRY": str(registry),
@@ -231,11 +234,10 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     }
     result = subprocess.run(["sh", "-c", script.replace("<current_time_iso>", "requirements-default-wake")],
         cwd=REPO, env=env, capture_output=True, text=True, check=True)
-    full = json.loads(result.stdout)
+    full = _read_current_quota_source(json.loads(result.stdout))
     assert full["should_run"] is True, full.get("reason")
     channel = full["interaction_contract"]["agent_channel"]
-    assert [read["source"] for read in channel["required_reads"]] == ["goal_state"]
-    goal_read = channel["required_reads"][0]
+    assert channel["required_reads"] == []
     assert "required_reads" not in full["interaction_contract"]["cli_channel"]
     context = channel["work_context"]
     assert context["complete"] and not context.get("failures", [])
@@ -243,20 +245,26 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     assert "unknown, not unchanged" in context["instruction"]
     assert "summaries cannot replace full requirements" in context["instruction"]
     reads = context["sources"]
-    assert [read["source"] for read in reads] == ["selected_todo"]
-    assert not any(read["source"] == "goal_state" for read in reads)
-    goal_result = subprocess.run(shlex.split(goal_read["command"]), capture_output=True, text=True, check=True)
-    assert goal_requirements in goal_result.stdout
-    assert "Stop before an unauthorized deployment." in goal_result.stdout
+    assert [read["source"] for read in reads] == ["goal_state", "selected_todo"]
+    goal_read = reads[0]
+    assert goal_read["content"]["full_source"] is True
+    assert goal_read["content"]["text"] == before.decode()
+    assert goal_requirements in goal_read["content"]["text"]
+    assert "Stop before an unauthorized deployment." in goal_read["content"]["text"]
     assert full["selected_todo"]["todo_id"] == "todo_cursor_work"
     assert full["selected_todo"]["text"] != expected  # Deliberately bounded hot view.
     assert "_context_text_sha256" not in full["selected_todo"]
     assert reads[-1]["content"]["todo"]["text"] == expected
     assert json.dumps(context).count(expected) == 1
     envelope_channel = envelope["interaction_contract"]["agent_channel"]
-    assert envelope_channel["required_reads"] == channel["required_reads"]
+    # Ordinary delivery-off quota retains the original progressive Goal read;
+    # native default has fulfilled that same source before capture.
+    assert [row["source"] for row in envelope_channel["required_reads"]] == ["goal_state"]
+    assert envelope_channel["required_reads"][0]["command"] == goal_read["command"]
     assert context["selected_todo_text_verified"] is True
-    assert envelope_channel["work_context"] == context
+    assert envelope_channel["work_context"] == {
+        **context, "sources": [row for row in reads if row["source"] != "goal_state"],
+    }
     assert envelope_channel["work_context"]["selected_todo_text_verified"] is True
     selected = envelope["selected_todo"]
     assert selected["todo_id"] == "todo_cursor_work"
@@ -314,16 +322,19 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     assert {key: value for key, value in native_context.items() if key != "sources"} == {
         key: value for key, value in context.items() if key != "sources"
     }
-    assert [row for row in native_context["sources"] if row["source"] != "goal_state"] == context["sources"]
+    assert [row for row in native_context["sources"] if row["source"] != "goal_state"] == [
+        row for row in context["sources"] if row["source"] != "goal_state"
+    ]
     assert native_context["selected_todo_text_verified"] is True
     assert read["command"] in render_prompt(authority)
     # Keep the old layout's independent requirement assertions while the
     # complete source uses its canonical channel instead of duplicate aliases.
-    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
-    historical = extract_turn_authority({"turn_envelope": build_turn_envelope(envelope)})
-    assert historical["required_reads"] == channel["required_reads"]
+    from loopx.control_plane.quota.turn_envelope import build_turn_controller_input
+    historical = extract_turn_authority({"turn_envelope": build_turn_controller_input(envelope).envelope()})
+    assert historical["required_reads"] == envelope_channel["required_reads"]
     assert historical["work_context"] == {
-        key: value for key, value in context.items() if key != "selected_todo_text_verified"
+        key: value for key, value in envelope_channel["work_context"].items()
+        if key != "selected_todo_text_verified"
     }
     assert historical["selected_todo"]["text_source_verified"] is True
     assert read["command"] in render_prompt(historical)
@@ -495,12 +506,15 @@ def test_short_selected_todo_deduplicates_body_but_keeps_canonical_note(
     }
     result = subprocess.run(["sh", "-c", script.replace("<current_time_iso>", "short-note-wake")],
         cwd=REPO, env=env, capture_output=True, text=True, check=True)
-    full = json.loads(result.stdout)
+    full = _read_current_quota_source(json.loads(result.stdout))
     channel = full["interaction_contract"]["agent_channel"]
     context = channel["work_context"]
     assert context["complete"] is True
     assert context["selected_todo_ref"] == "selected_todo"
-    assert [read["source"] for read in channel["required_reads"]] == ["goal_state"]
+    assert channel["required_reads"] == []
+    goal_source = next(source for source in context["sources"] if source["source"] == "goal_state")
+    assert goal_source["content"]["full_source"] is True
+    assert goal_source["content"]["text"] == state.read_text()
     selected_source = next(source for source in context["sources"] if source["source"] == "selected_todo")
     source_todo = selected_source["content"]["todo"]
     assert source_todo.get("text") is None

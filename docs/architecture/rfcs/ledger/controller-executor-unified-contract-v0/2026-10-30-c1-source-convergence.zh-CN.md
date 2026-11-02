@@ -926,3 +926,22 @@ Goal 材料。历史 `host_context` 元数据读取继续用于按原版本解�
 已保存的 capture 不被重写。本项是范围有限的材料交付前置。通用 capability 必读
 强制、当前条件复核、安装采用、真实模型遵守和完整成本，仍各需独立证据。C1 未获
 完整资格。Replan 材料读取调用仍按原有阶段与工作限制执行。
+
+### 当前偏好首读集成
+
+C1 候选接入 [#7935](https://github.com/loopx-project/loopx/pull/7935) 的既有 selector
+修复：首读交付偏好 owner 完整的当前作用域视图，包含纠偏、退役、空替换、来源和
+advisory 权限边界。仍复用同一 selector 与来源 owner；不改变启用设置、不授予
+权限，也不替代后续动作要求的精确作用域新读。
+
+集成验证复用 native capture reader 和 executor 投影，不再要求完整来源根部携带
+旧 capsule，也不把导航当作内联决策。验证保留 delivery-off 的渐进 Goal 读取，
+并核 native 默认路径的完整内联 Goal、canonical Task、后续要求更新、偏好存储
+损坏和签名拒绝。五处旧布局假设在集成前候选上同样失败；适配测试后，六个完整
+模块 143 项通过。确定性 loopback provider 下实际 native exec、CodeMode 两项
+通过，六个 TypeScript 模块 124 项通过；这些计数只对应各自范围。
+
+完整 CLI 预算模块仍有四个测试组失败、39 项通过和一个环境相关跳过。实测小型
+Markdown、拥挤 plan 和兼容视图仍超限；原五个体积门及历史测量均保留。不降低
+上限、不缩 fixture 负载或生产指令来隐藏失败。本项只交付源码集成，不代表完整
+C1 质量回执通过、merge readiness、安装采用、自然模型行为或完整成本收益。
