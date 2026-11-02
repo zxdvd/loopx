@@ -1285,3 +1285,39 @@ their historical measurements are retained. No ceiling, fixture workload or
 production prompt was reduced to hide a failure. This is source integration,
 not a passing whole-C1 quality receipt, merge readiness, installed adoption,
 natural-model behavior or a full-cost benefit claim.
+
+### Canonical Todo projection cost qualification
+
+A matched observation at main `f941b5939` and C1 `c59777597` uses the existing
+`todo project-markdown` operation with its freshly read provider revision.
+File/SQLite each cover one Todo, 36 Todos with/without Vision and 18 Todos across
+three agents: 16 projection transitions, 32 surface conditions and 64 before/after
+quota/plan responses. Complete canonical rows remain identical within every
+transition. Independent full-file and excluded-region hashes reconstruct the
+delivered Goal narrative, including its final stop. Unmarked source remains full;
+only the normal writer's generated regions become excluded. No source-adapter,
+projection policy, output threshold or fixture workload changed.
+
+The measured component is normalized parsed CLI argv JSON plus actual stdout,
+including the emitted Goal `cat` command when that response requires it. At C1,
+projection reduces a crowded plan observation by 7,698 bytes without Vision and
+7,697 with Vision; the multi-agent plan decreases by 3,697. Small quota/plan
+observations instead grow by 364/75 bytes. Projection itself costs 1,667–1,700
+measured bytes; counting both complete canonical readbacks as one-time audit cost
+moves the positive cases' conditional break-even to 7–9 repeated observations.
+This is an accounting scenario, not a recommendation to regenerate each Turn.
+
+The existing projection also benefits main. With both snapshots' generated Goal
+regions, C1 plans remain 23–24 measured bytes larger; quota is 959 bytes larger in
+the small case and 1,958/1,759 larger in the crowded cases without/with Vision.
+The ordinary multi-agent quota observation supplies neither inline Goal nor a
+Goal read in either snapshot, so it is excluded from Goal-equivalent cost claims.
+These observations qualify the existing source/projection route, not a new C1
+optimization, identical complete decision semantics, model adoption or full net
+benefit. RPC, CPU, invoices, outcome value and natural-model use remain unmeasured.
+
+The original unmarked-source budget cases and all five historical holds remain
+unchanged. Crossing a limit on this separately projected workload does not repair
+or relabel those failures. Continue through the existing writer/reader owner and
+the original quota single-session acceptance; do not delete unmarked Goal text,
+relax signed-source fallback or add another compaction algorithm for these bytes.

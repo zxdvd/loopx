@@ -945,3 +945,30 @@ advisory 权限边界。仍复用同一 selector 与来源 owner；不改变启�
 Markdown、拥挤 plan 和兼容视图仍超限；原五个体积门及历史测量均保留。不降低
 上限、不缩 fixture 负载或生产指令来隐藏失败。本项只交付源码集成，不代表完整
 C1 质量回执通过、merge readiness、安装采用、自然模型行为或完整成本收益。
+
+### Canonical Todo 投影成本资格
+
+在 main `f941b5939` 与 C1 `c59777597` 上做匹配观察，使用既有
+`todo project-markdown` 操作及新读到的 provider revision。File/SQLite 各覆盖
+一个 Todo、36 个 Todo 的无／有 Vision，以及三个 Agent 的 18 个 Todo：共 16 次
+投影转换、32 个表面条件、64 份前后 quota/plan 响应。每次转换的完整 canonical
+记录逐一相同；独立核对完整文件及被排除区域 hash，重建实际交付的 Goal 正文，
+包括末尾停止条件。未标记来源仍保留全文；只排除正常 writer 生成的区域。不改变
+source adapter、投影策略、输出阈值或 fixture 负载。
+
+所测组件为解析后的规范 CLI argv JSON 加实际 stdout，并计入响应要求的 Goal
+`cat` 命令。在 C1，投影使拥挤 plan 的一次观察在无／有 Vision 时分别少
+7,698／7,697 字节，multi-agent plan 少 3,697 字节；小型 quota/plan 反而增加
+364／75 字节。投影本身的所测成本为 1,667–1,700 字节；若将两次完整 canonical
+读回也作为一次性审计成本，正向样本的条件回本点推迟到重复 7–9 次相关观察。
+这是记账情形，不是每 Turn 重新生成的建议。
+
+既有投影也使 main 获益。两快照均使用生成 Goal 区域后，C1 plan 仍多 23–24
+个所测字节；quota 的小样本多 959，拥挤无／有 Vision 分别多 1,958／1,759。
+普通 multi-agent quota 在两个快照均没有内联 Goal 或 Goal 读取，故不纳入 Goal
+等价成本主张。上述结果资格化既有来源／投影路径，不是 C1 新优化、完整决策语义
+相同、模型采用或整体净收益证明。RPC、CPU、账单、成果价值及自然模型使用未测。
+
+原未标记来源的预算 case 和五项历史门保持不变。另行投影的负载越过阈值，并不
+修复或改写那些失败。继续沿原 writer/reader owner 和相对原 quota 的单会话验收，
+不删除未标记 Goal 正文、不放宽签名来源回退，也不为这些字节新造压缩算法。
