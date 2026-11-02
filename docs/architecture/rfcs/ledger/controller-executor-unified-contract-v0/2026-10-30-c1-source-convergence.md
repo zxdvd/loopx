@@ -257,6 +257,36 @@ delivery, validation, failed-attempt recovery and original-Turn settlement; no
 live Host was launched. This qualifies the bounded source increment, not the
 remaining C1 cutover or a new exact-head merge-readiness receipt.
 
+The subsequent Host-transfer repair preserves a supplied `work_contract` even
+when it is not an object. Request construction and original-capture publication
+previously discarded these values, allowing the native prompt and shared Host
+reader to interpret them as historical absence. Both transports now retain the
+value for the existing TypeScript complete-source validator; genuine historical
+absence still uses the old reader. No parallel validator or new field is added.
+The ordinary executor's earlier source check remains; this does not establish
+an outer settlement bypass.
+
+At frozen `42b842f93`, the corrected 18-case matrix has ten missing-refusal
+failures and eight passing controls; the repair passes all 18. It covers both
+transfers, absent/valid input, null, false, zero, list, text, empty object and
+invalid integrity, including native/shared-reader refusal and no DSH runner load.
+Two initial controls correctly refused an unfulfilled Goal read; delivering the
+complete synthetic Goal fixes those fixtures, without relaxing that check.
+Eight fixed File/SQLite fresh/resume inputs retain byte-identical plans, requests,
+prompts and schemas, as well as unchanged RPC counts and argument/result bytes.
+This is compatibility-boundary qualification, not a new compression or net-cost
+result. The original five output holds and complete C1 acceptance remain open.
+
+The wider six-module run initially passes 522 and fails six Host-context cases
+before dispatch. Frozen `42b842f93` reproduces all six. An independent child
+import probe finds a different installed Core when cwd is the disposable Goal.
+The test now binds and checks this checkout for its subprocesses and explicitly
+selects delivery off for its historical direct-body control. That complete
+Host-context module passes eight cases; the other five modules retain their
+520 passes on unchanged product files. The combined 528 distinct passing cases
+come from those two invocations, not a claimed single final six-module run.
+Original failures remain recorded; no installed Core or user setting is changed.
+
 The blocks below preserve the candidate narrative moved out of the normative
 RFC during this integration. Their measurements, proposals and present-tense
 statements belong to their original checkpoints; they are not fresh claims for
