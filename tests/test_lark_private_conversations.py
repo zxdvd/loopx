@@ -343,7 +343,7 @@ def test_original_queue_reviews_only_unsubmitted_native_handoffs(tmp_path, langu
 
     monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gemini-4-argon-high")
     monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "high")
-    fixture = steward.__wrapped__(tmp_path)
+    fixture = steward.__wrapped__(tmp_path, monkeypatch)
     store, runtime, provider, transport, binding, _, workspace = next(fixture)
     revoker = ThreadPoolExecutor(max_workers=1)
     try:
