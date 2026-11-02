@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
+import os
 from pathlib import Path
 import shlex
 import subprocess
@@ -30,6 +31,14 @@ from tests.control_plane.test_quota_settlement_cli import (
 def test_captured_context_reaches_actual_host_without_readmission(tmp_path, monkeypatch, provider, mode):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
+    # Child cwd is the disposable Goal, so the interpreter's installed Core
+    # may differ from this checkout. Bind and independently check test-only IO.
+    checkout = Path(__file__).resolve().parents[2]
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join(filter(None,
+        [str(checkout), os.environ.get("PYTHONPATH")])))
+    imported = subprocess.run([sys.executable, "-c", "import loopx; print(loopx.__file__)"],
+        cwd=project, text=True, capture_output=True, check=True)
+    assert Path(imported.stdout.strip()).resolve() == checkout / "loopx" / "__init__.py"
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     state.write_text(state.read_text().replace(
         "- [ ] [P1] Validate and settle the selected delivery.",
@@ -51,7 +60,7 @@ def test_captured_context_reaches_actual_host_without_readmission(tmp_path, monk
             "hook_event_name": "SessionStart", "source": "startup",
         })
     delivery = (["--context-delivery", "on", "--codex-context-dir", str(tmp_path / "context")]
-        if mode != "legacy_reference" else [])
+        if mode != "legacy_reference" else ["--context-delivery", "off"])
     binary = Path(sys.executable).with_name("loopx.exe" if sys.platform == "win32" else "loopx")
     guard = [str(binary), "--registry", str(registry),
         "--runtime-root", str(runtime), "--format", "json", "quota", "should-run",
