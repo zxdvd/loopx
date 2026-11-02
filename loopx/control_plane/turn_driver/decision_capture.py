@@ -66,9 +66,11 @@ class StagedTurnDecisionCapture:
         """Install the published original input without changing recovery bindings."""
         plan = self.publish()
         bound_request = {**request, "turn_envelope": plan["turn_envelope"]}
-        if isinstance(plan.get("work_contract"), Mapping):
-            bound_request["work_contract"] = dict(plan["work_contract"])
+        if "work_contract" in plan:
+            contract = plan["work_contract"]
+            bound_request["work_contract"] = dict(contract) if isinstance(contract, Mapping) else contract
         else:
+            # Only an original historical absence can clear the current input.
             bound_request.pop("work_contract", None)
         return plan, bound_request
 

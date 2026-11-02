@@ -174,8 +174,11 @@ def build_loopx_turn_host_request(plan: Mapping[str, Any]) -> dict[str, Any]:
             "stdout": "one public-safe JSON object",
         },
     }
-    if isinstance(plan.get("work_contract"), Mapping):
-        request["work_contract"] = dict(plan["work_contract"])
+    if "work_contract" in plan:
+        # Presence selects the current reader. Carry malformed values too so
+        # its existing validator can refuse them instead of using legacy input.
+        contract = plan["work_contract"]
+        request["work_contract"] = dict(contract) if isinstance(contract, Mapping) else contract
     goal_ref = plan.get("goal_ref")
     if isinstance(goal_ref, Mapping):
         request["goal_ref"] = dict(goal_ref)
