@@ -476,10 +476,14 @@ def build_loopx_turn_plan(
     )
     envelope = dict(turn_envelope)
     contract_error = None
-    try:
-        assert_turn_envelope_consumer_version(envelope)
-    except (ValueError, RuntimeError) as exc:
-        contract_error = str(exc)
+    if work_contract is _ABSENT_WORK_CONTRACT:
+        # Historical inputs retain their version-gate diagnostics. Complete
+        # inputs reach that same gate inside driver_lineage's checked source;
+        # sending the envelope separately would repeat the pure RPC.
+        try:
+            assert_turn_envelope_consumer_version(envelope)
+        except (ValueError, RuntimeError) as exc:
+            contract_error = str(exc)
     # Check the complete source before route/session/transaction planning. Reuse
     # the action-hash boundary rather than adding a separate identity call.
     projection = _turn_envelope_result(
