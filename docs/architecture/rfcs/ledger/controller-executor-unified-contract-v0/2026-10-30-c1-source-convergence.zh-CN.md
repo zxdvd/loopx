@@ -999,3 +999,37 @@ CPU、模型输入、账单、成果或整体净收益。该正确性检查增�
 节省、同 capture 正文体积测量，也未修复原五项体积门。共享的既有 phase／helper
 已足够；另造 wrapper 或策略 owner 没有局部重构价值。writer／reader 退役，以及
 相对原 quota 的单会话成果与完整成本比较保持开放。
+
+### Goal 拒绝先于自动启动间隔预留
+
+通用派发检查现在位于原始 capture staging 选定输入之后、自动启动间隔预留、
+发布或新 journal 写入之前。有 staging 时检查其原始 plan，否则检查当前 request。
+此前的顺序可以在未启动 Host 的情况下拒绝 Goal 待读，却已预留间隔并写入
+journal／capture，导致后续合法 Turn 仍须等该间隔。本次只移动同一 TypeScript
+规则，不新增规则、状态、配置、豁免、持久缓存或额外 RPC。
+
+四项 File/SQLite 拒绝 case 在冻结的修复前源码复现了该等待状态，六项合法／历史
+对照通过。加强后的公开矩阵覆盖回调及真实 argv、staged capture、真实 cadence
+状态与已保存结果恢复，共 22 项通过。确定性 loopback provider 下，两条真实
+native exec／CodeMode case 通过。已有结果仍走元数据校验与收尾，不另预留或
+启动尝试。
+
+完整 capture、Turn-driver、manager-context 与 cadence 四个模块共 357 项通过。
+首次合跑的 356 过及一处旧根布局失败保留，后者也在干净的冻结修复前 checkout
+复现。该 cadence 测试现在经真实不可变 capture reader 取得 scheduler 字段，
+原周期下限及拒绝降低周期的断言均保持不变。
+
+十个匹配的合成条件用冻结 executor 函数与当前函数，经同一真实 owner、固定
+来源输入及等长隔离 namespace 对照。socket 观察计完整 JSON 请求／响应行，
+包含错误与 framing，不保留凭证。拒绝的非 capture 路径从 5 次 RPC 降至 2 次，
+capture 路径从 6 次降至 3 次；File/SQLite 所测字节分别减少 95,293／95,405 与
+97,665／97,777。消除的是一次 cadence admission 和两次 journal 写入。拒绝后
+不新建 journal／capture，lane 保持 eligible；四个后继合法尝试均可启动，而其
+冻结对照仍等待间隔。
+
+六个合法／历史条件的 RPC 次数及所测字节完全相同，Host 输入在只替换独立
+capture namespace 后相同。完整来源派发检查的原有 RPC 成本仍在。这只资格化
+暖态 RPC 组件，Host 被有意停止；不是完整分支的模型／成果实验、同 capture
+正文缩减、CPU、账单或整体净收益。原五项体积门、完整 C1 writer／reader 退出
+及成果验收保持开放。合并 journal 写入仍需独立的中断／恢复资格；本次没有合并
+Host attempt 的持久 checkpoint 或确认边界。

@@ -1357,3 +1357,46 @@ saving, a same-capture body-size measurement or a repair of the five size holds.
 The shared existing phase/helper is sufficient; a second wrapper or policy owner
 would add no bounded refactoring value. Writer/reader retirement and the original
 quota single-session outcome and complete-cost comparison remain open.
+
+### Goal refusal before automatic-start reservation
+
+The generic dispatch check now runs after original-capture staging selects the
+input and before automatic-start reservation, publication or new journal writes.
+It uses the staged original plan when present and the current request otherwise.
+The previous ordering could reject a pending Goal without launching a Host yet
+still reserve its interval and write a journal/capture. A subsequent valid Turn
+then waited for that interval. The same TypeScript rule is relocated; there is
+no new rule, state, configuration, bypass, persistent cache or extra RPC.
+
+Four File/SQLite refusal cases reproduce that waiting state on the frozen
+pre-repair source; six valid/historical controls pass. The strengthened public
+matrix covers callback and real argv, staged capture, actual cadence state and
+saved-result recovery in 22 passing cases. Two actual native exec/CodeMode cases
+pass with the deterministic loopback provider. Existing result recovery retains
+its metadata/finalization route without reserving or starting another attempt.
+
+The four complete capture, Turn-driver, manager-context and cadence modules
+pass 357 cases. The first combined run retains 356 passes and one old root-layout
+failure, also reproduced in a clean frozen pre-repair checkout. That cadence
+test now reads its scheduler field through the actual immutable capture reader;
+its original floor and refused-reduction assertions remain unchanged.
+
+Ten paired synthetic conditions compare frozen executor functions with the
+candidate through the same real owners, fixed source inputs and separate
+equal-width namespaces. Socket observation counts complete JSON request/response
+lines, including errors and framing, without retaining credentials. Refused
+non-capture paths use 5 to 2 RPCs; capture paths use 6 to 3. Their measured bytes
+decrease by 95,293/95,405 and 97,665/97,777 on File/SQLite, respectively. The removed
+calls are one cadence admission and two journal writes. Refusal leaves no new
+journal/capture and keeps the lane eligible; all four subsequent valid attempts
+start where their frozen controls wait.
+
+The six valid/historical conditions retain identical RPC counts and measured
+bytes, with identical Host inputs after substituting only the separate capture
+namespace. Complete-source dispatch validation still costs its existing RPC.
+This is warmed RPC component qualification with an intentionally stopped Host,
+not a whole-branch model/outcome experiment, same-capture body reduction, CPU,
+invoice or full net-benefit result. The original five size holds and whole-C1
+writer/reader and outcome acceptance remain open. Consolidating journal writes
+needs its own interruption/recovery qualification; this ordering fix does not
+coalesce the durable Host-attempt checkpoint or confirmation boundary.
