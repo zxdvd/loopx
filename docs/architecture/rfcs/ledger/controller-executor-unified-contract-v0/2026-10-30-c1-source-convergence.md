@@ -287,6 +287,35 @@ Host-context module passes eight cases; the other five modules retain their
 come from those two invocations, not a claimed single final six-module run.
 Original failures remain recorded; no installed Core or user setting is changed.
 
+The managed Session's independent-validation reader now shares that same
+complete-source owner. Preparation reuses the invocation-local identity already
+checked by dispatch; after model work, the callback checks the current complete
+source before running the original independent argv. Supplied invalid contracts
+cannot enter the historical decoder. Actual absence retains the old selection
+and diagnostics. Canonical declaration checks before and after argv, original
+actor admission, leases and once-only settlement remain with their owners.
+
+At frozen `bd2ea9c58`, four File/SQLite changed/null-source cases incorrectly run
+the independent argv; four valid/historical controls pass across two baseline
+invocations. The repaired eight-case matrix passes in one invocation. Faults are
+injected at the actual post-model callback; the native Session, canonical task,
+independent argv and settlement remain real, with only synthetic model/provider
+fixtures. Six earlier startup failures came from an ambient provider override;
+the shared synthetic fixture now isolates it without changing installed settings.
+This establishes the callback boundary, not an outer settlement bypass.
+
+A same-source native-fixture comparison substitutes the frozen baseline methods
+without replacing their dependencies or validation command. Preparation adds no
+Turn-envelope RPC; post-validation adds one, with 42,911/42,959 canonical argument
+plus result JSON bytes for File/SQLite. A separate eight-input fixed CLI-source
+comparison measures 36,320/36,404 bytes for complete inputs and no added RPC for
+historical ones. These populations are separate. Both exclude framing, latency,
+allocation, canonical task reads, argv, model usage and recovery; the extra
+baseline argv is read-only fixture validation, not a production replay. This is
+a measured component cost increase for source refusal, not compression or a
+complete-net-benefit result. The original five output holds, remaining C1 readers
+and original-quota single-session outcome/full-cost acceptance remain open.
+
 The blocks below preserve the candidate narrative moved out of the normative
 RFC during this integration. Their measurements, proposals and present-tense
 statements belong to their original checkpoints; they are not fresh claims for
