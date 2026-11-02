@@ -73,10 +73,15 @@ def _pending_goal_contract(original):
 
 
 @pytest.mark.parametrize("launch", ["runner", "argv"])
-@pytest.mark.parametrize("mode", ["current", "pending_goal", "historical"])
+@pytest.mark.parametrize("mode,capture", [
+    ("current", False), ("pending_goal", False), ("historical", False),
+    ("current", True), ("pending_goal", True),
+])
 def test_generic_dispatch_checks_complete_goal_before_host(
-    complete_host_request, tmp_path, launch, mode,
+    complete_host_request, tmp_path, launch, mode, capture,
 ):
+    from loopx.cli_commands.turn_cadence import managed_cadence_start
+    from loopx.control_plane.effect_runtime import effect_runtime_result
     from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
     from loopx.control_plane.turn_driver.executor import run_loopx_turn_once
 
@@ -89,6 +94,16 @@ def test_generic_dispatch_checks_complete_goal_before_host(
         turn_instance_id="generic-goal-interlock",
         **({} if mode == "historical" else {"work_contract": contract}))
     assert plan["route"]["would_invoke_host"] is True
+    runtime = tmp_path / "generic-runtime"
+    scope = {"runtime_root": str(runtime), "goal_id": original["goal_id"],
+             "agent_id": original["agent_identity"]["agent_id"], "automation_id": None}
+    configured = effect_runtime_result("quota.automation_cadence.manage", {
+        **scope, "operation": "configure", "min_interval_minutes": 3,
+        "expected_revision": 0, "owner_reference": "synthetic-owner-fixture", "execute": True,
+    })
+    assert configured["eligible_now"] is True
+    cadence = managed_cadence_start(runtime_root=runtime, goal_id=scope["goal_id"],
+        agent_id=scope["agent_id"], automation_id=None, manual_reason=None)
     calls = []
     marker = tmp_path / "host-started"
 
@@ -107,9 +122,11 @@ def test_generic_dispatch_checks_complete_goal_before_host(
 
     def execute():
         return run_loopx_turn_once(plan, **host, project=tmp_path / "project",
-            runtime_root=tmp_path / "generic-runtime", goal_id=original["goal_id"],
+            runtime_root=runtime, goal_id=original["goal_id"],
             timeout_seconds=5, execute=True, writeback=unexpected_settlement,
-            spend=unexpected_settlement, scheduler=unexpected_settlement)
+            spend=unexpected_settlement, scheduler=unexpected_settlement,
+            admit_start=cadence.admit, confirm_start=cadence.confirm,
+            decision_capture_payload=contract if capture else None, require_decision_capture=capture)
 
     if mode == "pending_goal":
         with pytest.raises(RuntimeError, match="Goal"):
@@ -120,6 +137,15 @@ def test_generic_dispatch_checks_complete_goal_before_host(
         assert result["effects"]["host_invoked"] is True
         assert len(calls) == (1 if launch == "runner" else 0)
         assert marker.exists() is (launch == "argv")
+    state = effect_runtime_result("quota.automation_cadence.manage", {**scope, "operation": "read"})
+    if mode == "pending_goal":
+        assert state["eligibility"]["state"] == "eligible"
+        journal = turn_journal_path(runtime, goal_id=scope["goal_id"],
+            turn_key=plan["transaction"]["turn_key"])
+        assert not journal.exists()
+        assert not (journal.parent / "decisions" / journal.name).exists()
+    else:
+        assert state["eligibility"]["state"] == "waiting"
 
 
 def test_typed_result_recovery_does_not_start_a_pending_goal_host(

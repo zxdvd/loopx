@@ -951,12 +951,6 @@ def _host_result_stage(
         else None
     )
     if "typed_result" not in completed_phases:
-        # Every new Host attempt shares the complete-source dispatch interlock,
-        # including custom runners and external argv. Existing typed results
-        # retain their recovery path without starting another model attempt.
-        from .host_candidate import _complete_host_source
-
-        _complete_host_source(request, operation="host_dispatch_context")
         journal["host_attempt_count"] = int(journal.get("host_attempt_count") or 0) + 1
         persist_journal(journal)
         from ...extensions.codex_native_child import configured_native_child_limit
@@ -1640,6 +1634,17 @@ def run_loopx_turn_once(
             journal["plan"] if journal is not None else plan, journal_path=journal_path,
             decision=decision_capture_payload, existing_journal=journal is not None,
         ) if require_decision_capture and needs_host else None
+        if needs_host:
+            from .host_candidate import _complete_host_source
+
+            # Check the exact input selected for publication before reserving
+            # an automatic start or writing a new journal/capture. A refusal
+            # must not put otherwise eligible work into an interval wait.
+            # Saved typed results retain their original finalization path.
+            _complete_host_source(
+                capture.plan if capture is not None else request,
+                operation="host_dispatch_context",
+            )
         admission = None
         if needs_host and admit_start is not None:
             admission = admit_start(
