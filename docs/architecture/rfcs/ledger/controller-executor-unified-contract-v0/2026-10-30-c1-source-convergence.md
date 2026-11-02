@@ -316,6 +316,24 @@ a measured component cost increase for source refusal, not compression or a
 complete-net-benefit result. The original five output holds, remaining C1 readers
 and original-quota single-session outcome/full-cost acceptance remain open.
 
+The wider attempt at `9baa678db` completes five native/steward/calendar modules
+with 359 passes, then stops after 37 identical provider-startup failures in the
+sixth private-conversation module, which also has 56 passes. This is an interrupted
+run, not a six-module pass; its nameless interrupt record is not a test. Two
+same-source environment-unset controls pass, then the same two cases pass with
+only the neutral ordinary fixture isolated. The production provider check and
+installed configuration remain unchanged.
+
+Target main `8a9e11628` is subsequently integrated. Its additional explicit
+fixture caller is adapted at `4cdf977c3`; the runtime change remains `a49625e3a`.
+On that integrated source, the complete native-validation/ordinary modules pass
+68 cases in 335.058 seconds, and private-conversation/Antigravity modules pass
+316 in 644.420 seconds. These are 384 distinct passing cases across two
+invocations, not a new full six-module run. The shared conversation-binding
+TypeScript suite passes 45 cases. There are no skips or errors in these final
+checks. Earlier failures and component measurements retain their original
+source; this integration does not remeasure full costs or qualify C1 cutover.
+
 The blocks below preserve the candidate narrative moved out of the normative
 RFC during this integration. Their measurements, proposals and present-tense
 statements belong to their original checkpoints; they are not fresh claims for
