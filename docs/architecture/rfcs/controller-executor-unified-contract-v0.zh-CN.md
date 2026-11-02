@@ -664,6 +664,16 @@ reader 覆盖仍保留。八项聚焦用例通过，使用注入的记录 runner
 File/SQLite 原生输入检查确认不支持的内层版本在 Codex prompt 执行或 DSH runner
 加载前拒绝，且不扣额。完整契约/context/DSH/stdio 集合 352 项通过，TypeScript
 检查及聚焦 lint 通过。这只证明上述交互语义，不代表所有必需字段或打包宿主已验收。
+Heartbeat 模板现统一提供按顺序结算的执行要求；精确 Turn 绑定只补充 canonical
+来源定位，不再重复执行和禁止静态重建的条款。Thin 将完整 capture 与所需上下文的
+行动前读取合并，复用未变的进展／outcome 条款。原完整路由 fixture（320 字符
+scope、显式 CLI、五项能力）中，未绑定提示从 4,981 降至 4,895 个预算字符，通过
+原 4,900 上限；精确 Turn 变体从 5,198 降至 4,987，仍超过该上限。超长路由反例
+仍拒绝；没有缩短路由、能力、fixture 规模或修改上限。提示／平台集合 115 项通过、
+1 项跳过。这只证明展示和条款保留，不代表模型采用或费用收益。其余原 CLI 预算
+仍有四项失败。与 opaque reader reference 整合还暴露两项过时的 digest 字段断言；
+File/SQLite 消费者现读取已钉住的 machine descriptor，保留原 receipt，并确认
+capture 字节改变后拒绝读取，不产生新 admission 或 spend。
 剩余 cache 一致性调查、其他旧 reader 断言、分阶段指令等价和实际 optional/external
 消费者、版本准入及打包宿主连续性仍未完成。缺少显式原生 runtime 的 operation SDK
 检查属于未测，不能算资格。默认 writer 变更尚未交付；PR 因作者实现未完而保持
@@ -695,6 +705,16 @@ Draft，不是仅等待评审。尚无模型或成本收益证据。历史 effec
 不能因此创建第二个活跃 writer。已准入工作继续使用记录的版本和原回执；在这些工作及
 受支持恢复窗口核清前保留历史 decoder。回退同样区分未结工作与新准入。版本迁移不能
 把保存的 prompt、journal 或源 hash 改写成仿佛一直使用新契约。
+
+代码收敛属于每个迁移切片，不只留给最终 C9 清理。两个入口须共用 composition、引用
+校验、上下文重建与结算的语义实现。真实的宿主 launch/observation 差异留在薄 adapter；
+不为强行统一不同生命周期而另造通用 runner。各项决策仍由既有 typed owner 负责。
+
+每个切片记录迁移前后调用点、共享 owner、已删除的重复算法，以及剩余兼容 caller 和
+退出条件。两条路径共用独立编写的语义用例，并分别验证真实传输与恢复。仅委托调用的
+wrapper 可以过渡保留；给公共模块起新名字却继续保留两套规则实现，不算收敛。下一次
+修改共同规则，应只改、只测一个 owner 并传递到两条路径。代码行数下降不是验收指标，
+也不能为此删除宿主独有的验证覆盖。
 
 C1 首个 PR 必须覆盖上述两个生产组合调用点，并交付至少一条从生产端到最终输入的
 完整旅程，同时明确剩余 reader。这个有界切片通过资格，不代表可向未验收 host 开启
@@ -1035,3 +1055,9 @@ C1/C2 组合/capture/最终输入工作与这些精简同属一个候选前沿�
 目录即索引。规划/源码检查记录不证明 runtime 交付；当前优先级与认领仍在 roadmap 和
 canonical 工作中维护。历史记录保持 append-only，当前规范性计划在本文修订，不能把
 某日审计当作永久执行队列。
+
+[来源收敛检查点](ledger/controller-executor-unified-contract-v0/2026-10-30-c1-source-convergence.zh-CN.md)
+将候选的详细沿革保留在本规范计划之外。集成保留 main 的展示／journal owner，让验收、
+summary、authoring 与 Vision 共用数值来源身份和编辑运输。这不证明 writer／consumer
+切换、installed 采用或原 quota 的验收成果／完整成本对照。剩余 reader 退出与负成本
+观察继续使 C1 保持未完成。

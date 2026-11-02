@@ -93,6 +93,14 @@ and an independent validator:
 4. `loopx turn run-once --execute` performs writeback and quota spend only when
    the typed result and independent validation both pass.
 
+Default `turn plan` output is an inspection projection. It retains the decision,
+selected work, boundaries and writeback routes without printing a second
+complete source beside the envelope. Its `boundary.inspection_only=true` prevents
+turning that readback into a source-less host request. Existing structured
+consumers use `--include-transaction-detail`, which retains the complete source
+and session/transaction input. `turn run-once` retains and validates the original
+complete contract before dispatch; default inspect output does not replace it.
+
 The adapter and validator executable names below are placeholders supplied by
 the integration. They are separate programs because the executor must not
 validate its own completion claim.
@@ -1023,6 +1031,25 @@ never bypasses a fresh Turn decision, task lease, independent validation, or
 writeback ordering.
 
 ## Cross-Iteration Context Policy
+
+Saved acceptance detail uses the existing generic `quota context-read --select`
+reader and the original capture's file SHA-256. Exact JSON pointers can select
+several related outcomes in one read; `--selection-sha256` binds the selected
+layout across continuation pages. Offsets and EOF describe that selected view,
+not complete model retention. The complete original source remains available.
+Advisory `outcome_context_navigation_v1` describes registered relationships and
+limitations; it neither establishes semantic independence nor imposes a separate
+reading gate. Goal intent, cumulative constraints, permissions and stops remain
+binding. Staged `replan-view --replan-stage acceptance --outcome-ref REF` retains
+its existing exact decision-bound reference; it is not a second ordinary reader.
+
+已保存的验收详情使用既有通用 `quota context-read --select` 和原 capture 的文件
+SHA-256，可一次选取多项精确 JSON pointer。接续 `--selection-sha256` 绑定所选
+布局，offset 和 EOF 仅描述所选视图，不证明模型完整保留；原完整来源仍可读取。
+`outcome_context_navigation_v1` 只建议注册关系下的读取顺序并披露限制，不证明语义
+独立，也不增加另一层读取门禁。Goal 原意、累计约束、权限和停止条件保持。
+Staged `replan-view --replan-stage acceptance --outcome-ref REF` 保留原 decision
+绑定的精确引用，不成为普通读取的另一条路径。
 
 Each `turn plan` or `turn run-once` invocation declares an iteration context
 policy independently from the Todo and Goal lifecycle:

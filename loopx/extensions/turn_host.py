@@ -15,12 +15,13 @@ from ..control_plane.turn_driver.executor import validate_loopx_turn_host_result
 from ..control_plane.turn_driver.host_candidate import (
     build_result,
     extract_turn_authority,
+    extract_turn_work_identity,
     parse_model_json,
     render_prompt,
 )
 
 __all__ = [
-    "build_result", "exact_goal_ref", "extract_turn_authority", "parse_model_json",
+    "build_result", "exact_goal_ref", "extract_turn_authority", "extract_turn_work_identity", "parse_model_json",
     "render_prompt", "supervised_stdio_command", "validate_loopx_turn_host_result",
 ]
 

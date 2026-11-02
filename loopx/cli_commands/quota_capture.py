@@ -251,8 +251,11 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
             selectors = [item["pointer"] for item in views]
             if reference_file is not None and pinned_selection is None:
                 try:
+                    # Pin the resolved addresses, not the initial navigation
+                    # recipe. Existing explicit readers can replay these exact
+                    # bytes after a navigation change, with both digests checked.
                     reference_file = write_context_read_reference(path, digest, selection={
-                        "select": None if initial_read else selectors, "initial_read": initial_read,
+                        "select": selectors, "initial_read": False,
                         "list_fields": list_fields, "list_depth": list_depth, "sha256": expected})
                 except OSError:
                     # A verified read must not require a writable capture root.
@@ -604,7 +607,8 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
         # still owns when the following full/delta view can be published.
         bind_capture_selection_transport(payload, args, capture_root=root)
         projected = project_codex_context(payload, directory=directory, capture_directory=cache,
-            goal_id=args.goal_id, agent_id=args.agent_id, surface="quota_packet",
+            goal_id=args.goal_id, agent_id=args.agent_id,
+            surface="complete_turn" if payload.get("schema_version") == "loopx_turn_envelope_v1" else "quota_packet",
             capture_id=hashlib.sha256(raw).hexdigest(),
             continuity_generation=getattr(args, "_context_delivery_generation", None))
         native_prepared = True
@@ -938,6 +942,15 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
             or type(list_depth) is not int or not 1 <= list_depth <= 8):
         print_payload({"ok": False, "reason": "--list-depth requires context-read --list and an integer from 1 to 8"}, args.format, str)
         return 1
+    if getattr(args, "selection_sha256", None) is not None and (args.quota_command != "context-read"
+            or getattr(args, "select", None) is None):
+        print_payload({"ok": False, "reason": "selection-sha256 requires context-read with --select"},
+            args.format, lambda value: str(value["reason"]))
+        return 1
+    if getattr(args, "outcome_ref", None) is not None and args.quota_command != "replan-view":
+        print_payload({"ok": False, "reason": "outcome-ref is only supported by replan-view"},
+            args.format, lambda value: str(value["reason"]))
+        return 1
     if getattr(args, "list_fields", False) and args.quota_command != "context-read":
         print_payload({"ok": False, "reason": "--list is only supported by context-read"}, args.format, str)
         return 1
@@ -1069,6 +1082,8 @@ def read_replan_view(args: argparse.Namespace) -> dict[str, Any]:
 
     if not args.decision_file or not args.source_hash:
         raise ValueError("replan-view requires --decision-file and --source-hash")
+    if args.outcome_ref == "":
+        raise ValueError("replan-view outcome-ref requires an exact reference; use context-read --select for original detail")
     path = Path(args.decision_file).expanduser()
     with path.open(encoding="utf-8") as stream:
         payload = json.load(stream)
