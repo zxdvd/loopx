@@ -690,7 +690,8 @@ class StewardTurnHost:
                     "next_action": "Retain the original report; its native governance route is no longer admitted."})
             if managed_turn and not governance_work:
                 try:
-                    managed_turn.prepare_validation(request, native_request)
+                    managed_turn.prepare_validation(request, native_request,
+                        _checked_work_identity=authority.get("_work_identity"))
                 except ManagedTaskValidationUnavailable:
                     managed_turn.validation_unavailable = True
                     return build_result(native_request, {"result_kind": "user_action_required",

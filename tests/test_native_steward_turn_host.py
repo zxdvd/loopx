@@ -263,6 +263,69 @@ def test_managed_work_never_commits_without_current_independent_postcondition(st
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("fault", ["valid", "historical", "changed_complete", "null_complete"])
+def test_managed_postcondition_checks_complete_source_before_argv(steward, tmp_path, monkeypatch, provider, fault):
+    from loopx.capabilities.native_chat.steward_managed_mode import ManagedSessionTurn
+    from loopx.control_plane.turn_driver import command_validation
+
+    service, session, actor, todo_id, _, capture = managed_fixture(steward, tmp_path, monkeypatch, provider)
+    runtime = steward[1]
+    invoked = []
+    build = command_validation.build_loopx_turn_command_validator
+
+    def instrument(*args, **kwargs):
+        validate = build(*args, **kwargs)
+
+        def observed(plan, result):
+            invoked.append(True)
+            return validate(plan, result)  # Keep the real independent argv.
+
+        return observed
+
+    monkeypatch.setattr(command_validation, "build_loopx_turn_command_validator", instrument)
+    create = ManagedSessionTurn.validator
+
+    def interrupted(self, *args, **kwargs):
+        validate = create(self, *args, **kwargs)
+
+        def after_model(plan, result):
+            # Fault only the complete source at the actual post-model boundary;
+            # actor admission, native Host, validation and settlement stay real.
+            assert "work_contract" in plan
+            if fault == "changed_complete":
+                plan["work_contract"] = {**plan["work_contract"], "reason": "changed after model work"}
+            elif fault == "null_complete":
+                plan["work_contract"] = None
+            elif fault == "historical":
+                plan.pop("work_contract")
+            return validate(plan, result)
+
+        return after_model
+
+    monkeypatch.setattr(ManagedSessionTurn, "validator", interrupted)
+    before = capture.read_bytes()
+    accepted, _ = service.submit(session["session_id"], agent_id=actor["agent_id"],
+        operation_id="complete-postcondition", todo_id=todo_id)
+    completed = finish(runtime, accepted)
+    calls = [json.loads(row) for row in capture.read_bytes()[len(before):].splitlines()]
+    assert sum(row["method"] == "turn/start" for row in calls) == 1
+    if fault in {"valid", "historical"}:
+        assert invoked == [True]
+        native = completed["response"]["native_loopx"]
+        assert native["status"] == "committed" and native["effects"]["quota_spent"]
+    else:
+        assert invoked == []  # Refuse before even the independent command runs.
+        native = completed["response"]["native_loopx"]
+        assert native["status"] == "failed"
+        assert not native["effects"]["state_written"] and not native["effects"]["quota_spent"]
+    after = capture.read_bytes()
+    replay, created = service.submit(session["session_id"], agent_id=actor["agent_id"],
+        operation_id="complete-postcondition", todo_id=todo_id)
+    assert not created and replay["turn_id"] == accepted["turn_id"]
+    assert capture.read_bytes() == after
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_managed_turn_http_correlates_readback_without_accepting_commands(steward, tmp_path, monkeypatch, provider):
     import http.client
     import threading
