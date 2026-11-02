@@ -1321,3 +1321,39 @@ unchanged. Crossing a limit on this separately projected workload does not repai
 or relabel those failures. Continue through the existing writer/reader owner and
 the original quota single-session acceptance; do not delete unmarked Goal text,
 relax signed-source fallback or add another compaction algorithm for these bytes.
+
+### Generic Host dispatch and saved-result recovery
+
+The shared executor now calls the existing TypeScript `host_dispatch_context`
+owner before a new Host attempt is recorded, confirmed or launched. A valid
+complete-source commitment with an unfinished Goal narrative read previously
+reached a custom callback or external argv through this generic path; named
+adapters already had their own check. The repair adds no decision owner, state,
+vocabulary, general capability-read obligation or activation setting.
+
+Fourteen File/SQLite cases cover callback and real argv dispatch for valid,
+pending-Goal and historical requests, plus saved typed-result recovery. The
+pending cases have no Host effect; valid and historical controls reach the Host.
+Saved results continue through their original validator without another Host
+attempt. The existing staged replan material-read exception remains owned by
+the same TypeScript rule. Two actual native exec/CodeMode paths pass with the
+deterministic loopback provider. This is synthetic source-checkout qualification,
+not natural-model adoption, installed behavior or whole-C1 acceptance.
+
+The three complete capture, Turn-driver and manager-context consumer modules
+pass 345 cases on the integrated source, including that new coverage. This does
+not rerun every earlier adapter, budget or backend qualification.
+
+A paired component observation adds one `host_dispatch_context` RPC for a new
+complete-source attempt: normalized params JSON plus result JSON totals 42,771
+bytes on File and 42,828 on SQLite in the fixed fixture. Saved-result recovery
+retains its existing single lineage RPC and identical measured bytes. Historical
+requests without a complete source add no RPC. The baseline function is read
+from the frozen pre-repair commit and runs with the same owner and fixture;
+this isolates the dispatch component rather than replaying a whole branch run.
+RPC framing, CPU, model input, invoices, outcomes and full net benefit are not
+measured. This correctness check increases fresh-attempt cost; it is not a byte
+saving, a same-capture body-size measurement or a repair of the five size holds.
+The shared existing phase/helper is sufficient; a second wrapper or policy owner
+would add no bounded refactoring value. Writer/reader retirement and the original
+quota single-session outcome and complete-cost comparison remain open.

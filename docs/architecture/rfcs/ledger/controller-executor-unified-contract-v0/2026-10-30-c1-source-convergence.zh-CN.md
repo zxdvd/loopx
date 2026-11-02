@@ -972,3 +972,30 @@ source adapter、投影策略、输出阈值或 fixture 负载。
 原未标记来源的预算 case 和五项历史门保持不变。另行投影的负载越过阈值，并不
 修复或改写那些失败。继续沿原 writer/reader owner 和相对原 quota 的单会话验收，
 不删除未标记 Goal 正文、不放宽签名来源回退，也不为这些字节新造压缩算法。
+
+### 通用 Host 派发与已保存结果恢复
+
+共享 executor 现在在记录、确认或启动新 Host 尝试前，调用既有 TypeScript
+`host_dispatch_context` owner。此前，一个来源承诺有效但 Goal 正文仍有未完成
+读取的完整契约，可以经通用路径到达自定义回调或外部 argv；具名 adapter 已有
+各自检查。修复不新增决策 owner、状态、词汇、通用 capability 必读义务或启用设置。
+
+十四项 File/SQLite case 覆盖回调及真实 argv 的合法、Goal 待读、历史请求，以及
+已保存 typed result 恢复。待读 case 没有 Host 副作用；合法与历史对照能到达 Host。
+已保存结果仍经原 validator 收尾，不新开 Host 尝试。既有分阶段 replan 材料读取
+例外仍由同一 TypeScript 规则管理。确定性 loopback provider 下，两条真实 native
+exec／CodeMode 路径通过。这只资格化合成源码入口，不证明自然模型采用、安装行为
+或完整 C1 验收。
+
+完整 capture、Turn-driver 与 manager-context consumer 三个模块在集成源码上
+共 345 项通过，已包含上述新增覆盖；未重跑所有历史 adapter、预算或 backend 资格。
+
+匹配的组件观察显示：完整来源的新尝试多一次 `host_dispatch_context` RPC。在固定
+fixture 中，规范 params JSON 加 result JSON 在 File 为 42,771 字节，SQLite 为
+42,828 字节。已保存结果恢复仍为原有一次 lineage RPC，所测字节完全相同；不含
+完整来源的历史请求不增加 RPC。基线函数从冻结的修复前 commit 读取，使用同一
+owner 与 fixture 运行；这是派发组件隔离观察，不是完整分支重放。未测 RPC framing、
+CPU、模型输入、账单、成果或整体净收益。该正确性检查增加新尝试成本，不是字节
+节省、同 capture 正文体积测量，也未修复原五项体积门。共享的既有 phase／helper
+已足够；另造 wrapper 或策略 owner 没有局部重构价值。writer／reader 退役，以及
+相对原 quota 的单会话成果与完整成本比较保持开放。
