@@ -21,6 +21,9 @@ from test_replan_host_context_projection import _quota_payload
 from test_replan_progress_native_cli import (
     AGENT, GOAL, TODO, TURN, call_progress_cli, make_progress_cli_fixture,
 )
+from tests.control_plane.codex_checkpoint_fixture import (
+    read_cli_policy_payload, reference_metadata_oracle,
+)
 
 
 def json_bytes(value):
@@ -288,8 +291,9 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
             assert projected.returncode == 0, projected.stdout
             presentation = json.loads(projected.stdout)
             assert presentation["ok"] and presentation["mode"] == "full"
-            assert presentation["recovery"]["path"] == str(view_path)
-            assert json.loads(Path(presentation["path"]).read_bytes()) == source
+            metadata = reference_metadata_oracle(presentation)
+            assert metadata["recovery"]["path"] == str(view_path)
+            assert read_cli_policy_payload(projected.stdout, returncode=projected.returncode) == source
         assert source["schema_version"] == "loopx_turn_envelope_v1"
         assert view == source  # The checkpoint sends one complete source, not a second fact lens.
         assert source["heartbeat_receipt"]["turn_instance_id"] == TURN
@@ -398,6 +402,9 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
         guard = call_progress_cli(fixture, "--cli-bin", pinned_cli, "quota", "should-run", "--codex-app",
             "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", TURN,
             "--todo-id", TODO, "--decision-output-dir", str(capture),
+            # This case consumes the authority decision to test its retained
+            # material codec. Native presentation has its own matrix above.
+            "--context-delivery", "off",
             *(["--turn-envelope"] if envelope else []))
         # Exercise the retained historical material-reader codec against the
         # actual new capture. Complete input itself needs no deferred body.
