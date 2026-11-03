@@ -200,6 +200,10 @@ Its `context-read --initial-read` uses the same exact-address selector. New priv
 selection references pin the resolved addresses and complete selection digest;
 continuations use the existing explicit reader instead of rerunning initial
 navigation. A later navigation change cannot replace the saved selection.
+Initial navigation can replace fully selected children with their complete
+captured parent to avoid repeating addresses. An unselected child, including
+optional or unknown material, prevents that merge; selected facts and obligations
+stay identical. Explicit selectors and index entries keep their original addresses.
 Historical recipe-only references and explicit-file initial cursors still reject
 a changed selection digest; recover through the same original full-capture
 reference, without another admission or rewriting the saved descriptor. These
@@ -240,6 +244,8 @@ reader，不重新运行首读导航；后续导航改变不能替换原选读�
 及显式文件首读游标在选读摘要变化时仍拒绝，沿同一完整原 capture 引用恢复，不重新
 准入或改写旧描述文件。退役这些 legacy reader 前仍须对账原未完成 Turn；本切片
 保留历史解码与完整捕获恢复。
+首读可把已经完整选中的同级内容合并为其完整父节点，减少地址重复；任何未选中的
+可选或未知内容都会阻止合并，选中事实和义务不变。显式选读和索引仍保留原地址。
 首读也给出现有验收材料地址和当前结算义务。仅明确 `required=false` 的附件延后完整
 说明与模板，使用前须读原附件；未知计划保留全文。首读分页不重复正文中的指针，
 选读摘要仍阻止将它记作完整输入。
@@ -253,6 +259,38 @@ Agent、所选 Todo、成果版本及 provider revision 一致时，首读完整
 建议，不证明相互独立，也不允许省略适用要求。导航不完整、错配、歧义或不可用时保留
 原索引/详情路线；折叠的支持材料仍遵守原读取义务。此选读使用无需 Session Hook 的
 通用 reader，不改变启用默认值、落盘文件、Delta 或完整读取回执。
+
+For supporting fields folded by the existing native Progressive owner,
+`context_details.unread_context_index` contains the current complete
+`projection.json` source path/digest and exact `pointers`. The initial reader
+shows that index; a file-backed warm delta repeats it in full even when its
+pointers are unchanged. Each pointer uses the ordinary `context-read`
+`--capture-file`, `--capture-sha256` and `--select` route, independently of any
+previous packet, retained model input or patch chain. These addresses belong to
+the complete source, not the derived `required-context.json` recovery view.
+
+`coverage_confirmed=false` conservatively reports no trusted model-visible
+coverage witness. A previous select, reader EOF or file receipt does not clear
+an entry or create `confirmed_read_sections`/`consumed_pointers` state.
+`read_before_dependent_work` preserves the original obligation to read material
+when the decision or verification needs it; it is not an automatic full-read or
+execution gate. Updated/reordered material binds to its current addresses;
+removed material does not retain a predecessor route. The actual index and
+guidance count toward the existing byte guard, including fallback to the
+complete file when folding is not smaller. In-view deduplication alone adds no
+index. This bounded native slice changes no activation defaults or off path;
+cross-host rollout and trusted coverage observation remain C1/C2 work.
+
+中文：现有原生 Progressive owner 折叠的支持字段，在
+`context_details.unread_context_index` 中列出当前完整 `projection.json` 的路径、
+摘要和精确 `pointers`。首读呈现该索引；文件 warm delta 即使指针未变也完整重发。
+各指针通过普通 `context-read --capture-file ... --capture-sha256 ... --select ...`
+独立读取，不依赖旧包、模型保留或补丁链；它们属于完整源，不属于派生 required view。
+`coverage_confirmed=false` 表示没有可信模型可见覆盖见证，选读、EOF或文件回执不会
+清除条目，也不新建已读账本。`read_before_dependent_work` 保留原先按决策/验证需要
+读取的义务，不成为自动全读或执行门。变化/重排绑定当前地址，移除材料不沿用前序入口。
+索引和指导计入原字节守卫，不更小时回退完整文件；仅视图内去重不新增索引。本原生切片
+不改启用默认值或 off 路径，跨宿主推广和可信覆盖观察仍属 C1/C2 未完成工作。
 
 Checkpoint Host preflight uses the hidden `--defer-context-presentation` option
 with an explicitly enabled native JSON `should-run` capture. It collects the
@@ -1062,7 +1100,13 @@ Reader failures preserve the runtime's `error_kind` and `diagnostic_code` so
 programs need not parse `reason`. Selector rejections use `request_rejected`
 with `context_selection_invalid_pointer`, `context_selection_invalid_index`
 or `context_selection_missing_pointer`. Repair the pointer syntax or inspect
-the known parent in the same capture, then retry the corrected batch. Other
+the known parent in the same capture, then retry the corrected batch. Missing
+members and invalid array indexes also return `recovery_command`: it lists the
+nearest verified container from the caller's original pointer, using the same
+capture digest and page budgets. If traversal reached a scalar, it lists that
+scalar's containing object/array instead. This command repeats only the supplied
+address prefix, never source values, and starts a new index at offset zero;
+it is not continuation of the failed selection or proof of reading its body. Other
 runtime failures retain their own classification; startup failures retain
 their diagnostic code. These failures do not require restoring a healthy
 capture. Missing or damaged capture files still fail closed through the
@@ -1118,7 +1162,11 @@ pointer 从原始摘要绑定的 capture 批量读取详情。提供已有 `--ca
 读取失败保留 runtime 的 `error_kind` 与 `diagnostic_code`，程序无需解析 `reason`。
 选择错误使用 `request_rejected`，原因码分别为 `context_selection_invalid_pointer`、
 `context_selection_invalid_index` 或 `context_selection_missing_pointer`。
-修正路径语法或在同一 capture 中检查已知父节点，再重试修正后的批次。其他 runtime
+修正路径语法或在同一 capture 中检查已知父节点，再重试修正后的批次。字段缺失和
+数组索引错误还返回 `recovery_command`：用同一 capture 摘要与分页预算列出原始
+输入路径中最近的已验证容器；若已走到标量，则列出包含它的对象或数组。命令仅重复
+调用方提供的路径前缀，不包含源正文，并从偏移零开始新目录；它不是失败选择的续读，
+也不证明读过正文。其他 runtime
 故障保留自身分类；启动故障保留原诊断码。这些故障不要求恢复健康的 capture。
 文件缺失或损坏仍由原文件/摘要检查拒绝，重新读取不会重新准入。
 

@@ -179,6 +179,17 @@ writer/consumer cutover and original-quota outcome/full-cost qualification remai
 open. The added bridge calls must be counted; code convergence alone is no
 evidence of lower cost.
 
+The current-main integration also checks the provenance of its qualification
+fixtures. `read_fixture_todos` previously seeded canonical authority from an
+attention summary, erasing an authored tail after 500 characters before capture.
+It now uses the existing full source parser and Todo normalizer. A real
+File/SQLite CLI case carries that tail through complete capture, a subprocess
+Host's artifact, independent validation, settlement and replay. Both original
+truncation failures remain evidence; this repairs the test input, not a runtime
+policy. Current size and compatibility failures remain open. Deterministic
+artifact agreement and measured CLI/RPC bytes do not qualify model comprehension,
+native accepted outcomes, total cost or the full C1 cutover.
+
 | Current source / obligation | Present envelope treatment | Required C1 disposition |
 | --- | --- | --- |
 | `interaction_contract.agent_channel.work_context` and pending required reads | `work_context` plus `required_reads`; identical inline material can be referenced | One complete requirement/evidence source with resolvable references; preserve pending reads and their completion conditions |
@@ -1271,6 +1282,17 @@ not the original quota outcome/full-cost qualification or an unread ledger.
 The TurnEnvelope owner retains the top-level decision-field vocabulary and
 supplies it to Progressive selection. Moving the selector does not duplicate
 that vocabulary across owners or relax its semantic module budget.
+
+Native Progressive supporting-material discovery now has a bounded precursor:
+an unconfirmed index binds exact deferred-field pointers to the current complete
+projection. Initial reads and file-backed warm deltas expose the complete index,
+without requiring an old packet or model retention. Selected reads do not clear
+its conservative coverage status or create a second ledger. Current-source CLI
+reads qualify transport into a synthetic next artifact, including changed and
+reordered material and unavailable predecessors; they do not establish natural
+model adoption. All-host defaults, other omitted material, trusted Host coverage,
+writer/reader cutover and §9's outcome/full-cost comparison remain open. Index
+overhead participates in the existing full-versus-folded byte guard.
 
 C1's inventory is part of its usable replacement, not a standalone architecture
 framework. C3/C4/C5 can proceed independently once C1's contract is stable;

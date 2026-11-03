@@ -139,6 +139,13 @@ Python 标量与空白解码，原记录和数字值不变。这退役的是一�
 envelope 格式；完整 writer/consumer 切换和相对原 quota 的成果／完整成本资格仍
 开放。新增 bridge 调用必须计入，代码收敛本身不证明成本降低。
 
+本次与当前 main 的集成也核查验证夹具的来源。`read_fixture_todos` 原先将 attention
+摘要作为 canonical 初值，捕获前就丢掉了正文 500 字符后的要求。现在复用现有完整
+source parser 与 Todo normalizer。真实 File／SQLite CLI 用例将末尾条款带过完整
+capture、子进程 Host 的产物、独立验证、结算和重放。保留原来两个截断失败；修复
+的是测试输入，不是 runtime policy。当前尺寸与兼容失败仍开放。确定性产物一致和
+CLI／RPC 字节实测，不构成模型理解、原生验收成果、总成本或完整 C1 切换的资格。
+
 | 当前来源 / 义务 | 当前 envelope 处理 | C1 必须保留的归属与语义 |
 | --- | --- | --- |
 | `interaction_contract.agent_channel.work_context` 与未完成必读 | `work_context` 加 `required_reads`；相同内联材料可改用引用 | 一份完整要求/证据来源与可解析引用；保留未完成必读及其完成条件 |
@@ -955,6 +962,13 @@ backoff 继续归当前 scheduler owner。本文不引入模型空轮询或新�
 不代表原 quota 成果/完整成本验收，也不交付未读台账。
 顶层 decision 字段清单保留在 TurnEnvelope owner，由其传给 Progressive 选读；迁移
 selector 不跨 owner 重复声明该词汇，也不放宽语义模块预算。
+
+原生 Progressive 支持材料发现增加有界前置实现：保守未确认索引将延迟字段的精确
+指针绑定当前完整 projection，首读和文件 warm delta 均完整呈现，不依赖旧包或模型
+retention。选读不会清除覆盖未知状态或新增第二账本。当前源 CLI 读取覆盖变化、重排
+及前序不可用，并进入合成后继产物；这只资格化运输，不证明自然模型采用。跨宿主默认、
+其他省略材料、可信 Host 覆盖、writer/reader 切换及第9节成果/完整成本对照仍开放。
+索引开销计入原完整/折叠字节守卫。
 
 C1 盘点是可用替换的一部分，不单独建设架构框架。C1 契约稳定后，C3/C4/C5 可以独立
 推进；C7 可以提前准备测量，但不能提前宣称双会话成果。实现 PR 列明替换的调用方、剩余
