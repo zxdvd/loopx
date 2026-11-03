@@ -364,7 +364,8 @@ calls.write_text(calls.read_text() + "x" if calls.exists() else "x")""",
     assert "turn_envelope" not in request
     captured_todo = request["work_contract"]["selected_todo"]
     assert captured_todo["todo_id"] == "todo_fixture0001"
-    assert captured_todo["text_source_verified"] is True
+    captured_context = request["work_contract"]["interaction_contract"]["agent_channel"]["work_context"]
+    assert captured_context["selected_todo_text_verified"] is True
     current = _todo(prefix)["todo"]
     if change != "requirements":
         assert code == 0 and result["status"] == "committed", result
