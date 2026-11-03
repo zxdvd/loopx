@@ -47,6 +47,17 @@ def test_app_restart_keeps_an_explicit_terminal_runtime_pin(monkeypatch):
     assert "--loopx-upgrade-channel=main" in launch_command
 
 
+def test_upgrade_never_restarts_the_app_while_service_activation_is_deferred():
+    payload = {"ok": False, "changes_applied": True,
+               "execution": {"install_returncode": 0, "doctor_returncode": 0, "activation_pending": True},
+               "desktop_upgrade": {"status": "planned"}}
+    with mock.patch("loopx.cli_commands.support_control_upgrade._upgrade_desktop") as upgrade:
+        result = finish_upgrade(payload, timeout_seconds=10)
+    upgrade.assert_not_called()
+    assert not result["ok"] and not result["upgrade_complete"]
+    assert result["desktop_upgrade"]["status"] == "skipped_service_activation_pending"
+
+
 def app_fixture(tmp_path: Path, version: str = "0.0.0-main.2.1") -> Path:
     app = tmp_path / "LoopX.app"
     runtime = app / "Contents/Resources/runtime"
@@ -128,6 +139,7 @@ def test_multiple_apps_block_the_whole_plan_before_cli_mutation(monkeypatch, tmp
 def test_bare_upgrade_applies_while_bare_update_stays_read_only(
     monkeypatch, tmp_path, command, expected
 ):
+    monkeypatch.setenv("LOOPX_UPDATE_WORKER", "1")
     parser = argparse.ArgumentParser()
     register_update_command(parser.add_subparsers(dest="command"), lambda _parser: None)
     args = parser.parse_args([command])
@@ -298,6 +310,7 @@ def test_cli_only_missing_identity_never_certifies_success():
 
 
 def test_cli_only_discovery_failure_exit_render_and_recovery(monkeypatch, tmp_path):
+    monkeypatch.setenv("LOOPX_UPDATE_WORKER", "1")
     home = tmp_path / "codex"
     database = home / "sqlite/codex-dev.db"
     database.parent.mkdir(parents=True)
@@ -363,7 +376,7 @@ def test_failed_cli_does_not_restart_the_app(monkeypatch):
     assert result["desktop_upgrade"]["status"] == "skipped_runtime_update_failed"
 
 
-def test_progress_stays_on_stderr_and_json_mode_is_quiet(capsys):
+def test_human_progress_stays_on_stderr_and_explicit_disable_is_quiet(capsys):
     progress = UpdateProgress(True)
     progress.report("Installing CLI and building workspace resources")
     progress.stop()

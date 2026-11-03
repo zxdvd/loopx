@@ -14,6 +14,7 @@ import {decideCollaborationLifecycle} from "./goal_instance_lifecycle.ts";
 import {inspectCollaborationInboxReceipts, projectReceiverFollowthrough} from "./inbox_receipts.ts";
 import {recordControlledRequestRead} from "./request_control.ts";
 import {planCollaborationResult} from "./result_publication.ts";
+import {CONVERSATION_ENTRY_SCHEMA, normalizeOriginalConversationRecipient, verifyOriginalConversationReturnRoute} from "./semantic_request.ts";
 import {projectDelegationTurnContext, projectDelegationTurnItem, projectDelegationTurnItems} from "./turn_context.ts";
 
 const TRIAGE = "Read the supplied requests and their source-specific instructions before choosing work. " +
@@ -23,7 +24,7 @@ const TRIAGE = "Read the supplied requests and their source-specific instruction
 const DELIVERY_STATUSES: ReadonlySet<string> = new Set(deliveryContract.delivery_statuses);
 const DELIVERY_ERRORS: ReadonlySet<string> = new Set(deliveryContract.delivery_errors);
 const RESULT_KEY = /^(?:decision|conclusion)(?:-[0-9]{8})?$/;
-type InboxSource = Readonly<{root: string; goal: string; agent: string; scope: JsonObject; exact: boolean}>;
+type InboxSource = Readonly<{root: string; goal: string; agent: string; scope: JsonObject; exact: boolean; recipient?: JsonObject}>;
 type ReturnDelivery = Readonly<{key: string; request: JsonObject; reply: JsonObject}>;
 
 function fail(message: string): never { throw new EffectRuntimeRequestError(message); }
@@ -79,10 +80,12 @@ function names(folder: string): string[] {
   catch (error) { if (missing(error)) return []; throw error; }
 }
 function target(source: InboxSource, agent = source.agent): JsonObject {
+  if (source.recipient) return {recipient: source.recipient};
   return source.exact ? {goal_ref: source.scope.caller_goal_ref, agent_id: agent}
     : {goal_id: source.goal, agent_id: agent};
 }
 function identity(source: InboxSource, agent = source.agent): JsonObject {
+  if (source.recipient) return {recipient: source.recipient};
   return {goal_id: source.goal, agent_id: agent,
     ...(source.exact ? {goal_ref: source.scope.caller_goal_ref} : {})};
 }
@@ -103,6 +106,10 @@ function entry(source: InboxSource, id: string, agent = source.agent): JsonObjec
 }
 function pendingEntry(source: InboxSource, path: string): JsonObject {
   const id = basename(path, ".json"), row = readRecord(path);
+  if (source.recipient) {
+    if (row.schema_version !== CONVERSATION_ENTRY_SCHEMA || !equal(row.recipient, source.recipient) || row.request_id !== id) fail("context inbox scope mismatch");
+    return sourceRecord(row);
+  }
   if (row.schema_version !== (source.exact ? "loopx_manager_context_entry_v2" : "loopx_manager_context_entry_v1")
       || row.goal_id !== source.goal || row.agent_id !== source.agent || row.request_id !== id) {
     fail("context inbox scope mismatch");
@@ -110,6 +117,10 @@ function pendingEntry(source: InboxSource, path: string): JsonObject {
   return sourceRecord(row);
 }
 function lifecycle(source: InboxSource, operation: string, row: JsonObject, route: JsonObject = {}): boolean {
+  if (source.recipient) {
+    if (row.schema_version !== CONVERSATION_ENTRY_SCHEMA || !equal(row.recipient, source.recipient)) fail("original conversation receipt scope mismatch");
+    return true;
+  }
   const decision = decideCollaborationLifecycle({...source.scope, operation,
     record_goal_ref: row.goal_ref ?? null, route_goal_ref: route.goal_ref ?? null, initial_delivery: null});
   if (decision.kind === "reject") fail(`collaboration lifecycle rejected: ${decision.code}`);
@@ -137,7 +148,7 @@ function resultObservation(key: string, reply: JsonObject): JsonObject {
   if (/[\uD800-\uDFFF]/u.test(text)) fail("invalid reply text encoding");
   return {key, value: Object.fromEntries(["request_id", "goal_id", "agent_id", "source_id", "goal_ref", "phase",
     "decision", "result_key", "previous_result_key", "update_id", "attachments", "request_revision",
-    "request_revision_digest"].filter(field => Object.hasOwn(reply, field)).map(field => [field, reply[field]])),
+    "request_revision_digest", "recipient", "requester", "remaining_work"].filter(field => Object.hasOwn(reply, field)).map(field => [field, reply[field]])),
   text_chars: [...text].length, text_sha256: createHash("sha256").update(text).digest("hex")};
 }
 function receiptState(root: string, row: JsonObject): JsonObject {
@@ -149,11 +160,17 @@ function receiptState(root: string, row: JsonObject): JsonObject {
   if (Object.hasOwn(row, "request_control")) {
     observation.request = row;
     observation.read = observe(join(root, "reads", id + ".json"));
-    observation.results = resultKeys(folder).map(key => {
-      try { return resultObservation(key, readRecord(join(folder, key + ".json"))); }
-      catch (error) { if (!recordFailure(error)) throw error; return {unavailable: true}; }
-    });
   }
+  // Later conclusions may retain an explicit remainder, also on legacy requests.
+  // Read their existing immutable chain; never infer scope from reply prose or Todos.
+  observation.results = resultKeys(folder).map(key => {
+    try {
+      const initial = jsonObject(observation.conclusion);
+      return resultObservation(key, key === "conclusion" && initial?.state === "read"
+        ? requireJsonObject(initial.value, "initial conclusion") : readRecord(join(folder, key + ".json")));
+    }
+    catch (error) { if (!recordFailure(error)) throw error; return {unavailable: true}; }
+  });
   return (inspectCollaborationInboxReceipts({observations: [observation]}).items as JsonObject[])[0];
 }
 function inboxItem(row: JsonObject, state: JsonObject): JsonObject {
@@ -164,6 +181,7 @@ function inboxItem(row: JsonObject, state: JsonObject): JsonObject {
     request_revision: view.revision, request_revision_digest: view.revision_digest,
     source_request: {request_id: row.request_id, request_revision: view.revision, request_digest: view.revision_digest}});
   item.recorded_decision = state.recorded_decision;
+  if (state.remaining_work) item.remaining_work = state.remaining_work;
   if (state.recorded_decision !== null) Object.assign(item, {receiver_decision_recorded: true,
     next_action: "Review this request's recorded decision and linked work before returning its actual result. A recorded adoption is not a completed task; preserve the current owner and do not reprioritize unrelated work."});
   if ((state.warnings as unknown[]).length) Object.assign(item, {warnings: state.warnings,
@@ -178,7 +196,7 @@ async function pendingPage(source: InboxSource, params: JsonObject): Promise<Jso
     let row: JsonObject;
     try { row = entry(source, requestId(params.request_id)); }
     catch (error) { if (missing(error)) fail("context request not found for this Goal and Agent"); throw error; }
-    if (row.schema_version !== (source.exact ? "loopx_manager_context_entry_v2" : "loopx_manager_context_entry_v1")) fail("context inbox scope mismatch");
+    if (row.schema_version !== (source.recipient ? CONVERSATION_ENTRY_SCHEMA : source.exact ? "loopx_manager_context_entry_v2" : "loopx_manager_context_entry_v1")) fail("context inbox scope mismatch");
     if (!lifecycle(source, "inbox_observe", row)) fail("context request is unavailable in this Goal lifetime");
     return {ok: true, request_id: params.request_id, items: [inboxItem(row, receiptState(source.root, row))],
       has_more: false, next_cursor: null, instruction: TRIAGE + " This is an exact source read, including concluded requests; it does not reopen their work."};
@@ -197,7 +215,8 @@ async function pendingPage(source: InboxSource, params: JsonObject): Promise<Jso
     if (index > 0 && index % 128 === 0) await yieldToRuntime();
     if (!name.endsWith(".json") || !BARE_SHA256_PATTERN.test(name.slice(0, -5)) || name.slice(0, -5) <= after) continue;
     const row = pendingEntry(source, join(folder, name)), state = receiptState(source.root, row);
-    if (state.kind === "settled" || !lifecycle(source, "inbox_observe", row)) continue;
+    if (state.kind === "settled" && !(source.recipient && params.include_settled === true)
+        || !lifecycle(source, "inbox_observe", row)) continue;
     items.push(inboxItem(row, state));
     if (items.length === 21) break;
   }
@@ -206,15 +225,17 @@ async function pendingPage(source: InboxSource, params: JsonObject): Promise<Jso
     instruction: TRIAGE + " Follow next_cursor to read later pending requests. Restart without a cursor " +
       "to discover new requests before it. The end of a page sequence is not work completion."};
 }
-function inspectResult(root: string, row: JsonObject, key: string, reply: JsonObject): JsonObject | null {
+function inspectResult(root: string, row: JsonObject, key: string, reply: JsonObject,
+    observations?: JsonObject[]): JsonObject | null {
   const folder = join(root, "replies", requestId(row.request_id));
   try {
-    const results = reply.update_id != null || reply.phase === "decision" ? resultKeys(folder).map(candidate =>
-      resultObservation(candidate, readRecord(join(folder, candidate + ".json")))) : [resultObservation(key, reply)];
+    const results = observations ?? (reply.update_id != null || reply.phase === "decision" ? resultKeys(folder).map(candidate =>
+      resultObservation(candidate, readRecord(join(folder, candidate + ".json")))) : [resultObservation(key, reply)]);
     const legacy = Object.hasOwn(row, "request_control") || Object.hasOwn(reply, "request_revision")
       ? observe(join(root, "decisions", String(row.request_id) + ".json")) : {};
     const inspected = planCollaborationResult({request: row, phase: reply.phase, text: reply.text,
       decision: reply.decision, update_id: reply.update_id, attachments: reply.attachments,
+      remaining_work: reply.remaining_work,
       request_revision: reply.request_revision, legacy_assessment: legacy.value, results});
     return (reply.result_key ?? reply.phase) === key ? inspected : null;
   } catch (error) { if (!recordFailure(error)) throw error; return null; }
@@ -222,43 +243,57 @@ function inspectResult(root: string, row: JsonObject, key: string, reply: JsonOb
 function returnConsumed(root: string, key: string, row: JsonObject, reply: JsonObject, agent: unknown): boolean {
   const path = join(root, "replies", requestId(row.request_id), key + ".consumed.json");
   if (!present(path)) return false;
-  const saved = readRecord(path), expected: JsonObject = {request_id: row.request_id, goal_id: row.goal_id,
-    agent_id: agent, ...(Object.hasOwn(reply, "result_key") ? {result_key: key} : {}),
-    ...(Object.hasOwn(row, "goal_ref") ? {goal_ref: row.goal_ref} : {})};
+  const saved = readRecord(path), expected: JsonObject = {request_id: row.request_id,
+    ...(row.recipient ? {recipient: row.recipient, requester: row.requester} : {goal_id: row.goal_id,
+      agent_id: agent, ...(Object.hasOwn(row, "goal_ref") ? {goal_ref: row.goal_ref} : {})}),
+    ...(Object.hasOwn(reply, "result_key") ? {result_key: key} : {})};
   if (Object.entries(expected).some(([field, value]) => !equal(saved[field], value))) fail("peer consumption receipt scope mismatch");
   return true;
 }
+function outgoingEntry(source: InboxSource, operation: JsonObject): JsonObject {
+  const conversation = operation.schema_version === CONVERSATION_ENTRY_SCHEMA;
+  const requester = conversation ? requireJsonObject(operation.requester, "original requester") : null;
+  if (conversation ? !source.exact || requester?.agent_id !== source.agent || !equal(requester?.goal_ref, source.scope.caller_goal_ref)
+    : operation.goal_id !== source.goal || operation.source_agent_id !== source.agent
+      || source.exact && !equal(operation.goal_ref, source.scope.caller_goal_ref)) fail("peer return scope mismatch");
+  const row = conversation ? entry({...source, recipient: normalizeOriginalConversationRecipient(operation.recipient)}, requestId(operation.request_id))
+    : entry(source, requestId(operation.request_id), requireNonEmptyString(operation.agent_id, "peer Agent"));
+  if (row.source_agent_id !== source.agent || row.source_id !== operation.source_id
+      || conversation && !equal(row.requester, requester)) fail("peer return scope mismatch");
+  return row;
+}
 async function collectReturns(source: InboxSource): Promise<{view: JsonObject; deliveries: ReturnDelivery[]}> {
   const items: JsonObject[] = [], deliveries: ReturnDelivery[] = [];
+  if (source.recipient) return {view: {items: [], has_more: false}, deliveries};
   const folder = join(source.root, "peer-operations", digest(target(source)));
   for (const [index, name] of names(folder).entries()) {
     if (index > 0 && index % 128 === 0) await yieldToRuntime();
     if (!name.endsWith(".json") || !BARE_SHA256_PATTERN.test(name.slice(0, -5))) continue;
     const operation = readRecord(join(folder, name));
-    if (operation.goal_id !== source.goal || operation.source_agent_id !== source.agent
-        || source.exact && !equal(operation.goal_ref, source.scope.caller_goal_ref)) fail("peer return scope mismatch");
+    const conversation = operation.schema_version === CONVERSATION_ENTRY_SCHEMA;
     let row: JsonObject;
-    try { row = entry(source, requestId(operation.request_id), requireNonEmptyString(operation.agent_id, "peer Agent")); }
+    try { row = outgoingEntry(source, operation); }
     catch (error) { if (missing(error)) continue; throw error; }
-    if (row.source_agent_id !== source.agent || row.source_id !== operation.source_id) fail("peer return scope mismatch");
     const replies = join(source.root, "replies", String(row.request_id));
     for (const [resultIndex, key] of resultKeys(replies).entries()) {
       if (resultIndex > 0 && resultIndex % 128 === 0) await yieldToRuntime();
       if (key === "decision") continue;
       const reply = readRecord(join(replies, key + ".json")), inspected = inspectResult(source.root, row, key, reply);
-      if (["request_id", "goal_id", "agent_id", "source_id", "goal_ref"].some(field => Object.hasOwn(row, field) && !equal(reply[field], row[field]))
+      if (["request_id", "goal_id", "agent_id", "source_id", "goal_ref", "recipient", "requester"].some(field => Object.hasOwn(row, field) && !equal(reply[field], row[field]))
           || reply.phase !== "conclusion" || !inspected) fail("peer reply identity conflict");
       const route = readRecord(join(source.root, "roundtrips", String(row.request_id) + ".json"));
-      if (!lifecycle(source, "peer_return_observe", row, route)
+      if (conversation) verifyOriginalConversationReturnRoute({entry: row, route});
+      if (!(conversation || lifecycle(source, "peer_return_observe", row, route))
           || returnConsumed(source.root, key, row, reply, source.agent)) continue;
       items.push({request_id: row.request_id, ...(key !== "conclusion" ? {result_key: key} : {}),
-        agent_id: row.agent_id, parent_request_id: row.parent_request_id ?? null,
+        ...(conversation ? {recipient: row.recipient} : {agent_id: row.agent_id}), parent_request_id: row.parent_request_id ?? null,
         brief: inspected.request_brief ?? row.brief,
         ...(Object.hasOwn(inspected, "request_revision") ? {request_revision: inspected.request_revision,
           current_request_revision: inspected.current_request_revision} : {}),
-        text: reply.text, decision: reply.decision, created_at: reply.created_at});
+        text: reply.text, ...(reply.remaining_work ? {remaining_work: reply.remaining_work} : {}),
+        decision: reply.decision, created_at: reply.created_at});
       if (items.length > 20) break;
-      deliveries.push({key, request: Object.fromEntries(["request_id", "goal_id", "agent_id", "goal_ref"]
+      deliveries.push({key, request: Object.fromEntries(["request_id", "goal_id", "agent_id", "goal_ref", "recipient", "requester"]
         .filter(field => Object.hasOwn(row, field)).map(field => [field, row[field]])),
       reply: Object.hasOwn(reply, "result_key") ? {result_key: reply.result_key} : {}});
     }
@@ -296,10 +331,13 @@ function replyStatuses(root: string, row: JsonObject): JsonObject[] {
 function agendaResults(root: string, row: JsonObject): JsonObject[] {
   const folder = join(root, "replies", requestId(row.request_id));
   const statuses = new Map(replyStatuses(root, row).map(status => [status.result_key ?? status.phase, status.status]));
-  return resultKeys(folder).flatMap(key => {
-    const reply = readRecord(join(folder, key + ".json"));
+  const replies = resultKeys(folder).map(key => ({key, reply: readRecord(join(folder, key + ".json"))}));
+  // Reuse immutable request-local observations; each result still goes through
+  // the publication validator and its current delivery/consumption readback.
+  const observations = replies.map(({key, reply}) => resultObservation(key, reply));
+  return replies.flatMap(({key, reply}) => {
     if (reply.phase !== "conclusion") return [];
-    if (!inspectResult(root, row, key, reply)) fail("delegation result identity unavailable");
+    if (!inspectResult(root, row, key, reply, observations)) fail("delegation result identity unavailable");
     return [{result_key: key, request_revision: reply.request_revision ?? 1, status: statuses.get(key),
       consumed: row.source_kind === "peer" && returnConsumed(root, key, row, reply, row.source_agent_id)}];
   });
@@ -327,14 +365,11 @@ async function turnContext(source: InboxSource, params: JsonObject): Promise<Jso
       let row: JsonObject;
       try {
         if (direction === "incoming") row = pendingEntry(source, join(folder, name));
-        else {
-          const operation = readRecord(join(folder, name));
-          if (operation.goal_id !== source.goal || operation.source_agent_id !== source.agent
-              || source.exact && !equal(operation.goal_ref, source.scope.caller_goal_ref)) fail("delegation operation scope mismatch");
-          row = entry(source, requestId(operation.request_id), requireNonEmptyString(operation.agent_id, "peer Agent"));
-          if (row.source_agent_id !== source.agent || row.source_id !== operation.source_id) fail("delegation request scope mismatch");
-        }
-        if (!lifecycle(source, "inbox_observe", row)) continue;
+        else row = outgoingEntry(source, readRecord(join(folder, name)));
+        if (row.schema_version === CONVERSATION_ENTRY_SCHEMA) {
+          verifyOriginalConversationReturnRoute({entry: row,
+            route: readRecord(join(source.root, "roundtrips", String(row.request_id) + ".json"))});
+        } else if (!lifecycle(source, "inbox_observe", row)) continue;
       } catch (error) { if (!recordFailure(error)) throw error; unavailable++; continue; }
       const state = receiptState(source.root, row), links = linksReceipt(source.root, row);
       let results: JsonObject[] = [], evidenceUnavailable = links.unavailable;
@@ -342,9 +377,10 @@ async function turnContext(source: InboxSource, params: JsonObject): Promise<Jso
       catch (error) { if (!recordFailure(error)) throw error; evidenceUnavailable = true; }
       const view = jsonObject(state.request_control_view);
       const receipt: JsonObject = {kind: state.kind, recorded_decision: state.recorded_decision};
+      if (state.remaining_work) receipt.remaining_work = state.remaining_work;
       if (view) receipt.request_control_view = {control_state: view.control_state, active_reservation: view.active_reservation,
         revision: view.revision, revision_digest: view.revision_digest, brief: {purpose: (view.brief as JsonObject).purpose}};
-      observations.push({direction, request: {...Object.fromEntries(["request_id", "agent_id", "source_kind", "source_agent_id", "goal_ref"]
+      observations.push({direction, request: {...Object.fromEntries(["request_id", "agent_id", "source_kind", "source_agent_id", "goal_ref", "recipient"]
         .filter(key => Object.hasOwn(row, key)).map(key => [key, row[key]])),
       purpose: (jsonObject(row.brief)?.purpose || [...(row.message as string ?? "")].slice(0, 2000).join(""))},
       receipt, todo_ids: links.value.todo_ids ?? [], evidence_unavailable: evidenceUnavailable, results});
@@ -363,16 +399,16 @@ async function recordReads(source: InboxSource, params: JsonObject): Promise<Jso
   const receipts: (JsonObject | null)[] = [];
   for (const raw of params.items) {
     const row = requireJsonObject(raw, "supplied request"), id = requestId(row.request_id);
-    if (row.goal_id !== source.goal || row.agent_id !== source.agent) fail("context receipt scope mismatch");
+    if (Object.entries(identity(source)).some(([key, value]) => !equal(row[key], value))) fail("context receipt scope mismatch");
     entry(source, id);
     lifecycle(source, "read_record", row);
     const readPath = join(source.root, "reads", id + ".json");
     const lock = source.exact ? join(source.root, "request-locks", id) : readPath.slice(0, -5) + ".lock";
     receipts.push(await withFileMutationLock(lock, async () => {
       const stored = entry(source, id);
-      if (Object.hasOwn(stored, "request_control")) {
+      if (Object.hasOwn(stored, "request_control") || stored.schema_version === CONVERSATION_ENTRY_SCHEMA) {
         const observation = observe(join(source.root, "decisions", id + ".json"));
-        const plan = recordControlledRequestRead({entry: stored, actor_agent_id: row.agent_id,
+        const plan = recordControlledRequestRead({entry: stored, actor_agent_id: row.agent_id, actor_recipient: source.recipient,
           observed_at: params.observed_at, revision: row.request_revision, revision_digest: row.request_revision_digest,
           legacy_assessment: observation.value ?? null, legacy_assessment_unavailable: observation.state === "unavailable"});
         if (plan.changed) await atomicWriteJson(entryPath(source, id), plan.entry as JsonObject);
@@ -388,16 +424,21 @@ async function recordReads(source: InboxSource, params: JsonObject): Promise<Jso
     const delivered = requireJsonObject(raw, "supplied peer result"), key = requireNonEmptyString(delivered.key, "result key");
     if (!RESULT_KEY.test(key)) fail("invalid peer result key");
     const row = requireJsonObject(delivered.request, "peer request"), reply = requireJsonObject(delivered.reply, "peer result");
-    if (row.goal_id !== source.goal || Object.hasOwn(reply, "result_key") && reply.result_key !== key) fail("peer return scope mismatch");
+    const conversation = row.recipient !== undefined;
+    if ((conversation ? !equal((row.requester as JsonObject)?.goal_ref, source.scope.caller_goal_ref)
+      || (row.requester as JsonObject)?.agent_id !== source.agent : row.goal_id !== source.goal)
+      || Object.hasOwn(reply, "result_key") && reply.result_key !== key) fail("peer return scope mismatch");
     const path = join(source.root, "replies", requestId(row.request_id), key + ".delivery.json");
     const lock = source.exact ? join(source.root, "request-locks", String(row.request_id)) : join(dirname(path), key + ".lock");
     await withFileMutationLock(lock, async () => {
-      const stored = entry(source, String(row.request_id), requireNonEmptyString(row.agent_id, "peer Agent"));
+      const stored = conversation ? entry({...source, recipient: normalizeOriginalConversationRecipient(row.recipient)}, String(row.request_id))
+        : entry(source, String(row.request_id), requireNonEmptyString(row.agent_id, "peer Agent"));
       if (stored.source_agent_id !== source.agent) fail("peer return scope mismatch");
-      lifecycle(source, "read_record", stored);
+      if (!conversation) lifecycle(source, "read_record", stored);
       if (!present(path)) await atomicWriteJson(path, {status: "delivered",
         ...(Object.hasOwn(reply, "result_key") ? {result_key: key} : {}), delivered_at: params.observed_at,
-        kind: "requester_cli_read", ...(Object.hasOwn(stored, "goal_ref") ? {goal_ref: stored.goal_ref} : {})});
+        kind: "requester_cli_read", ...(conversation ? {requester: stored.requester, recipient: stored.recipient}
+          : Object.hasOwn(stored, "goal_ref") ? {goal_ref: stored.goal_ref} : {})});
     });
   }
   return {read_receipts: receipts, followthrough,
@@ -438,9 +479,12 @@ export async function readCollaborationInbox(params: JsonObject): Promise<JsonOb
     })};
   }
   const scope = requireJsonObject(params.scope, "Goal scope");
-  if (scope.profile_id !== null && scope.profile_id !== "source_session_v1") fail("unsupported collaboration profile");
-  const source: InboxSource = {root, goal: requireNonEmptyString(params.goal_id, "Goal"),
-    agent: requireNonEmptyString(params.agent_id, "Agent"), scope, exact: scope.profile_id === "source_session_v1"};
+  const conversation = scope.profile_id === "original_conversation_v0";
+  if (scope.profile_id !== null && scope.profile_id !== "source_session_v1" && !conversation) fail("unsupported collaboration profile");
+  if (conversation && (!["pending", "receiver_read", "record_read"].includes(operation) || params.include_context === true)) fail("unsupported original conversation read operation");
+  const source: InboxSource = {root, goal: conversation ? "" : requireNonEmptyString(params.goal_id, "Goal"),
+    agent: conversation ? "" : requireNonEmptyString(params.agent_id, "Agent"), scope, exact: conversation || scope.profile_id === "source_session_v1",
+    ...(conversation ? {recipient: normalizeOriginalConversationRecipient(scope.recipient)} : {})};
   const observedAt = requireNonEmptyString(params.observed_at, "Inbox observation time");
   if ([...observedAt].length > 80) fail("Inbox observation time is too long");
   if (operation === "turn_context" || operation === "turn_start" || operation === "receiver_read" || params.include_context === true) {
@@ -461,6 +505,7 @@ export async function readCollaborationInbox(params: JsonObject): Promise<JsonOb
   if (operation === "turn_start") return {result: page, cursor_scope: cursorScope, context: await turnContext(source, params)};
   if (operation === "receiver_read") {
     const work = receiverWork(source, page.items as JsonObject[]);
+    if (conversation) work.needsProvider = false;
     if (params.defer_recording !== true && !work.needsProvider) {
       for (const [index, observation] of work.observations.entries()) {
         if (observation.evidence_unavailable) {
@@ -469,7 +514,7 @@ export async function readCollaborationInbox(params: JsonObject): Promise<JsonOb
         }
       }
       const final = await recordReads(source, {...params, items: page.items, deliveries: returns.deliveries,
-        work_observations: work.observations, include_context: params.request_id == null});
+        work_observations: work.observations, include_context: !conversation && params.request_id == null});
       return {result: page, cursor_scope: cursorScope, completed: true, ...final};
     }
   }

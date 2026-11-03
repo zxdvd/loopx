@@ -40,6 +40,38 @@ test("context is bounded with explicit omitted coverage, not a completeness clai
   assert.equal(validateReplanContext(context), context);
 });
 
+test("multiple evidence rows share a lossless scoped read route, not their content", () => {
+  const rows = Array.from({length: 24}, (_, i) => ({...row(i),
+    health_check: `Observation ${i}\nPreserve its complete tail.`,
+    progress_observation: {...progress, fingerprint: `work-${i}`}}));
+  const read_prefix = "loopx --registry '/fixture with spaces/registry.json' --runtime-root /fixture/runtime";
+  const context = projectReplanContext({...request, read_prefix, rows});
+  const template = String(context.evidence_read_action_template);
+  const evidence = context.evidence as JsonObject[];
+  const expanded = evidence.map(item => ({...item,
+    read_action: template.replace("{evidence_ref}", String(item.evidence_ref))}));
+  for (let i = 0; i < evidence.length; i++) {
+    assert.equal(evidence[i].read_action, undefined);
+    assert.equal(expanded[i].read_action,
+      `${read_prefix} --format json history --goal-id goal-a --agent-id agent-a --evidence-ref ${evidence[i].evidence_ref}`);
+    assert.equal(evidence[i].summary, rows[23 - i].health_check);
+  }
+  assert.ok(JSON.stringify(expanded).length - JSON.stringify(evidence).length > template.length);
+  assert.equal(validateReplanContext(context), context);
+  const historical: JsonObject = {...context, evidence: expanded};
+  delete historical.evidence_read_action_template;
+  assert.equal(validateReplanContext(historical), historical);
+  assert.notEqual(projectReplanContext({...request, rows, read_prefix: "loopx"}).context_id, context.context_id);
+  for (const bad of [null, "", "history", template + " {evidence_ref}"]) {
+    assert.throws(() => validateReplanContext({...context, evidence_read_action_template: bad}));
+  }
+  assert.equal(projectReplanContext({...request, rows: []}).evidence_read_action_template, undefined);
+  assert.equal(projectReplanContext({...request, agent_id: null, rows}).evidence_read_action_template, undefined);
+  const literal = projectReplanContext({...request, rows, read_prefix: "loopx --runtime-root '/{evidence_ref}/state'"});
+  assert.equal(literal.evidence_read_action_template, undefined);
+  assert.match(String((literal.evidence as JsonObject[])[0].read_action), /'\/{evidence_ref}\/state'/);
+});
+
 test("older different results survive many recent attempts, while repeated records retain their span", () => {
   const old = {...row(1), progress_observation: {...progress, result_class: "advanced", fingerprint: "old-best"}};
   const repeated = Array.from({length: 100}, (_, i) => row(i + 100));
@@ -227,7 +259,7 @@ test("ordinary declared-work evidence reaches followthrough without becoming typ
     assert.throws(() => validateReplanContext({...context,
       decision_followthrough: {...follow, ...patch}}), /ordinary work/);
   }
-  assert.equal(projectReplanContext({...request, rows: [decision, actual]}).decision_followthrough, undefined);
+  assert.deepEqual(projectReplanContext({...request, rows: [decision, actual]}).decision_followthrough.ordinary_work.evidence, follow.ordinary_work.evidence);
 });
 
 test("ordinary followthrough retains corrections and bounded coverage under source scope", () => {
@@ -306,6 +338,41 @@ test("legacy descriptive Todo deltas stay readable and unresolved", () => {
   assert.equal(validateReplanContext(context), context);
 });
 
+test("busy planned work cannot crowd another declared experiment out of review", () => {
+  const decision = reviewed(1);
+  decision._source_facts.planned_todo_ids = ["todo-busy", "todo-counterexample"];
+  for (const typed of [true, false]) {
+    const observation = (position: number, todo: string): JsonObject => ({...subsequent(position), todo_id: todo,
+      health_check: todo === "todo-counterexample" ? "The comparison rejected the proposed explanation." : "Repeated validation.",
+      progress_observation: typed ? {...progress, work_item_id: todo, fingerprint: `result-${position}`} : null});
+    const counterexample = observation(2, "todo-counterexample");
+    const rows = [decision, counterexample, ...Array.from({length: 12}, (_, i) => observation(i + 3, "todo-busy"))];
+    const input = {...strideRequest, rows};
+    const context = projectReplanContext(input);
+    const follow = context.decision_followthrough;
+    const evidence = typed ? follow.observations : follow.ordinary_work.evidence;
+    assert.equal(evidence.length, 6);
+    assert.deepEqual(evidence.map((row: JsonObject) => row.todo_id),
+      [...Array(5).fill("todo-busy"), "todo-counterexample"], "source order is retained within the balanced window");
+    const ref = evidence[5].evidence_ref;
+    const work = follow.planned_work[1];
+    assert.deepEqual(typed ? work.observation_refs : work.ordinary_evidence_refs, [ref]);
+    assert.equal(typed ? follow.omitted_observation_count : follow.ordinary_work.omitted_count, 7);
+    assert.equal(typed ? follow.recorded_progress_count : follow.ordinary_work.recorded_count, 13);
+    assert.equal(validateReplanContext(context), context);
+    assert.equal(projectReplanContext({...input, operation: "resolve", evidence_ref: ref}).evidence.health_check,
+      counterexample.health_check);
+    const previous = follow.previous_decision.evidence_ref;
+    const review = {previous_review: {reference_decision_ref: previous, adoption: "executed",
+      information_gain: "new_evidence", goal_gain: "unknown", evidence_refs: [ref], lesson: "Retain the negative comparison."}};
+    const replay = projectReplanContext({...input, operation: "review_evidence", previous_decision_ref: previous, evidence_refs: [ref]});
+    assert.equal(strideReviewMismatch(review, context, replay), null);
+    assert.deepEqual(projectReplanContext({...input, stride_strategy: "off"}).decision_followthrough, follow);
+    assert.deepEqual(projectReplanContext({...input, rows: [...rows].reverse()}).decision_followthrough, follow);
+    assert.equal(follow.execution_and_goal_gain, "unknown");
+  }
+});
+
 test("declared work returns canonical state and only its subsequent observations", () => {
   const decision = reviewed(2);
   decision._source_facts.planned_todo_ids = ["todo-experiment", "todo-unavailable"];
@@ -339,8 +406,7 @@ test("declared work returns canonical state and only its subsequent observations
   // Live work state changes the review basis, never the historical decision identity.
   assert.equal(withoutSource.decision_followthrough.previous_decision.evidence_ref,
     follow.previous_decision.evidence_ref);
-  assert.deepEqual(projectReplanContext({...request, rows: [decision], todo_items: [{invalid: true}]}),
-    projectReplanContext({...request, rows: [decision]}));
+  assert.equal(projectReplanContext({...request, rows: [decision], todo_items: [{invalid: true}]}).decision_followthrough.planned_work[0].current, null);
   for (const patch of [{todo_source_available: false},
     {planned_work: [{...work, observation_refs: ["evidence:invented"]}]},
     {planned_work: [work, work]}, {omitted_planned_work_count: -1}]) {
@@ -382,7 +448,7 @@ test("autonomous decisions return through their own binding and resolve without 
   assert.throws(() => projectReplanContext({...resolve, rows: [autonomousReviewed(2, "replan-other")]}), /unavailable/);
   const ordinary = projectReplanContext({...request, rows});
   assert.deepEqual(projectReplanContext({...request, rows, stride_strategy: "off"}), ordinary);
-  assert.equal(ordinary.decision_followthrough, undefined);
+  assert.equal(ordinary.decision_followthrough.previous_decision.evidence_ref, context.decision_followthrough.previous_decision.evidence_ref);
 });
 
 test("autonomous followthrough rejects conflicting identities, bindings and acknowledgements", () => {
@@ -507,12 +573,13 @@ test("stall frontier projects its current strategy through the shared outcome ow
   }
 });
 
-test("strategy off preserves context identity and selection despite decision transport facts", () => {
+test("generic followthrough is available with strategy off without enabling stride", () => {
   const rows = [reviewed(), subsequent(1)];
   const ordinary = projectReplanContext({...request, rows});
   const off = projectReplanContext({...request, rows, stride_strategy: "off"});
   assert.deepEqual(off, ordinary);
-  assert.equal(off.decision_followthrough, undefined);
+  assert.deepEqual(off.decision_followthrough, projectReplanContext({...strideRequest, rows}).decision_followthrough);
+  assert.deepEqual(validateReplanContext(off), off);
   const enabled = projectReplanContext({...strideRequest, rows});
   assert.equal(enabled.stride_strategy, "evidence_conditioned_v1");
   assert.deepEqual(validateReplanContext(enabled), enabled);
@@ -521,7 +588,7 @@ test("strategy off preserves context identity and selection despite decision tra
     assert.throws(() => validateReplanContext({...enabled, decision_followthrough: {
       ...enabled.decision_followthrough as JsonObject, ...patch}}), /followthrough/);
   }
-  assert.throws(() => validateReplanContext({...enabled, stride_strategy: "off"}), /enabled strategy/);
+  assert.deepEqual(validateReplanContext({...enabled, stride_strategy: "off"}).decision_followthrough, enabled.decision_followthrough);
 
   assert.notEqual(enabled.context_id, off.context_id);
   for (const field of ["evidence", "coverage_ledger", "uncovered_frontier", "evidence_count"]) {
@@ -595,4 +662,40 @@ test("invalid source digest shapes cannot authorize accounting reduction", () =>
         String(item.summary).includes(String(rows[0].recommended_action))));
     }
   }
+});
+
+test("blocked and unchanged observations never count as advanced work; caps preserve result totals", () => {
+  const observations = Array.from({length: 13}, (_, i) => ({...subsequent(i + 3),
+    delivery_outcome: i === 0 ? "outcome_progress" : "outcome_gap",
+    progress_observation: {...progress, fingerprint: "mixed-" + i,
+      result_class: i === 0 ? "advanced" : i < 11 ? "blocked" : "unchanged"}}));
+  const context = projectReplanContext({...request, rows: [reviewed(2), ...observations]});
+  const follow = context.decision_followthrough;
+  assert.equal(follow.recorded_progress_count, 13);
+  assert.deepEqual(follow.result_counts, {advanced: 1, blocked: 10, unchanged: 2,
+    exploration_exhausted: 0, no_followup: 0});
+  assert.equal(follow.observations.length, 6);
+  assert.equal(follow.omitted_observation_count, 7);
+  assert.equal(follow.execution_and_goal_gain, "unknown");
+  assert.ok(follow.observations.every((row: JsonObject) => typeof row.result_class === "string" && row.delivery_outcome));
+  assert.deepEqual(validateReplanContext(context), context);
+  assert.throws(() => validateReplanContext({...context, decision_followthrough: {...follow,
+    result_counts: {...follow.result_counts, advanced: 13}}}), /result counts/);
+  assert.throws(() => validateReplanContext({...context, decision_followthrough: {...follow,
+    observations: [{...follow.observations[0], result_class: "invented"}]}}), /followthrough/);
+});
+
+
+test("shared acceptance stays in the review basis when another outcome owner changes", () => {
+  const acceptance = {outcome_requirements: {outcomes: [{outcome_id: "shared-result",
+    owner_agent_id: "agent-b", requirements: [{id: "verified", planning_satisfied: true}]}]}};
+  const original = projectReplanContext({...request, stride_strategy: "evidence_conditioned_v1",
+    goal_facts: {registry_objective: "Deliver the shared result", acceptance_contract: acceptance}});
+  const changed = structuredClone(acceptance);
+  changed.outcome_requirements.outcomes[0].requirements[0].planning_satisfied = false;
+  const current = projectReplanContext({...request, stride_strategy: "evidence_conditioned_v1",
+    goal_facts: {registry_objective: "Deliver the shared result", acceptance_contract: changed}});
+  assert.notEqual(original.context_id, current.context_id);
+  assert.deepEqual((current.core_goal as JsonObject).acceptance_contract, changed);
+  assert.equal((original.core_goal as JsonObject).objective, (current.core_goal as JsonObject).objective);
 });

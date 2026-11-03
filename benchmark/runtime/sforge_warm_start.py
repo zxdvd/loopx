@@ -16,6 +16,7 @@ import shlex
 import shutil
 import tempfile
 import time
+import tomllib
 
 from loopx.control_plane.effect_runtime import effect_runtime_result
 from benchmark.runtime.layout import _CODEX_HOME, _CONTROL, _SRC
@@ -45,6 +46,7 @@ class WarmStart:
     normal_cadence: int = 6
     research_component_ids: tuple[str, ...] = ()
     fresh_replan: bool = False
+    destination_config: Path | None = None
 
     def verify(self, workspace: str) -> dict:
         from loopx.hosts.checkpoint_retention import checkpoint_bank_use
@@ -60,8 +62,10 @@ class WarmStart:
                 or any(not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", v)
                        for v in (self.goal_id, self.agent_id, self.source_todo_id))):
             raise ValueError("Warm start needs fresh explicit identities and its original open deadline")
-        if any(not path.is_absolute() or path.resolve(strict=True) != path
-               for path in (self.root, self.config)):
+        paths = (self.root, self.config)
+        if self.destination_config is not None:
+            paths += (self.destination_config,)
+        if any(not path.is_absolute() or path.resolve(strict=True) != path for path in paths):
             raise ValueError("Warm start requires physical absolute participant paths")
         # Hashing a complete checkpoint can exceed the ordinary RPC budget.
         # This read allowance never extends the original execution deadline.
@@ -74,9 +78,10 @@ class WarmStart:
         metadata = json.loads((self.root / "checkpoint.json").read_bytes())["point_metadata"]
         native, source = metadata["native_session"], metadata["loopx_state"]
         if (native["guest_workspace"] != workspace or native["guest_home"] != _CODEX_HOME
-                or source["goal_id"] == self.goal_id or source["agent_id"] == self.agent_id
-                or hashlib.sha256(self.config.read_bytes()).hexdigest() != native["config_sha256"]):
+                or source["goal_id"] == self.goal_id or source["agent_id"] == self.agent_id):
             raise ValueError("Warm start paths, configuration or destination lineage differ")
+        from loopx.hosts.codex_checkpoint import checkpoint_destination_config
+        checkpoint_destination_config(self.config, native["config_sha256"], self.destination_config)
         _workspace_component(self.root, metadata, Path(workspace))
         _research_components(self.root, metadata, Path(workspace), self.research_component_ids)
         context = metadata["research_context"]
@@ -92,14 +97,41 @@ class WarmStart:
             raise ValueError("Original warm start deadline expired during checkpoint verification")
         return metadata
 
-    async def stage(self, environment, workspace: str) -> list[str]:
+    async def stage(self, environment, workspace: str, *,
+                    effective_config: bytes | None = None,
+                    provider_base_url: str | None = None) -> list[str]:
         from loopx.hosts.checkpoint_retention import checkpoint_bank_use
         with checkpoint_bank_use(self.root):
-            return await self._stage(environment, workspace)
+            return await self._stage(environment, workspace,
+                effective_config=effective_config, provider_base_url=provider_base_url)
 
-    async def _stage(self, environment, workspace: str) -> list[str]:
+    async def _stage(self, environment, workspace: str, *,
+                     effective_config: bytes | None = None,
+                     provider_base_url: str | None = None) -> list[str]:
         metadata = self._verify(workspace)
         research = _research_components(self.root, metadata, Path(workspace), self.research_component_ids)
+        requested = self.destination_config or self.config
+        transport_config = None
+        if effective_config is not None:
+            from loopx.hosts.codex_checkpoint import checkpoint_destination_config
+
+            # The runner renders its actual launch through the ordinary worker's
+            # settings owner. Never change the operator's model/effort selection
+            # merely because a destination was rendered successfully.
+            before = tomllib.loads(requested.read_text(encoding="utf-8"))
+            after = tomllib.loads(effective_config.decode("utf-8"))
+            if any(before.get(key) != after.get(key) for key in ("model", "model_reasoning_effort")):
+                raise ValueError("Checkpoint launch differs from its declared model and reasoning effort")
+            with tempfile.TemporaryDirectory(prefix="checkpoint-route-") as folder:
+                target = Path(folder).resolve() / "config.toml"
+                target.write_bytes(effective_config)
+                checkpoint_destination_config(self.config,
+                    metadata["native_session"]["config_sha256"], target,
+                    provider_base_url=provider_base_url)
+            if effective_config != requested.read_bytes():
+                transport_config = effective_config
+        elif provider_base_url is not None and effective_config is None:
+            raise ValueError("Checkpoint Host route requires its rendered destination settings")
         # Install tools first without creating the native home. Stage inert
         # participants outside the workspace so restoring its bytes cannot
         # replace the active controller, registry or installed executable.
@@ -110,6 +142,21 @@ class WarmStart:
                        goal_id=self.goal_id, agent_id=self.agent_id,
                        source_todo_id=self.source_todo_id, deadline_epoch=self.deadline_epoch,
                        normal_cadence=self.normal_cadence)
+        protected_files = [config, f"{_CONTROL}/warm-start.json"]
+        if transport_config is not None:
+            target = f"{_CONTROL}/restored-model-config.toml"
+            with tempfile.TemporaryDirectory(prefix="checkpoint-route-") as folder:
+                path = Path(folder) / "config.toml"
+                path.write_bytes(transport_config)
+                await environment.upload_file(path, target)
+            payload["destination_config"] = target
+            payload["provider_base_url"] = provider_base_url
+            protected_files.append(target)
+        elif self.destination_config is not None:
+            target = f"{_CONTROL}/restored-model-config.toml"
+            await environment.upload_file(self.destination_config, target)
+            payload["destination_config"] = target
+            protected_files.append(target)
         if self.research_component_ids:
             payload["research_component_ids"] = list(self.research_component_ids)
         if self.fresh_replan:
@@ -118,12 +165,12 @@ class WarmStart:
             path = Path(folder) / "input.json"
             path.write_text(json.dumps(payload))
             await environment.upload_file(path, f"{_CONTROL}/warm-start.json")
+        protected = shlex.join(protected_files)
         result = await environment.exec(
             # Modes are part of the sealed digest. Change transport ownership,
             # never widen modes (native stores commonly contain 0600 members).
             f"chown -R -P agent:agent {shlex.quote(unit)} && "
-            f"chown agent:agent {config} {_CONTROL}/warm-start.json && "
-            f"chmod 0400 {config} {_CONTROL}/warm-start.json", user="root")
+            f"chown agent:agent {protected} && chmod 0400 {protected}", user="root")
         if result.return_code:
             raise RuntimeError("Could not stage the verified checkpoint participants")
         # The root-only materializer preserves sealed modes. Its receiver must
@@ -290,7 +337,11 @@ def admit_warm_session(env: dict[str, str], declaration: dict) -> dict:
 
     timeout = _phase_read_timeout(declaration, 90)
     result = admit_native_checkpoint_session(env, Path(declaration["root"]), declaration["sha256"],
-        Path(declaration["config"]), sandbox=env["LOOPX_CODEX_SANDBOX"], timeout=timeout)
+        Path(declaration["config"]), sandbox=env["LOOPX_CODEX_SANDBOX"], timeout=timeout,
+        **({"destination_config": Path(declaration["destination_config"])}
+           if declaration.get("destination_config") is not None else {}),
+        **({"provider_base_url": declaration["provider_base_url"]}
+           if declaration.get("provider_base_url") is not None else {}))
     _phase_read_timeout(declaration, 90)
     return result
 

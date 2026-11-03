@@ -1,6 +1,6 @@
 ---
 name: loopx-pr-review
-description: Use for `/loopx-pr-review` or evidence-backed PR queue review. Run `loopx pr-review` first, execute the capability-owned review plan for each selected exact head, then publish full bilingual PR reviews (complete Chinese five-block review plus one concise English verdict) that match the verified findings. Use `loopx-pr-merge` for approval or merge actions.
+description: Use for `/loopx-pr-review` or evidence-backed PR queue review. Run `loopx pr-review` first, execute the capability-owned review plan for each selected exact head, then publish complete reviews primarily in Chinese, with accurate English technical terms and a concise English verdict matching the verified findings. Use `loopx-pr-merge` for approval or merge actions.
 ---
 
 # LoopX PR Review
@@ -59,7 +59,17 @@ names the contract the change is judged against.
 
 - Review inside that frame; cite the document and check its rows, gates, or exit criteria one by one at the exact head, attaching each finding to its row.
 - Name unsatisfied rows as missing frame items with their own evidence; keep the declared boundary (preview versus promotion, milestone entry versus merge).
-- Publish the frame-aligned conclusion as a PR comment citing that guidance, since a published review body cannot be edited.
+- Publish the frame-aligned conclusion through the current exact-head workflow, citing that guidance.
+
+For a writing-only correction to your own published summary, GitHub supports
+[updating the review body](https://docs.github.com/en/rest/pulls/reviews#update-a-review-for-a-pull-request).
+Preserve the original body and evidence first, recheck its unchanged commit and
+current head, and check the revised complete body. Update only `body` on the
+existing review, then read back its id, commit, state and exact text and rerun
+check-result. This preserves the review instead of posting a duplicate formal
+conclusion for layout. It grants no authority to edit another review, change a
+verdict, dismiss findings or treat an old-head finding as current. A changed head
+or substantive conclusion follows the normal review workflow.
 
 ## Execute One Review Plan
 
@@ -101,7 +111,9 @@ For managed review, pass `--goal-id GOAL` and execute the packet's current
 `failure_attribution` (including `evidence_scope`) own CI observation and failure
 judgment. With `wait_for_ci=false`, never fetch, poll or wait for CI. Keep review
 verdict and merge readiness separate; do not substitute CI metadata for decisive
-changed-invariant evidence. Configure one Goal with `configure-goal --goal-id GOAL
+changed-invariant evidence. Follow the packet's diagnostic-row rule for unknown
+or red CI; do not invent a CI-success or exhaustive attribution requirement.
+Configure one Goal with `configure-goal --goal-id GOAL
 --no-pr-review-wait-for-ci --execute`; clear with
 `--clear-pr-review-configuration --execute`.
 
@@ -122,18 +134,29 @@ and return its URL. After APPROVE (incl. existing approval), execute
 owner/GitHub authority, preserving discussion and unresolved reviews. Merge routes through
 `loopx-pr-merge`; `APPROVE` is not merge authority; a public blocker belongs on the PR.
 
-Immediately before every merge, run `loopx --format json pr-review --goal-id GOAL
---repo OWNER/REPO --check-merge-readiness NUMBER@HEAD_OID`; require `ready=true`. Its compact
-Goal observation suppresses only unchanged requalification; material change reopens it, admin
-bypass never overrides this gate, and author fallback needs user authority.
+Immediately before every merge, run `loopx --format json pr-review --repo OWNER/REPO
+--check-merge-readiness NUMBER@HEAD_OID`; require `ready=true`. Pass `--goal-id GOAL`
+when the work is already Goal-managed; its compact observation suppresses only unchanged
+requalification. Standalone work requires no Goal and writes no Goal observation.
+Material change reopens qualification, admin bypass never overrides this gate, and author
+fallback needs user authority.
 
 ## Full PR Review And Bilingual Format
 
 Use each PR's current `review_template`, `reviewer_declaration` and
 `completion_gate.required_final_sections` to render a standalone full-PR review.
-The **详细中文评审** covers the entire PR in five sections (`动机`, `改动思路`,
-`具体改动`, `对主干的风险`, `我的整体评价`); a findings-only or blocker-only body is
-incomplete. Cover every changed surface and key symbols according to the current
+Write the main narrative, problem analysis, evidence and conclusion in connected
+Chinese prose. Retain accurate English technical terms such as head, diff,
+checkpoint and resume where they help; explain unfamiliar terms once. The packet's
+bilingual headings (`动机 / Motivation`, `改动思路 / Approach`, `具体改动 / Changes`,
+`对主干的风险 / Risks`, `我的整体评价 / Verdict`) and short finding labels can aid
+navigation. Existing Chinese-only anchors remain valid and are the fallback for
+older installed checkers; this does not change the body's primary language.
+Optional Problem / Evidence / Impact / Fix labels organize Chinese explanations.
+Use PASS / FAIL / UNVERIFIED validation states. Do not expand English labels into
+long English passages or duplicate the analysis in both languages. Avoid language
+ratios, dense paragraphs and repeated conclusions.
+A findings-only or blocker-only body is incomplete. Cover every changed surface and key symbols according to the current
 plan, not just the main finding. Open with the visible `body_marker` matching
 `result.reviewer`. The **英文简短结论** starts with `English verdict:` and the bare
 token `APPROVE` or `REQUEST_CHANGES`, followed by the head, finding and validation.

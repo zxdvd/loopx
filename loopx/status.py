@@ -127,10 +127,9 @@ from .control_plane.work_items.autonomous_candidates import (
 from .control_plane.goals.active_state_metadata import (
     parse_state_frontmatter,
 )
-# Explicit source parsing remains available to migration and fixture callers;
-# ordinary status obtains Task authority through the canonical read model.
+# Existing source/fixture callers retain the parser; ordinary status obtains
+# Task authority through the canonical read model.
 from .control_plane.todos.active_state_todo_parser import (
-    active_state_incomplete_warning as active_state_incomplete_warning,
     parse_active_state_todos as parse_active_state_todos,
 )
 from .control_plane.todos.active_state_todos import (
@@ -267,6 +266,7 @@ from .control_plane.todos.todo_semantics import (
 
 
 _PUBLIC_COMPAT_REEXPORTS = {
+    "parse_active_state_todos": "loopx.control_plane.todos.active_state_todo_parser",
     "DREAMING_ADVISORY_CLASSIFICATIONS": "loopx.control_plane.runtime.status_classifications",
     "TODO_PROJECTION_DETAIL_POINTER_SCHEMA_VERSION": "loopx.control_plane.work_items.project_asset",
     "TODO_PROJECTION_VIEW_SCHEMA_VERSION": "loopx.control_plane.work_items.project_asset",
@@ -1099,6 +1099,7 @@ def build_attention_queue(
     todo_snapshot: _CanonicalTodoSnapshot | None = None,
     current_registry: dict[str, Any] | None = None,
     registry_path: Path | None = None,
+    include_goal_channel_projection: bool = True,
 ) -> dict[str, Any]:
     def request_active_state_todo_fields(
         goal: dict[str, Any],
@@ -1166,6 +1167,7 @@ def build_attention_queue(
         include_task_graph=include_task_graph,
         goal_id_filter=goal_id_filter,
         include_stopped_goal_context=include_stopped_goal_context,
+        include_goal_channel_projection=include_goal_channel_projection,
     )
     if runtime_root is not None:
         for item in queue.get("items") or []:
@@ -1363,6 +1365,7 @@ def collect_status(
     activation_state_filter: str | None = None,
     agent_lane_id: str | None = None,
     allow_missing_registry: bool = False,
+    include_presentation_projections: bool = True,
 ) -> dict[str, Any]:
     with effect_runtime_request_scope():
         return _collect_status_read_model(
@@ -1380,5 +1383,6 @@ def collect_status(
             include_zcode_goal_eligibility=include_zcode_goal_eligibility,
             activation_state_filter=activation_state_filter,
             agent_lane_id=agent_lane_id,
+            include_presentation_projections=include_presentation_projections,
             context=build_status_collection_context(),
         )

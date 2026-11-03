@@ -1,7 +1,7 @@
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import type { TurnStep } from "../../data/turn-steps";
 import type { ChatProject, CollaborationReadback, LoopXModeSettings } from "../../data/chat-model";
-import type { BoundConversationTarget, ChatSessionSummary, PrivateConversation } from "../../data/chat";
+import type { BoundConversationTarget, ChatSessionSummary, BoundConversationSource, ChatReplyContext } from "../../data/chat";
 import type { TeamPlanAppliedOutcome } from "./team-plan-preview";
 import type { ActionReviewPlan } from "../../../../../../loopx/control_plane/presentation/action_review_plan.js";
 import type { GoalAcceptanceObservation } from "../../data/goal-acceptance-observation";
@@ -114,8 +114,11 @@ export type WorkspaceConversationDirectory = {
   /** null returns the conversation to the steward scope. */
   onSelect: (projectRef: string | null) => void;
   onOpenOriginal?: (target: BoundConversationTarget) => void;
-  bound?: { target: BoundConversationTarget; session?: ChatSessionSummary; source?: PrivateConversation;
+  /** Local manager entry discovery blocks sending, never Goal navigation. */
+  entryGate?: {unavailable: boolean; retry: () => void};
+  bound?: { target: BoundConversationTarget; session?: ChatSessionSummary; source?: BoundConversationSource;
     error?: string; retry: () => void };
+  managed?: {target: import("../../data/chat").ManagedConversationTarget; session?: import("../../data/chat").ChatSessionSummary; error?: string; retry: () => void};
 };
 
 export type WorkspaceTodo = WorkspaceAgentTodo & {
@@ -390,11 +393,13 @@ export type WorkspaceActionPreview = {
 };
 
 export type WorkspaceMessage = {
+  replyContext?: ChatReplyContext;
   createdAt?: string;
   goalDraft?: GoalDraft | null;
   activity?: string[];
   steps?: TurnStep[];
   collaboration?: CollaborationReadback;
+  collaborations?: CollaborationReadback[];
   agentLabel?: string;
   attachments?: WorkspaceImageAttachment[];
   id: string;
@@ -420,6 +425,7 @@ export type WorkspaceReturnDelivery = {
   request_revision?: number | null;
 };
 
+// Existing attachment wire shape; MIME distinguishes images and UTF-8 documents.
 export type WorkspaceImageAttachment = {
   dataUrl: string;
   id: string;
@@ -527,7 +533,7 @@ export type WorkspaceDrawerSelection =
   | { item: WorkspaceRun; kind: "run" }
   | { item: WorkspaceOutput; kind: "output" }
   | { item: WorkspaceActionPreview; kind: "proposal" }
-  | { goalId?: string; kind: "settings"; scope?: "machine" | "goal"; tab?: "appearance" | "capabilities" | "language" | "lark" | "machine" | "provider" | "steward" | "conversation" | "cadence" | "ownership" }
+  | { goalId?: string; kind: "settings"; scope?: "machine" | "goal"; tab?: "appearance" | "capabilities" | "language" | "lark" | "machine" | "provider" | "steward" | "conversation" | "cadence" | "ownership" | "background" }
   | {
       item: WorkspaceSchedule;
       kind: "schedule";
@@ -618,13 +624,14 @@ export type PersonalWorkspaceCallbacks = {
   onStartLoopX?: (operation: "start" | "resume", agentId: string, goalId: string,
     settings?: LoopXModeSettings) => void;
   onSelectAgent?: (agentId: string) => void;
-  onSelectAgentModel?: (agentId: string, modelId: string) => void;
-  onSelectAgentReasoningEffort?: (agentId: string, effort: string) => void;
+  onSelectAgentModel?: (agentId: string, modelId: string) => void | Promise<void>;
+  onSelectAgentReasoningEffort?: (agentId: string, effort: string) => void | Promise<void>;
   onSelectChannel?: (channel: WorkspaceChannel) => void;
   onSelectGoal?: (goalId: string | null, view: WorkspaceGoalTab) => void;
   onSelectTodo?: (todoId: string | null) => void;
   onSelectView?: (view: WorkspaceGoalTab) => void;
   onSelectWorkAgent?: (agentId: string | null) => void;
+  onSelectWorkSession?: (sessionId: string, replace?: boolean) => void;
   onOpenNotificationSettings?: (goalId?: string) => void;
   onFetchNotificationTargets?: () => Promise<Array<{ enabled: boolean; provider: string; target_name: string }>>;
   onSetupGoalChannel?: (options: { execute: boolean; goalId: string; target: string }) => Promise<{ ok: boolean; blocker?: string; public_summary?: string; status?: string }>;

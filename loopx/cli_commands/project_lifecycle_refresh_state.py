@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
@@ -29,6 +30,7 @@ from ..control_plane.goals.first_party_host_admission import (
     capture_first_party_host_goal_ref,
 )
 from ..control_plane.goals.source_session_registry_state import exact_goal_ref
+from ..control_plane.goals.vision_checkpoint import prepare_vision_refresh
 from ..control_plane.quota.settlement import (
     attach_settlement_progress,
     read_heartbeat_settlement,
@@ -404,6 +406,10 @@ def register_refresh_state_command(
         help="Print the refresh payload without appending.",
     )
     refresh_state_parser.add_argument(
+        "--settle-turn", action="store_true",
+        help="After verified writeback, execute the owed quota step once for this exact Turn; replay never creates another debit.",
+    )
+    refresh_state_parser.add_argument(
         "--no-global-sync",
         action="store_true",
         help="Do not refresh the shared global registry after writing the state run.",
@@ -475,7 +481,12 @@ def handle_refresh_state_command(
     goal_ref: dict[str, str] | None = None
     outcome_update = None
     outcome_update_result = None
+    goal_acceptance_preview = None
     try:
+        if getattr(args, "settle_turn", False) and not (
+            args.agent_id and args.turn_instance_id and bool(args.todo_id) != bool(args.replan_obligation_id)
+        ):
+            raise ValueError("--settle-turn requires --agent-id, --turn-instance-id and exactly one Todo/obligation binding")
         outcome_path = getattr(args, "goal_outcome_update_json", None)
         if outcome_path:
             if not args.agent_id:
@@ -506,6 +517,21 @@ def handle_refresh_state_command(
                 turn_instance_id=args.turn_instance_id,
             ),
         )
+        if agent_vision_packet is not None and (
+            outcome_update is not None or not merge_agent_vision_patch
+        ):
+            # Reject malformed complete input before any history lock or outcome
+            # refinement. Inline patches without an outcome update still merge
+            # with current history first. Reuse the typed owner; this preflight
+            # cannot authorize a transition or replace the original packet.
+            # Refresh still checks merged history and policy against current
+            # state, including whether a terminal stride is actually enabled.
+            prepare_vision_refresh(
+                agent_vision_packet, goal_id=args.goal_id, agent_id=args.agent_id,
+                existing_agent_vision=None, merge_patch=False,
+                require_path_delta_for_durable_change=False,
+                allow_terminal_stride_path=True,
+            )
         progress_observation = inline_progress_observation(args)
         reward_memory_reflection_json = str(
             getattr(args, "reward_memory_reflection_json", None) or ""
@@ -561,9 +587,14 @@ def handle_refresh_state_command(
             raise ValueError("--resume-external-sinks requires the original --turn-instance-id")
         if outcome_update is not None:
             from ..control_plane.goals.acceptance import refine_goal_outcome, public_goal_acceptance
-            outcome_update_result = public_goal_acceptance(refine_goal_outcome(
+            refinement_result = refine_goal_outcome(
                 registry_path=registry_path, runtime_root=args.runtime_root, goal_id=args.goal_id,
-                agent_id=args.agent_id, execute=not args.dry_run, **outcome_update))
+                agent_id=args.agent_id, execute=not args.dry_run, **outcome_update)
+            outcome_update_result = public_goal_acceptance(refinement_result, include_contract=False)
+            if args.dry_run:
+                # Preview the same ordered composition as execution: the typed
+                # refinement owner supplies the prospective acceptance facts.
+                goal_acceptance_preview = refinement_result["goal_acceptance_contract"]
         payload = refresh_state_run(
             external_delivery={"suppress": bool(args.suppress_external_sinks),
                                "resume_key": getattr(args, "resume_external_sinks", None)},
@@ -611,6 +642,8 @@ def handle_refresh_state_command(
             dry_run=bool(args.dry_run),
             sync_global=not bool(args.no_global_sync),
             goal_ref=goal_ref,
+            **({"goal_acceptance_preview": goal_acceptance_preview}
+               if goal_acceptance_preview is not None else {}),
         )
     except Exception as exc:
         payload = {
@@ -631,10 +664,22 @@ def handle_refresh_state_command(
                 agent_id=args.agent_id,
                 runtime_root=args.runtime_root,
             )
+            recovery = transition.get("context_recovery")
+            if fmt == "json" and os.name == "posix" and isinstance(recovery, dict):
+                from .context_machine import capture_context_recovery
+
+                reference = capture_context_recovery(recovery,
+                    runtime_root=resolve_runtime_root(load_registry(registry_path), args.runtime_root))
+                transition["context_recovery"] = {
+                    "received_context_id": recovery["received_context_id"],
+                    "current_context_id": recovery["replan_context"]["context_id"],
+                    "instruction": recovery["instruction"], **reference,
+                }
             payload["replan_transition"] = transition
-            payload["error"] += " Required transition: " + "; ".join(
-                transition["next_cli_actions"]
-            )
+            if transition["next_cli_actions"]:
+                payload["error"] += " Required transition: " + "; ".join(
+                    transition["next_cli_actions"]
+                )
     if outcome_update_result is not None:
         # This native effect precedes the ordinary writeback. Retain its receipt
         # even if later settlement fails; replay the identical operation once.
@@ -825,6 +870,7 @@ def handle_refresh_state_command(
                 )
             )
         if not material_refresh_ready:
+            _settle_requested_refresh(payload, args, registry_path, goal_ref)
             print_payload(payload, fmt, render_state_refresh_markdown)
             return 0 if payload.get("ok") else 1
         if payload.get("explore_result") is not None:
@@ -842,6 +888,7 @@ def handle_refresh_state_command(
         graph_sync = sync_explore_graph_after_material_refresh(
             registry_path=registry_path,
             goal_id=args.goal_id,
+            runtime_root_override=args.runtime_root,
             agent_id=args.agent_id,
             project=Path(args.project).expanduser() if args.project else None,
             state_file=Path(args.state_file).expanduser() if args.state_file else None,
@@ -913,5 +960,22 @@ def handle_refresh_state_command(
                 )
             ),
         )
+    _settle_requested_refresh(payload, args, registry_path, goal_ref)
     print_payload(payload, fmt, render_state_refresh_markdown)
     return 0 if payload.get("ok") else 1
+
+
+def _settle_requested_refresh(payload, args, registry_path, goal_ref):
+    if not getattr(args, "settle_turn", False):
+        return
+    from .refresh_settlement import settle_refreshed_turn
+
+    settle_refreshed_turn(payload, registry_path=registry_path,
+        runtime_root=resolve_runtime_root(load_registry(registry_path), args.runtime_root),
+        goal_id=args.goal_id, agent_id=args.agent_id, todo_id=args.todo_id,
+        replan_obligation_id=args.replan_obligation_id,
+        turn_instance_id=args.turn_instance_id, goal_ref=goal_ref,
+        delivery_workspace_path=(
+            Path(args.delivery_workspace_path)
+            if args.delivery_workspace_path else None
+        ))

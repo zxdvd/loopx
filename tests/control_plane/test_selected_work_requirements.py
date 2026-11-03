@@ -100,6 +100,44 @@ def test_inline_user_context_preserves_full_scoped_gates_without_granting_delive
         assert state.read_text() == state_text
         return
 
+    # The old implementation performs inventory plus one whole-source read per
+    # scoped User Todo. The optimized path must return identical exact bodies
+    # from one read, without changing scope or canonical authority.
+    from loopx.control_plane.work_items import context_readback
+    original_read = context_readback.list_goal_todos
+    expected_users = [original_read(registry_path=registry, runtime_root_arg=str(runtime),
+        goal_id="requirements-goal", role="user", status="open", agent_id="agent-a",
+        todo_id=todo)["todo"] for todo in ("todo_gate", "todo_user_action", "todo_global_action")]
+    bounded = original_read(registry_path=registry, runtime_root_arg=str(runtime),
+        goal_id="requirements-goal", role="user", status="open", agent_id="agent-a")
+    assert bounded["todos"][0]["text"] != gate_text, "ordinary inventories remain bounded"
+    reads = []
+
+    def counted_read(**options):
+        reads.append(options)
+        return original_read(**options)
+
+    monkeypatch.setattr(context_readback, "list_goal_todos", counted_read)
+    direct = context_readback._user_context(registry_path=registry, runtime_root=runtime,
+        goal_id="requirements-goal", agent_id="agent-a")
+    assert direct["todos"] == expected_users
+    assert len(reads) == 1, "scoped full User bodies need one canonical query, not N+1"
+    assert direct["authority_read"]["decision_read_from_provider"] is True
+    from loopx.control_plane.todos import goal_todo_projection
+    typed_read = goal_todo_projection.project_todo_read
+
+    def old_delivery(options):
+        result = typed_read(options)
+        if "payload" in result:
+            result["payload"].pop("full_text", None)
+        return result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(goal_todo_projection, "project_todo_read", old_delivery)
+        with pytest.raises(ValueError, match="unsupported by this runtime"):
+            context_readback._user_context(registry_path=registry, runtime_root=runtime,
+                goal_id="requirements-goal", agent_id="agent-a")
+
     packet = guard()
     channel = packet["interaction_contract"]["agent_channel"]
     users = channel["work_context"]["user_todos"]["todos"]
@@ -163,9 +201,11 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     state.write_text(
         goal_requirements + "## Agent Todo\n- [ ] Stale display: do only an easier check.\n",
     )
+    cli_bin = Path(sys.executable).parent / "loopx"
 
     def guard(*extra: str) -> dict:
-        code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "requirements-goal",
+        code, packet = run_json_cli_result("--cli-bin", str(cli_bin),
+            "quota", "should-run", "--goal-id", "requirements-goal",
             "--agent-id", "agent-a",  *extra,
             registry_path=registry, runtime_root=runtime)
         assert code == 0, json.dumps(packet, indent=2)
@@ -176,7 +216,7 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     before = state.read_bytes()
     # Run the actual default product prompt's guard: no capture/envelope opt-in.
     code, generated = run_json_cli_result("heartbeat-prompt", "--goal-id", "requirements-goal",
-        "--agent-id", "agent-a", "--codex-app", "--cli-bin", str(Path(sys.executable).parent / "loopx"),
+        "--agent-id", "agent-a", "--codex-app", "--cli-bin", str(cli_bin),
         registry_path=registry, runtime_root=runtime)
     assert code == 0 and generated["ok"], generated
     body = generated["task_body"]
@@ -224,12 +264,13 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     assert selected["todo_id"] == "todo_cursor_work"
     read = reads[-1]
     tokens = shlex.split(read["command"])
+    assert tokens[:3] == [str(cli_bin), "--cli-bin", str(cli_bin)]
     assert tokens[tokens.index("--registry") + 1] == str(registry)
     assert tokens[tokens.index("--runtime-root") + 1] == str(runtime)
     assert tokens[tokens.index("--todo-id") + 1] == "todo_cursor_work"
 
     def read_detail() -> dict:
-        result = subprocess.run([sys.executable, "-m", "loopx.cli", *tokens[1:]],
+        result = subprocess.run(tokens, cwd=REPO, env=env,
             capture_output=True, text=True, check=True)
         return json.loads(result.stdout)
 
@@ -275,7 +316,7 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     # The old observation remains an observation, not a rewritten current brief.
     assert reads[-1]["content"]["todo"]["text"] == expected
     missing_tokens = ["todo_missing" if token == "todo_cursor_work" else token for token in tokens]
-    missing = subprocess.run([sys.executable, "-m", "loopx.cli", *missing_tokens[1:]],
+    missing = subprocess.run(missing_tokens, cwd=REPO, env=env,
         capture_output=True, text=True, check=True)
     assert json.loads(missing.stdout)["not_found"] is True
     # Source reads are fresh, not snapshots of the earlier guard. Failure is

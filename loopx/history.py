@@ -68,7 +68,6 @@ from .presentation.markdown import (
     markdown_table_row,
     markdown_table_separator,
 )
-from .quota import goal_quota_with_spend_ledger
 from .registry import registry_goals
 
 STATUS_NEUTRAL_CLASSIFICATIONS = {
@@ -188,6 +187,7 @@ class RunIndexSnapshot:
     records: list[dict[str, Any]]
     raw_count: int
     digest: str | None
+    invalid_count: int = 0
 
 
 def now_local() -> str:
@@ -332,6 +332,7 @@ def load_index_snapshot(
     records: list[dict[str, Any]] = []
     positions: dict[tuple[str, str, str], int] = {}
     raw_count = 0
+    invalid_count = 0
     digest = hashlib.sha256()
 
     with stream:
@@ -344,8 +345,10 @@ def load_index_snapshot(
             try:
                 item = json.loads(line)
             except json.JSONDecodeError:
+                invalid_count += 1
                 continue
             if not isinstance(item, dict):
+                invalid_count += 1
                 continue
 
             key = (
@@ -368,6 +371,7 @@ def load_index_snapshot(
         records=records,
         raw_count=raw_count,
         digest=f"sha256:{digest.hexdigest()}",
+        invalid_count=invalid_count,
     )
 
 
@@ -403,17 +407,14 @@ def collect_history(
     registry: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from .capabilities.machine_configuration.builtins import (
-        build_builtin_machine_configuration_registry,
+        read_builtin_goal_machine_configuration,
         project_goal_with_builtin_machine_configuration,
     )
-    from .capabilities.machine_configuration.store import read_machine_configuration
+    from .quota import goal_quota_with_spend_ledger
 
     if registry is None:
         registry = load_registry(registry_path)
-    machine_configuration = read_machine_configuration(
-        runtime_root,
-        registry=build_builtin_machine_configuration_registry(),
-    )
+    machine_configuration = read_builtin_goal_machine_configuration(runtime_root)
     registry_goal_rows = registry_goals(registry)
     registry_goal_digests = {
         str(goal.get("id")): goal_registry_digest(goal)

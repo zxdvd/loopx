@@ -7,6 +7,145 @@ These use the S5/S11
 [research episode assessment](../architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md#evidence-based-episode-evaluation-proposed-refinement).
 It does not change solver prompts, benchmark scoring, checkpoints or research budgets.
 
+## Researcher synthesis in the existing reader
+
+New registrations using the default configuration and CLI previews request
+`research_synthesis: true` and `research_synthesis_revision: 2` in their
+frozen model configuration. Explicit analysis uses the same observer call to
+produce `research-episodes-synthesis-v2`: the six episode judgments plus a
+source-bound `synthesis`. There is no extra per-finding model call. The ordinary
+Goal view follows **results → research report → research history**. Native
+measurements and unknown retention appear first; the saved report adds a concise
+account, expandable findings and a prioritized question. **Read deeper** opens
+findings beside their interpretations and competing explanations. A separate
+report tab compares proposed interventions and controls with distinguishing
+predictions and disconfirming results. Wide layouts use two columns; narrow
+layouts preserve the same reading order vertically. Body text stays readable.
+Individual judgments and limitations remain available as secondary review.
+Direct citations open exact originals and return focus to their source control;
+the history action returns to the complete loaded research history without
+changing the selected evidence pack. Reading either layer, switching report
+tabs or opening an original never executes an analysis or experiment.
+
+The source reader displays saved completed-command output and text-only
+`function_call_output` / `custom_tool_call_output` records in source order.
+Direct shell-result envelopes show their literal output and observed exit code;
+a missing exit code remains unknown. Command arguments and the complete original
+record stay available on demand. Mixed, malformed or unsupported content falls
+back to the complete literal citation. Unknown nested transport stays text;
+reading never recursively interprets it or turns an exit code into acceptance.
+
+The presentation draws on composable inspection in
+[Distill's interpretability article](https://distill.pub/2018/building-blocks/)
+and responsive comparison layouts in the
+[Observable Framework documentation](https://observablehq.github.io/framework/getting-started#layout).
+These inform the design; they do not establish a measured comprehension or
+reading-speed benefit for this reader. Fixed application templates render the
+qualified text; the observer does not generate executable HTML or JavaScript.
+
+The synthesis has at most three findings and two proposed next experiments.
+Each item names the supplied episodes and supporting absolute source lines.
+The typed owner rejects missing evidence, unknown episode/source identities and
+out-of-range citations. Cross-episode synthesis may use only the named episodes'
+evidence; individual metric citations retain their narrower episode scope.
+These checks verify binding, not entailment or causal validity. The result stays
+an uncalibrated Agent interpretation; proposals grant no execution authority.
+Insufficient evidence can yield no findings or experiments, with the gap stated
+in the summary. Useful negative evidence and observed late gains remain visible.
+
+Existing registered configurations without this field keep their original
+prompt, analysis key, schema and saved results. They are not automatically
+upgraded or rerun. For an explicitly requested synthesis of an older study,
+register a new version with `config.research_synthesis: true` and
+`config.research_synthesis_revision: 2`; keep the previous
+pack and its failures. The Python preparation adapter also accepts
+`research_synthesis=False` to reproduce the legacy method. To disable new
+synthesis, register with that field false or an explicit legacy configuration;
+no source history is deleted. A language change retains the existing independent
+language-specific cache and execution boundary.
+
+Revision 2 refines the existing report fields, without new verdicts or a second
+analysis call. It asks the observer to reconcile completed comparisons and
+follow-up decisions before recommending work, preserve paired gains and
+regressions, and distinguish configured limits from actual completed work.
+Controls and predictions should explain whether the intervention engaged and
+which missing observations would prevent interpretation. Equal seeds or time
+limits do not alone prove matched work: distinguish fixed-work from wall-clock
+comparisons and check the relevant coupling, allowing the intended state/path
+divergence. A justified repeat with contemporary controls can still be useful.
+These are model reasoning instructions; the validator does not certify that the
+answer followed them or that a proposed experiment is scientifically sufficient.
+
+Optional revision 3 (`config.research_synthesis_revision: 3`, with synthesis
+enabled) adds case-selection reasoning in the existing `why_priority` and
+`controls` fields. When proposing concrete cases, explain their observed
+selection basis, changed baselines, useful supporting or contrary cases, and
+missing evidence. Separate a retrospective diagnostic pilot from a predeclared
+sample and its broader generalization. A pilot need not test every case, and
+matching labels do not establish independent or comparable observations.
+Register a successor pack and explicitly generate its report through the same
+workbench; browsing does not invoke a model. Disable this guidance by choosing
+a revision 2 or legacy pack. Default producer requests remain revision 2, and
+frozen v1/v2 prompts, keys, results, failures and usage are unchanged. Revision 3
+adds no result fields, new model call per finding, solver behavior or scientific
+qualification gate. Its case-selection rationale remains uncalibrated advice.
+
+可选第3版沿既有优先级理由／控制条件说明案例选择依据、基线变化、反例和缺失证据，
+区分事后诊断试点与预先定义样本，不把少量试点外推为普遍收益。接续pack需显式生成，
+浏览不调用模型；选择第2版或旧pack即可停用。默认仍为第2版，旧报告、失败和用量不改；
+新增指引不等于模型已遵从或科学有效性获得认证。
+
+Optional revision 4 (`config.research_synthesis_revision: 4`) retains revision 3
+and asks which decision the next step should change before choosing its design.
+Candidate selection, component attribution and interaction testing answer
+different questions. Reuse completed controls and negative evidence; prefer a
+staged comparison when it can resolve the immediate uncertainty, and state what
+observation would justify a broader design. A factorial or replication is useful
+when the decision needs it, rather than an automatic response to multiple changes.
+Known case/arm/repetition limits and preparation, validation and analysis costs
+belong in the existing priority/intervention fields. Configured allowance is not
+actual elapsed cost; unknown costs remain unknown. Existing evidence can justify
+no new experiment. These are observer instructions, not an enforced minimization
+rule, a scientific qualification or execution authority. Register and explicitly
+analyze a successor pack; select an older pack to disable the new guidance.
+Default requests remain revision 2. Frozen v1/v2/v3 requests, jobs, results,
+failures and usage retain their identities and are never automatically upgraded.
+
+可选第4版先明确下一步要改变的决策，区分方案选择、组件归因与交互检验；复用已完成
+对照和负结果，能分阶段判别时说明先做什么、出现什么证据才扩大设计。更全面的设计
+或复验须说明决策需要；配置预算不当作实耗，准备／验证／分析的未知成本保留未知。
+已有证据足够时不强加新实验。这是观察者指引，不是强制最小化、科学认证或执行授权。
+须注册接续pack并显式生成；选回旧pack即可停用。默认第2版和旧版身份、失败、用量不改。
+
+New default producer requests persist revision 2. Previously stored synthesis
+configurations that omit the revision retain the exact v1 prompt, key and
+language caches; reading or retrying them does not upgrade the method. Explicit
+custom curator configurations also remain v1 when the revision is omitted.
+To use revised guidance on an existing case, register a successor pack and
+explicitly run that new analysis in the same workbench. Keep both reports and
+their separate failures and usage. No new configuration screen, automatic
+generation or experiment execution is introduced.
+
+新版指引要求先核对已完成比较和后续取舍，再提出下一步；把配置上限、实际完成工作及
+干预是否生效分开，并保留配对改善／回退和局部结果未转移到原生测评的边界。相同种子
+或墙钟期限不等于工作量匹配；应核对相关耦合，也允许机制本身造成后续路径分歧。
+新生产请求保存第2版；缺少版本字段的旧配置保持原提示、标识和语言缓存。接续分析须
+另行明确生成，原报告、失败与用量保留。引用资格和指引文字均不构成科学有效性证明。
+
+Curators must admit relevant prior feedback into each episode that needs it.
+A source existing elsewhere in the pack does not authorize a metric to cite it.
+When prior context or submitted-code excerpts are missing, revise the frozen
+input and disclose the retrospective selection; do not weaken citation checks
+or relabel the old failed attempt. Provider-observed usage now survives output
+parsing and qualification failure. Missing usage stays unknown, and retry
+archives the failed output, receipt and observed usage before a new attempt.
+This does not reconstruct unmeasured historical usage or complete monetary cost.
+
+普通阅读依次呈现指标、研究汇报和完整研究历程；汇报先给概览和可展开结论，「深入解读」
+再用并排对照展开观察／竞争解释及实验条件／预期区分／反证，窄屏保持原顺序纵向阅读。
+两层复用同一结果和原文入口，浏览不触发模型。新分析仍使用既有授权、
+成本、取消与重试边界；旧方法及失败记录保留，引用完整性不代表机制已获证实。
+
 The Goal reader requests `output_language` (`zh` or `en`) from the current
 interface language on reads, explicit execution/retry, cancellation and citation
 readback. The typed assessment owner binds it and its presentation instructions
@@ -20,6 +159,209 @@ Requests without a language retain their original identity and stored artifacts;
 the frontend does not present an unspecified or other-language result as a new
 analysis in the selected language. Output-language metadata records the request,
 not independent verification of a model's translation or judgments.
+
+### Native results as explicit analysis context
+
+`--native-outcomes-json` alone supplies display facts and preserves the existing
+analysis key. To let a new analysis interpret the same source-bound results,
+the curator also includes that complete JSON capture as a normal verified source
+in `input.sources`, then binds its source id:
+
+```json
+"native_outcomes_source_id": "native-capture"
+```
+
+The bound source starts at line 1 and contains a
+`trajectory_native_outcomes_v1` capture with the same Goal/case/run/revision/window.
+Use the same capture for `--native-outcomes-json`; conflicting readback is refused.
+The existing native-measurement owner validates scope, validity, direction,
+retention and citations. Its projection enters the ordinary observer request,
+including unknown retention and the distinction between best, last and retained
+results. A context-only JSON source is not repeated beside that projection.
+The context constrains interpretation; it does not expand the assessed sample
+or permit metric/synthesis citations outside their declared episode sources.
+
+This explicit input binding and its instructions participate in the analysis
+identity. Changing the binding or captured evidence requires reassessment through
+the existing explicit analysis action; registration, reading and language changes
+do not launch a model. Omission preserves old prompts, keys and results. Keep the
+old pack and observed failures; removing the binding in a new version disables
+this context without rewriting history. Source changes retain historical readback
+and block execution until a new verified pack is registered. Supplying correct
+context does not prove model entailment, causal validity or comprehension benefit.
+
+原生结果默认仍是展示资料；只有在新分析输入中明确绑定完整来源，才作为模型上下文。
+同一原生 owner 校验指标方向、范围、保留及引用，未知保持未知，最佳／最后值不代替
+实际保留。绑定变化需显式重新分析，浏览不执行；旧报告与失败保留，引用范围不扩大。
+
+### Whole-history presentation language
+
+A trusted curator can include the complete authorized Explore history read as
+another verified source, then set the optional input binding:
+
+```json
+"display_snapshot": {
+  "schema_version": "research_display_snapshot_v1",
+  "source_id": "history-capture",
+  "source_namespace": "local"
+}
+```
+
+That source is the complete JSON history page (`ok`, `goal_id`, `items`, `total`,
+`next_cursor: null`), consolidated from the same server snapshot without dropping
+pages or duplicate/conflicting identities. Use the actual physical source namespace
+for linked Goals; `local` denotes the ordinary local Goal. The existing trusted
+pack-registration path still verifies full-file bytes and literal text. The
+renderer cannot register a source or submit free-form strings for translation.
+This binding creates no Goal, worker, Explore record or new capability.
+
+An explicit language-specific analysis translates narrative fields from every
+captured event, including historical revisions: node/route questions, finding
+titles, plain summaries, observations, interpretations, applicability, declared
+changed/stopped/retained lists and recorded change reasons. Structured labels,
+statuses, identities, versions, measurements, timestamps and references retain
+their original owners. A history capture does not make every event an assessment
+episode or change the six metrics' declared sample and denominator.
+
+The existing analysis job owns execution, timeout, cancel, explicit retry, cache
+and observed usage. There are no per-card calls or translation scheduler. A
+display-only capture is supplied once as fields rather than duplicated in the
+prompt; evidence actually used by episodes retains its numbered citation text.
+The same analysis key binds the whole input, output language and display method.
+Fields use content-bound opaque identities. Literal code, links, numeric tokens
+and technical identifiers are protected; missing, duplicate or corrupt rows fall
+back to the original with explicit partial/invalid coverage. This mechanical
+check does not verify linguistic quality, causal meaning or model calibration.
+
+For ambiguous compact notes, the curator can add `display_snapshot.contexts`
+rows with `event_id`, `field` and `citations` (existing `source_id`, absolute
+inclusive `first_line`/`last_line`). Bind only a narrative field in that captured
+snapshot and verified source ranges. Empty evidence, duplicate bindings, missing
+fields/sources and out-of-range lines are rejected. The same explicit analysis
+reads those numbered ranges to resolve terms, units and referents; it must not
+import later outcomes, new measurements or stronger certainty into the original
+field. Context evidence is supplied once through the existing source pack.
+The versioned display field retains `context_citations`; equal text with different
+context does not share a translation identity. Context additions, corrections or
+removal invalidate reuse. Omission preserves existing prompts and identities.
+The original source reader and existing job budget, cancellation and retry remain
+the entrypoints; neither a context binding nor an ordinary read launches a model.
+
+压缩记录有歧义时，可由原输入整理者把准确事件/字段关联到已有证据的具体行。
+同一次明确分析据此解释术语、单位和指代，不能把上下文的新结果补写成原记录结论。
+关联随展示产物保存并参与版本隔离；不同上下文不共用同一译文。没有关联时沿用原路径，
+字面校验和来源关联仍不等于译文已获独立语义验证。
+
+For a large capture, the curator can set the optional
+`display_snapshot.translation_encoding: "source_text_aliases_v1"`. The same
+owner requests one translation per exactly equal original string using compact
+content-bound identifiers, then restores each original event/field separately.
+Different literal numbers or identifiers never share an alias merely because
+their masked text looks alike. Coverage still counts all original fields,
+including every historical revision. No text is summarized or truncated and no
+extra model call is created. The explicit encoding participates in the analysis
+identity; omission preserves already saved direct-field jobs and their failures.
+For captures with compact prose inside protected spans, use
+`"source_text_aliases_with_literals_v1"`. It retains the same alias mapping and
+exact-token checks, and supplies each row's protected original literals as
+read-only model context. The prompt asks for their meaning in the output
+language, with exact source terms retained, rather than leaving failure, loss or
+uncertainty opaque inside a placeholder. It grants no tools or source authority.
+This explicit encoding has a distinct analysis identity; prior direct and alias
+jobs remain unchanged. Context availability does not certify translation quality:
+read the resulting language and negative/uncertain claims, not only coverage.
+When those compound terms also hide numbers, the explicit
+`"source_text_aliases_with_literal_values_v1"` encoding additionally supplies
+`explanation_numbers`. The translation may restate each listed exact signed
+component once in readable prose while retaining every original placeholder.
+For example, a compact trial/check term can retain its source spelling while
+explaining the trial number and failed-check count in the interface language.
+Code, hashes and links contribute no explanation numbers. Changed signs,
+rounding, new values and excess repetitions fail the field check and retain its
+original. This is lexical integrity, not verification of units, referents or
+scientific meaning: ambiguous glued digits must remain ambiguous rather than
+being guessed into counts. The existing job, language selection, original-text
+reader, partial coverage and explicit execution boundaries are unchanged.
+This encoding has its own analysis identity. Existing direct, alias and
+literal-context artifacts keep their original preparation and remain readable;
+viewing an old result does not upgrade it or launch a new analysis.
+The explicit `"source_text_aliases_with_literal_values_v2"` variant retains those
+exact-value checks and asks the model to explain context-bound quantities in
+ordinary prose, including the exact permitted number and its referent. Keeping
+only an opaque source term in parentheses is insufficient. Unknown meanings stay
+unknown; supporting preparation steps must not become new claims in the field.
+This is a model instruction, not a semantic validator. Earlier encodings retain
+their original prompts and identities; selecting this variant requires a new
+explicit analysis with separately recorded usage.
+
+显式数值编码 v2 要求把有来源语境支持的数量及其所指写成可读正文，仍保留原始标记和
+准确数值限制；未知所指不猜测，不能把支持材料的准备步骤补成原记录的新行动。这不是
+机器语义校验。旧编码及结果保持，新版本仅随明确分析生成并单独记账。
+
+The explicit `"source_text_aliases_with_literal_values_v3"` variant adds a
+generation-time fidelity pass over each row's permitted numeric spellings:
+leading signs, precision and percent suffixes stay exact, while spelled-out units
+are explained in the output language. An adjacent topic cannot resolve an
+ambiguous referent without supporting field-bound evidence. This remains model
+guidance; the exact-literal qualifier and original-text fallback are unchanged.
+Its frozen prompts and identities remain unchanged.
+
+显式数值编码 v3 增加生成时的逐项忠实性核对：正负号、精度和百分号按允许的原始写法
+保留，文字单位用目标语言解释；不能仅凭邻近主题补全含糊所指。这仍是模型指导，
+既有字面校验和原文回退不放宽，已保存的v3提示和身份保持。
+
+New CLI preparations and default pack registrations now select
+`"source_text_aliases_with_literal_values_v4"` when a captured display snapshot
+has no explicit encoding. It retains v3 fidelity guidance and asks for idiomatic
+prose with context-appropriate terminology: input groups, repeated measurements,
+relative percentages and percentage-point changes keep their distinct meanings.
+Explain established quantities directly, without commentary about source-token
+encoding or a duplicate English paraphrase. Preserve each required source token
+once, the complete meaning and any unresolved referent or unit.
+
+The normalized input saves this choice before analysis. Explicit encodings and
+configurations, including v3, and frozen inputs keep their exact prompts, keys,
+schemas and artifacts. Reading or refreshing them never upgrades or starts an
+analysis. This extends generation guidance in the existing analysis job; it
+adds no translation editor or revision workflow. Literal validation is unchanged
+and cannot certify terminology, semantic fidelity or comprehension. Original
+text remains available for comparison; model adherence and installed adoption
+require their own evidence.
+
+新CLI准备和默认pack登记在快照未指定编码时采用v4，先把选择保存到版本化输入。
+它保留v3忠实性指导，要求用自然语言说明有依据的数量，按语境区分样本组与执行队列、
+输入与重复测量、相对百分比与百分点；不再解释源标记如何编码或拆分，也不重复附英文
+释义。原始标记仍保留一次，完整含义、条件、失败和未明所指不省略。
+显式编码／配置和历史输入的提示、身份、结构及产物保持，浏览与刷新不升级或执行。
+译文改进沿既有分析生成，不增加编辑器或修订流程。字面校验不能证明术语、语义或理解
+质量；原文仍可核对，模型实际遵从和正式采用须另外验证。
+
+Translated prose is applied to decoded narrative fields; it is never serialized
+and reparsed as an Explore decision. Owner-format labels or list markers inside
+model text cannot change the original outcome, eligibility or list cardinality.
+
+The qualified `research_display_v1` sidecar records source identity, language,
+snapshot key, exact source text per translated field and coverage. The reader
+hashes its normalized complete history before applying it. A different Goal,
+source, language or corrected/deleted/added event cannot borrow the translation.
+Changed/unreadable source bytes keep the result historical. The whole-page
+original switch and individual original findings preserve direct readback;
+ordinary browsing, expansion, reload, source refresh and language switching never
+start a model. A pack without this optional binding keeps its prior identity,
+output contract and episode-only localization; it does not claim whole-page
+translation. An absent or failed new job leaves the original history readable.
+For a partial result, **Reanalyze to complete translation** explicitly retries
+the whole existing job with new analysis usage. Prior results and receipts are
+archived before that attempt. A running, failed or cancelled retry keeps the
+last successful result readable, labelled as previous; its own usage stays bound
+to that saved attempt while the current job's state remains distinct. A complete
+successful result continues to reuse its cache, even if retry is requested.
+
+整体正文译文沿同一次深度分析生成，覆盖固定快照中的问题、决策、结论及历史版本。
+它只属于展示产物，不改原始记录、状态、指标、引用和执行权限。缺失或校验未通过的
+字段回退原文并显示覆盖；内容、来源或语言不匹配时不套用旧译文。浏览、展开、刷新和
+切换原文不调用模型，失败和取消沿既有分析任务恢复。机械完整性校验不等于译文已经
+独立校对，也不等于实际收益或因果结论已获验证。
 
 The Codex observer reuses native Chat's shared authenticated HTTP transport.
 Credentials and refresh remain with Codex's existing signed-in account; the
@@ -87,6 +429,36 @@ Ancestor response usage is deduplicated, but processing inherited context again
 is new cost. Analysis-job usage is separate from solver and native-evaluation cost.
 Never impute missing dollars from an unverified model price.
 
+### Select evidence around the research decision
+
+For a mechanism or attribution question, a submission neighborhood is a locator;
+the relevant decision can span earlier turns. Within the authorized history,
+follow the hypothesis through candidate design, comparison, selection and actual
+subsequent work. Include the source-bound baselines and candidate versions,
+inputs and budgets, completed results with regressions or failures, and the
+action that used or rejected them. Keep missing links unknown. Nearby messages
+and a reported plan alone do not establish this chain.
+
+Describe this coverage in `selection.rule` and bind the selected literal ranges
+through the existing episode `source_ids`. Early/middle/late sampling can still
+locate useful episodes; it does not establish that their immediate neighbors
+contain the experiments behind a decision. A judgment of insufficient supplied
+evidence does not establish that the experiment never happened in the run.
+
+Before proposing another comparison, reconcile it with applicable recorded
+designs and outcomes. Prioritize a missing condition, unresolved counterexample
+or necessary repeat when earlier comparisons already address part of the
+question. Preserve their input, timing and reuse limitations; local evidence
+can refine a hypothesis without allocating a native gain or proving a framework
+effect. Keep measured late gains visible while their mechanism remains open.
+
+Choose bounded excerpts that preserve the decision and its limitations. Reuse
+source references instead of repeating transport wrappers or replacing original
+evidence with a model summary. Added evidence belongs in an explicit successor
+pack; preserve the previous report, failures and usage. These are curator
+judgments, beyond automatic citation-range validation, and grant no analysis or
+experiment execution authority.
+
 ## Producer and consumer boundary
 
 ### Continuing a frozen analysis
@@ -104,6 +476,14 @@ previous and current coverage, and changed judgments after completion. Previous
 versions remain accessible through the same reader and browser history.
 Reading, registering or refreshing a successor never starts analysis. A failed,
 cancelled or concurrently running successor does not replace a valid base result.
+
+`compared_pair_count` is the number of shared episode/metric pairs in two
+qualified outputs. It is `null` when either output is unavailable; zero means
+there are no shared judgments, not that conclusions stayed unchanged. Changed
+judgments are shown with this denominator, separately from added/removed eligible
+pairs. Older projections without the count remain unknown in the reader.
+These are structural version facts, not matched scientific comparisons or
+evidence of analysis quality.
 
 The typed comparison reuses a qualified output only when literal excerpts,
 source identities/paths/line positions, episode questions, eligibility,
@@ -173,6 +553,20 @@ not establish fast-mode delivery or a speedup. The CLI uses an ephemeral session
 ignores user configuration/rules, disables shell tools and web search, and passes
 only the evidence pack in its prompt. It is not a security sandbox for hostile
 executables or an authorization to read arbitrary machine files.
+
+New CLI preparations and default pack registrations use
+`config.output_schema_revision: 2`. Their generation schema binds each metric
+row to a declared episode, its eligible metrics and its own source IDs. Display
+context remains separate evidence and cannot widen a metric's citation scope.
+Post-generation validation still checks ranges, completeness and claim evidence;
+schema acceptance does not prove a citation supports a judgment. Explicit frozen
+configurations without this revision retain their original schema, key and saved
+results. Selecting revision 2 creates a new analysis identity and needs explicit
+execution; reading never upgrades a job or reuses a failed artifact as success.
+
+新准备的 CLI 分析及默认登记采用输出格式版本 2，在生成时绑定片段、适用指标与该片段
+的来源范围。原有引用行范围和结果校验保留；格式通过不代表论据成立。旧配置、结果和
+失败记录保持原样，新版本须明确执行，普通读取不升级或启动分析。
 
 The command runs synchronously, with a default 900-second analysis timeout. A host
 may supervise it asynchronously and read its immediate receipt:
@@ -249,6 +643,46 @@ and citations/method/cost on demand. CLI success alone does not complete that
 journey or qualify the model assessor.
 
 ## Measured solver session cost (optional)
+
+### Find expensive Turns and inspect their evidence
+
+In a Goal's **Research** view, select a registered capture with solver usage.
+The first screen keeps aggregate cost and coverage together; expand **Sources
+and usage**, then **Find time and input hotspots** to inspect individual Turns.
+No analysis execution or model call is needed for this path.
+
+![Research entry with measured totals and unknown attribution](../images/research-turn-costs-overview.png)
+
+Choose **Most input**, **Longest elapsed** or **Chronological**. Each page shows
+at most eight Turns with elapsed time, input, its cached subset, uncached input
+and output. Cached input is already included in input. An unfinished Turn is
+labelled observed-only; a dash means unavailable, never zero. The following
+synthetic example puts the largest input Turn first, even though another Turn
+took longest.
+
+![Turn input hotspot and cached versus uncached counters](../images/research-turn-costs-desktop.png)
+
+**Counter evidence** opens the existing source reader. It shows the preceding
+cumulative counter observation, this Turn's start, its latest counters and its
+completion when present, with original line numbers and capture digest. These
+are filtered counter/lifecycle fields, not a contiguous transcript: prompts,
+tool content and account metadata are excluded. Escape closes the reader and
+returns focus to the selected Turn. Sorting, paging and evidence reading also
+work in the narrow layout.
+
+![Narrow Turn cost reader](../images/research-turn-costs-mobile.png)
+
+The read endpoint accepts only the registered Goal, pack, analysis key and Turn
+identifier. It verifies the complete source digest before returning evidence;
+a missing or changed source stays unavailable rather than being substituted.
+
+This inspection compares Turns only within the selected capture. Turn input
+is **not** control-layer input; the separate measured LoopX input share retains
+its own coverage rules. Elapsed time includes tools, waiting and orchestration.
+Different source revisions, capture windows and incomplete runs are not matched
+experiments. These counters do not establish waste, monetary cost, avoidable
+time or a causal benefit from LoopX. The screenshots use synthetic data from the
+retained `research-turn-costs` browser scenario, not a live benchmark.
 
 ### Native outcome readback (optional, separate from analyzer judgments)
 
@@ -395,7 +829,7 @@ counter observations are differenced across Turns; summing the cumulative
 part of input, and reasoning is part of output, not another additive cost.
 
 Complete counter histories use the existing private local snapshot transport
-when they exceed the ordinary 2 MiB RPC wire. Only this explicitly allowed
+when they exceed the ordinary [8 MiB RPC wire](canonical-snapshot-pagination.md#shared-rpc-byte-budget). Only this explicitly allowed
 method opts in; reduced snapshots retain the 64 MiB ceiling and digest checks.
 Oversized captures fail explicitly rather than dropping earlier Turns.
 
@@ -490,6 +924,10 @@ It grants no source-Goal lifecycle, conversation, scoring or solver writes.
 Stop and restart the reader without the option to disable local execution;
 historical packs remain on disk. Cancel running analysis through its existing
 action before stopping the server.
+Cancellation uses the prepared source namespace, original Goal and existing
+local pack/job identity, so it remains available when the original source is
+offline. Starting or retrying analysis still requires a fresh source read and
+current registered membership.
 
 The trusted curator registers authorized inputs through the existing
 `trajectory-pack-register` command. For each source, use runtime root
@@ -565,3 +1003,196 @@ old observations stay readable. The builtin benchmark-toolkit provider and its
 TypeScript reducer retain ownership, with Python restricted to scoped file
 reading and transport. There is no new telemetry, accounting store or scoring
 policy.
+
+### Reconcile request and compaction coverage
+
+New usage captures also inspect persisted Codex `token_usage_record` and
+`compacted` counters when present. The supplemental
+`request_coverage.method=codex_request_reconciliation_v1` projection deduplicates
+response identities, verifies per-Turn and session cumulative totals, and
+reconciles every session-counter observation against a stable captured basis:
+`all_requests` includes compaction and `ordinary_requests` excludes it. Equal
+prefixes retain both candidates until informative evidence distinguishes them;
+zero compaction or otherwise indistinguishable evidence yields `undetermined`.
+Changing basis within a capture is unavailable, as is any new unique request
+after its final session-counter observation, including a zero-token request.
+The additive `counter_basis` field is absent on historical saved projections;
+readers keep that basis unknown without rewriting the original capture.
+A compaction's `latest_token_usage_record` is a mirror of its linked request,
+never another charge. Input includes cached input; output includes reasoning.
+
+Research → Sources and usage keeps **Session counters** on their original basis
+and shows **Request coverage** separately: recorded request totals and the
+compaction subset. Do not add these totals to one another or to repeated pack
+captures. This diagnostic does not change Goal accounting, provider invoices,
+scoring, completion admission or model execution. Even verified reconciliation
+cannot establish unpersisted requests, other sessions, evaluator costs or money.
+
+Missing request fields, conflicting responses, mismatched prefixes, unresolved
+compaction links and inconsistent counters produce unavailable request coverage,
+with no speculative request totals. Independently valid session counters remain
+readable. Hosts without request records and previously saved packs remain
+unchanged; absent coverage means unknown, not zero compactions. Malformed JSONL,
+including a truncated final record, still rejects registration. The existing
+complete-session default and explicit unfinished-Turn opt-in both remain in force.
+
+Only allowlisted identity/counter fields cross the Python file adapter into the
+existing TypeScript owner; replacement history and response text are excluded.
+Registration retains the source hash, and changed or missing sources mark the
+saved capture historical. Re-registering a source with this additional
+projection can create a new pack identity; old packs are never rewritten.
+
+### LoopX packet share of model input
+
+Research → Sources and usage also exposes **LoopX input share**. For the same
+reconciled requests and capture window, the metric is:
+
+`sum(LoopX packet input tokens) / sum(all request input tokens)`
+
+Both include cached input. Reprocessed packet context counts in each request;
+duplicate receipts and compaction mirrors count once. A compaction request is
+not automatically all LoopX input. The separate uncached share requires an
+explicit cache attribution, rather than charging every LoopX token as uncached.
+This is a measured resource share, not a percentage loss of task effectiveness,
+avoidable time, monetary cost or LoopX's causal impact. Compare native outcomes
+and complete costs separately; a lower packet share alone is not an improvement.
+
+The existing frozen usage JSONL import accepts an optional **host-produced
+attribution receipt**, bound to a native `token_usage_record` in the same
+capture. For example, a synthetic receipt for a request with 100 input tokens:
+
+```json
+{"type":"loopx_input_token_attribution","payload":{
+  "method":"provider_input_token_attribution_v1",
+  "session_id":"synthetic-session","thread_id":"synthetic-session",
+  "turn_id":"synthetic-turn","root_turn_id":"synthetic-turn",
+  "response_id":"synthetic-response",
+  "input_tokens":100,"loopx_input_tokens":20,"loopx_cached_input_tokens":12
+}}
+```
+
+The host is responsible for classifying the actual delivered packet spans and
+counting them on the **same provider token basis** as that request's input.
+Count each span once even when several LoopX components describe it. References
+or packets emitted but not consumed are not processed input. Do not classify
+arbitrary prose or commands as LoopX usage by substring matching, divide byte or
+character counts into estimated tokens, or append invented receipts to original
+client logs. A recorder may export an immutable annotated capture; preserve the
+original log separately. The import validates identities and arithmetic, not
+the truth of a host's attribution or its billing completeness. Raw prompts,
+packet text and account metadata never cross the counter transport.
+
+This reader does **not** add instrumentation to Codex or reconstruct attribution
+from historical counters. Existing Codex captures without these receipts retain
+their exact saved projection and show **uncaptured**, not zero. Hosts capable of
+producing attribution use the existing `--usage-jsonl` registration path; no
+model call, second accounting store or new configuration is introduced.
+
+With provider receipts, the TypeScript usage owner adds
+`solver_usage.projection.loopx_input`. Every receipt must bind the original session, response,
+Turn/root identity and input total. Counts must fit the native input/cache
+subsets; conflicts withhold only attribution, leaving valid session and request
+counters intact. Complete coverage shows the ratio. Partial coverage retains
+the attributed request/input denominators and withholds the whole-window ratio;
+its optional bounds allocate missing request input as none/all LoopX, **not a
+confidence interval**. Zero input has an undefined ratio. Missing cache
+attribution keeps the uncached ratio unknown. Source changes retain historical
+values with the existing warning and never borrow another pack's measurement.
+
+中文：同一请求窗口内，LoopX packet 的实际输入 token 总量除以全部输入 token 总量，
+含缓存；重复处理按请求计量，重复回执不重复记账。需要宿主真实归因，现有历史计数
+不能反推 packet token；未采集、部分覆盖与真实零分开。比例是结构开销，不能单独
+当作净效率损失、可避免成本或因果贡献。普通阅读不调用模型。
+
+### Captured tool context inventory
+
+Add `--include-tool-context` to `trajectory-pack-register` with the existing
+`--usage-jsonl` and `--usage-session-id` to measure appended input text. The
+Research workbench's existing Sources and usage disclosure displays the saved
+inventory beside request-token attribution; browsing never launches a model.
+Omitting the option preserves historical registration and projections.
+
+The numerator is the UTF-8 text returned by recognized simple LoopX CLI calls;
+the denominator includes captured user/system/developer text and tool returns.
+Native `response_item` records are used, not their event-message mirrors.
+Duplicate output records for one call count once. Identical output from two
+different calls is still two pieces of appended input; it is not automatically
+redundant research. Operation counts distinguish context reads/projects from
+other LoopX returns. No output or command argument text is sent to the browser.
+Task lease acquisition, inspection, renewal, release and transfer have separate
+rows, as do common Todo operations such as claim and completion. These count
+observed replies, not successful mutations or proved unnecessary recovery.
+
+Only literal simple shell argv, Python `-m loopx`, `-m loopx.cli` or
+`-m loopx.entrypoint`, and an exact
+single literal `const/await tools.exec_command/text` wrapper are recognized.
+Compound shell, arbitrary JavaScript, indirect commands, continuation tools and
+file reads remain unassigned. Non-text content is counted as unmeasured parts.
+The byte share covers the recorded component only: injected LoopX instructions
+can remain unassigned, and useful domain evidence may be present in LoopX
+returns. It is neither whole control-plane overhead nor per-request replay,
+billable tokens, avoidable cost, or causal benefit. Keep the separate Turn-packet
+estimate and provider counters; do not add their different units or denominators.
+
+中文：可选统计在原轨迹分析工作台中展示 LoopX 工具返回占已记录输入文本的字节
+比例，并拆出 context-read/project 等操作。未知和非文本内容分别保留；同内容的
+再次返回不等于无益重复。这不是全量控制面、逐请求重放或计费 token 的占比。
+租约获取、检查、续租、释放、转移及常见 Todo 操作分别列示；计数表示可识别的返回，
+不证明状态写入成功或恢复操作可以省略。
+
+### Recorded Turn packet estimate
+
+The existing native `codex-cli` Turn host can record its actual injected packet
+when the invocation already has `CODEX_ROLLOUT_TRACE_ROOT` enabled. This is a
+local, opt-in Codex diagnostic feature; LoopX does not enable it globally or
+change a running experiment. The Agent prepares a private, invocation-scoped
+trace directory through the existing host environment. Native tracing contains
+sensitive prompts and outputs; keep it and `loopx-input-sources/*.json` private.
+The host records the exact injection only beside its newly observed session
+bundle. It never edits the original client rollout or changes task results,
+session authority, permissions, account selection or model execution.
+
+An Agent can prepare the optional computation provider with
+`uv sync --extra input-token-estimates` in a source checkout, or install the
+`input-token-estimates` package extra in its existing qualified runtime. This
+uses [tiktoken 0.12.0](https://pypi.org/project/tiktoken/0.12.0/) and the explicitly named `o200k_base` encoding. Its first
+encoding load can download the public encoding asset; packet text stays local.
+It does **not** establish the tokenizer of an unknown provider model.
+
+Register a frozen host source with the existing usage capture using
+`--loopx-input-json <relative-source-json>` alongside `--usage-jsonl` and
+`--usage-session-id`. The Agent prepares those artifacts within the existing
+source root; the owner need not discover ids or copy a command. Registration
+reads the native trace and tokenizes locally, without running a model. Ordinary
+Research reads use the saved projection and make no tokenizer or model call.
+
+The same TS request owner binds the recorded source digest to one unambiguous
+native input item, then follows that item and content across full requests.
+Each native response, Turn, model and all six counters must match the existing
+usage capture. Repeated consumption counts per request; duplicate responses
+do not increase totals, and copies under another item id are not classified as
+extra LoopX input. Changed source files become historical. Missing dependencies,
+invalid references and conflicting identities withhold only this observation,
+preserving valid native totals. Compressed websocket requests need verified
+replay; compaction and uncovered requests cannot supply invented attribution.
+
+Research labels this **LoopX Turn packet · estimate** with method
+`tiktoken_o200k_base_input_estimate_v1`. Its numerator covers only the explicitly
+recorded Turn packet text; it excludes other LoopX tool output, model framing
+and compacted summaries. It is not the total LoopX footprint. The denominator
+is native input, including cache, for the same captured requests. The native
+model, encoding and tokenizer version remain available in details. Unknown
+cache allocation stays unknown. Partial request coverage withholds the whole
+capture ratio; estimates provide no mathematical or confidence bounds. A token
+estimate larger than its native input is withheld, never clamped. Existing
+provider-measured receipts take precedence; the two methods are not mixed.
+
+This producer supplies a recorded-component estimate, not a scientific
+calibration of model tokenization, a retrospective reconstruction, or proof of
+net efficiency loss. Existing uninstrumented experiments remain unknown; do not
+launch or retune a frozen solver just to populate this field.
+
+中文：Agent 可在既有获准调用的私有原生 trace 中记录真实注入的 Turn packet，
+并在登记同一会话用量时以 o200k_base 做明确标注的文本估计。只统计已记录的
+Turn packet，不冒充全部 LoopX 输入或 provider 实测；原生模型分词器、缓存归属、
+压缩回放和缺失范围保持各自边界。原始记录不改，读取不调用模型，不重启既有实验。

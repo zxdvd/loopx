@@ -73,8 +73,8 @@ from ..quota.stall_repair import (
 )
 from ..quota.task_orchestration import (
     PEER_COORDINATION_BLOCKED_ACTION,
+    apply_task_route_hint_override,
     attach_task_orchestration_payload,
-    task_goal_route_hint,
     task_orchestration_contract_is_actionable,
     task_orchestration_requires_material_change_stop,
 )
@@ -97,6 +97,7 @@ from ..todos.contract import (
     normalize_todo_claimed_by,
     normalize_todo_id,
 )
+from ..agents.workspace_guard import observe_goal_delivery_workspace_isolation
 from ..todos.todo_semantics import (
     todo_item_is_actionable_open as projection_todo_item_is_actionable_open,
 )
@@ -146,7 +147,7 @@ from .settlement_precedence import (
     HEARTBEAT_SETTLED_REPLAY_REASON,
     clear_quota_action_projections,
 )
-from .should_run_prepare import _QuotaDecisionPreparation
+from .should_run_prepare import _QuotaDecisionPreparation, _blocked_priority_fallback
 from ._supporting_projections import (
     _attach_quota_supporting_projections,
     _attach_truthy_fields,
@@ -614,6 +615,8 @@ def _resolve_agent_lane_delivery_route(
             if isinstance(delivery_anchor, dict)
             else None
         ),
+        previous_delivery_boundary=(delivery_anchor or {}).get("delivery_boundary"),
+        previous_path_delta=(delivery_anchor or {}).get("path_delta"),
         continuity_todo=continuity_todo,
         continuity_actionable=bool(
             isinstance(continuity_todo, dict)
@@ -1175,6 +1178,7 @@ def _resolve_quota_should_run_route(
                 agent_todo_summary=prepared.agent_todo_summary,
                 agent_lane_next_action=agent_lane_next_action,
                 work_lane_contract=prepared.work_lane_contract,
+                vision_wait_state=prepared.goal_frontier_projection.get("vision_wait_state"),
                 # A satisfied dependency is readiness, not admission. The
                 # existing scoped fallback above qualifies an independent
                 # successor under a user gate; an unqualified ready row must
@@ -1276,9 +1280,9 @@ def _resolve_quota_should_run_route(
         latest_run_recommended_action=latest_run_recommended_action_text,
         selected_recommended_action=selected_recommended_action,
     )
-    goal_route_hint = task_goal_route_hint(
+    goal_route_hint = apply_task_route_hint_override(
         goal_route_hint,
-        prepared.task_orchestration_contract,
+        run_decision.goal_route_hint_override,
     )
     payload_work_lane_contract = _payload_work_lane_contract(
         prepared.work_lane_contract,
@@ -1360,7 +1364,10 @@ def _quota_payload_context(prepared: _QuotaDecisionPreparation, route: _QuotaDec
             if isinstance(prepared.item.get("long_task_cadence_hint"), dict)
             else None,
         "handoff_readiness": prepared.item.get("handoff_readiness"),
-        "goal_boundary": prepared.goal_boundary,
+        "goal_boundary": (
+            {**(prepared.goal_boundary or {}), "handoff_mode": prepared.item["handoff_mode"]}
+            if prepared.item.get("handoff_mode") is not None else prepared.goal_boundary
+        ),
         "plan_summary": prepared.plan.get("summary")
     }
 
@@ -1372,6 +1379,15 @@ def _build_active_quota_payload(
     include_agent_todo_detail: bool = False,
     turn_instance_id: str | None = None,
 ) -> dict[str, Any]:
+    if route.normal_delivery_allowed and route.agent_lane_next_action and prepared.blocked_priority_fallback:
+        # Selection/receipt continuity is authoritative; the first executable
+        # summary row was only a provisional candidate. Reuse the notice owner
+        # for every downstream projection without changing admission or gates.
+        prepared.blocked_priority_fallback = _blocked_priority_fallback(
+            prepared.agent_todo_summary, selected_executable=route.agent_lane_next_action,
+        )
+        if "blocked_priority_fallback" in route.heartbeat_recommendation:
+            route.heartbeat_recommendation["blocked_priority_fallback"] = prepared.blocked_priority_fallback
     agent_scope_action = _agent_scope_frontier_action(route.effective_action)
     retry_deadline = (prepared.agent_todo_summary or {}).get("frontier_deadline") or {}
     user_summary = prepared.user_todo_summary or {}
@@ -1673,6 +1689,13 @@ def _build_quota_should_run_payload(
     if goal_ref is not None:
         payload["goal_ref"] = dict(goal_ref)
     apply_settled_monitor_precedence(payload)
+    selected_todo = payload.get("selected_todo")
+    if isinstance(selected_todo, dict) and selected_todo.get("todo_id"):
+        # Retain current facts across contract rebuilds for hooks and selection.
+        # This preview neither admits a workspace nor replaces refresh checks.
+        payload["delivery_workspace_isolation"] = observe_goal_delivery_workspace_isolation(
+            prepared.item, selected_todo,
+        )
     _attach_automation_cadence_readback(
         payload,
         goal_id=prepared.safe_goal_id,

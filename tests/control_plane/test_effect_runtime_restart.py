@@ -6,6 +6,7 @@ import json
 import os
 import socket
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 import time
@@ -350,3 +351,36 @@ def test_namespace_restart_cannot_certify_failed_exit_observation(tmp_path, monk
     assert result["stopped"] is False
     # Ordinary serving retirement retains its existing, non-destructive contract.
     assert effect_runtime.restart_effect_runtime()["status"] == "stopped"
+
+
+@pytest.mark.skipif(os.name != "posix" or not hasattr(os, "WNOWAIT"), reason="POSIX child exit observation")
+def test_namespace_shutdown_reaps_exited_child_before_disposal(tmp_path, monkeypatch):
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import sys; sys.stdin.read()"],
+        stdin=subprocess.PIPE, start_new_session=True,
+    )
+    info = {"pid": child.pid, "token": "serving"}
+    requests = []
+
+    def shutdown(_info, **kwargs):
+        requests.append(kwargs["method"])
+        assert effect_runtime._pid_is_alive(child.pid)
+        child.stdin.close()
+        # Wait for the shutdown response's real exit without reaping the child.
+        os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOWAIT)
+        assert effect_runtime._pid_is_alive(child.pid)
+        return {}
+
+    monkeypatch.setattr(effect_runtime, "_request_with_info", shutdown)
+    try:
+        result = effect_runtime._stop_effect_runtime(
+            tmp_path / "runtime.json", info, timeout=5, wait_for_process_exit=True,
+        )
+        assert result["stopped"] and result["status"] == "stopped"
+        assert requests == ["runtime.shutdown"]
+        assert not effect_runtime._pid_is_alive(child.pid), "Exited child must be reaped before cleanup returns"
+        with pytest.raises(ChildProcessError):
+            os.waitpid(child.pid, os.WNOHANG)
+    finally:
+        child.stdin.close()
+        child.wait(timeout=5)

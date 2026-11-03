@@ -5,6 +5,15 @@ files remain flat in this migration to preserve established links; this index
 groups them by responsibility so callers can find the right contract without
 scanning a chronological list.
 
+The [unified work contract and controller/executor RFC](../../architecture/rfcs/controller-executor-unified-contract-v0.md)
+defines the proposed convergence of quota, Turn and host consumers. It is a
+design target, not an additional shipped protocol or a replacement wire format
+that callers can select today. Current versioned contracts below remain valid
+until their documented migration is qualified.
+
+中文：[统一工作契约与 controller/executor 提案](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md)
+规定 quota、Turn 与 Host 消费者的收敛方向；当前尚未交付新协议，现有版本契约在迁移验收前继续有效。
+
 ## Control Plane And State
 
 - [`active_state_structured_projection_v0`](active-state-structured-projection-v0.md): Active state structured projection v0
@@ -64,9 +73,9 @@ scanning a chronological list.
 - [`host_mode_plan_v0`](host-mode-plan-v0.md): Host mode plan v0
 - [`local_agent_launch_plan_v1`](local-agent-launch-plan-v1.md): Local agent launch plan v1
 - [`openviking_session_memory_adapter_v0`](openviking-session-memory-adapter-v0.md): OpenViking session memory adapter v0
-- [`protocol_action_packet_codex_cli_wrapper_v0`](protocol-action-packet-codex-cli-wrapper-v0.md): Protocol action packet Codex CLI wrapper v0
-- [`protocol_action_packet_decision_v0`](protocol-action-packet-decision-v0.md): Protocol action packet decision v0
-- [`protocol_action_packet_router_comparison_v0`](protocol-action-packet-router-comparison-v0.md): Protocol action packet router comparison v0
+- [`protocol_action_packet_codex_cli_wrapper_v0`](protocol-action-packet-codex-cli-wrapper-v0.md): Historical synthetic Codex CLI wrapper
+- [`protocol_action_packet_decision_v0`](protocol-action-packet-decision-v0.md): Retired packet input format and recovery
+- [`protocol_action_packet_router_comparison_v0`](protocol-action-packet-router-comparison-v0.md): Historical synthetic router comparison
 - [`session_runtime_controlled_writeback_v0`](session-runtime-controlled-writeback-v0.md): Session runtime controlled writeback v0
 - [`session_runtime_loopx_projection_v0`](session-runtime-loopx-projection-v0.md): Session runtime to LoopX projection v0
 

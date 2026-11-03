@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from datetime import datetime, timezone
 import hashlib
 import logging
@@ -15,6 +15,7 @@ from typing import Any
 
 from ...chat_manager import MANAGER_AGENT_OBJECTIVE
 from ...file_lock import try_exclusive_file_lock
+from ..background_runtime import HostedWorker
 from .goal_channel_contracts import bindings_for_goal
 from .manager_context import session_turn_effect
 from .team_plan_confirmation import (
@@ -27,7 +28,7 @@ from .team_plan_confirmation import (
 SnapshotProvider = Callable[[], Mapping[str, Any]]
 ProfilePoller = Callable[[str, threading.Event], None]
 ManagerRouteReconciler = Callable[[Mapping[str, Any]], Mapping[str, Any]]
-ProfileWorkerFingerprint = tuple[str, str, tuple[str, ...]]
+ProfileWorkerFingerprint = tuple[str, str, str, tuple[str, ...]]
 ProfileWorker = tuple[threading.Event, threading.Thread, ProfileWorkerFingerprint]
 
 
@@ -59,22 +60,25 @@ class LarkGoalTopicRuntimeService:
         self._delivery_wakeup = threading.Event()
         self._startup_thread: threading.Thread | None = None
         self._delivery_thread: threading.Thread | None = None
+        self._delivery_worker = HostedWorker(target=self._reconcile_private, stop=self._closed,
+            name="loopx-lark-private-delivery", retry_seconds=5)
 
     def start(self) -> None:
         """Discover existing bindings without blocking the HTTP readiness path."""
 
         with self._lock:
-            if self._closed.is_set() or self._startup_thread is not None:
+            if self._closed.is_set():
                 return
-            self._startup_thread = threading.Thread(
-                target=self._refresh_on_start,
-                name="loopx-lark-startup",
-                daemon=True,
-            )
-            self._startup_thread.start()
+            if self._startup_thread is None:
+                self._startup_thread = threading.Thread(
+                    target=self._refresh_on_start,
+                    name="loopx-lark-startup",
+                    daemon=True,
+                )
+                self._startup_thread.start()
             if self.private_conversations is not None:
-                self._delivery_thread = threading.Thread(target=self._reconcile_private, name="loopx-lark-private-delivery", daemon=True)
-                self._delivery_thread.start()
+                self._delivery_worker.start()
+                self._delivery_thread = self._delivery_worker.thread
 
     def _reconcile_private(self) -> None:
         # Keep slow provider writes/readbacks off the scan loop. At most four
@@ -87,6 +91,10 @@ class LarkGoalTopicRuntimeService:
         attempted: dict[Path, int] = {}
         attention: Future[int] | None = None
         attention_due = 0.0
+        reports: Future[int] | None = None
+        reports_due = 0.0
+        feedback: Future[int] | None = None
+        feedback_due = 0.0
         ingress: Future[list[str]] | None = None
         ingress_due = time.monotonic() + 60
         wakeup_scope = getattr(self.runtime_controller, "turn_release_wakeup", None)
@@ -94,10 +102,25 @@ class LarkGoalTopicRuntimeService:
         # existing scanner; it is neither a queue nor a delivery receipt.
         with ThreadPoolExecutor(max_workers=4, thread_name_prefix="loopx-lark-private-reply") as pool, \
                 (wakeup_scope(self._delivery_wakeup) if callable(wakeup_scope) else nullcontext()):
-            while not self._closed.is_set():
+            def step() -> None:
+                nonlocal attempted, attention, attention_due, reports, reports_due, ingress, ingress_due, feedback, feedback_due
                 # Clear BEFORE scanning: an arrival during the scan must also
                 # wake the following wait, rather than disappear in that gap.
                 self._delivery_wakeup.clear()
+                if feedback is not None and feedback.done():
+                    try:
+                        feedback.result()
+                    except Exception:
+                        logging.getLogger(__name__).warning("App input reaction reconciliation is pending")
+                    feedback = None
+                    feedback_due = time.monotonic() + 5
+                if reports is not None and reports.done():
+                    try:
+                        reports.result()
+                    except Exception:
+                        logging.getLogger(__name__).warning("Original private report delivery is pending")
+                    reports = None
+                    reports_due = time.monotonic() + 30
                 if ingress is not None and ingress.done():
                     try:
                         for profile in ingress.result():
@@ -140,21 +163,38 @@ class LarkGoalTopicRuntimeService:
                     observer = getattr(transport, "ingress", None)
                     ingress_ready = (observer is not None and ingress is None
                         and time.monotonic() >= ingress_due)
+                    report_provider = getattr(transport, "steward_reports", None)
+                    reports_ready = (report_provider is not None and reports is None
+                        and time.monotonic() >= reports_due and report_provider.pending())
+                    if report_provider is not None and reports is None and time.monotonic() >= reports_due:
+                        reports_due = time.monotonic() + 30
                     for path in sorted(paths, key=lambda path: attempted.get(path, 0)):
-                        if (len(pending) + int(attention is not None or attention_ready)
+                        if (len(pending) + int(feedback is not None) + int(reports is not None or reports_ready) + int(attention is not None or attention_ready)
                                 + int(ingress is not None or ingress_ready) >= 4 or self._closed.is_set()):
                             break
                         if path in pending:
                             continue
                         pending[path] = pool.submit(transport.reconcile_request, path)
                         attempted[path] = attempted.get(path, 0) + 1
-                    if attention_ready and len(pending) + int(ingress is not None or ingress_ready) < 4 and not self._closed.is_set():
+                    if reports_ready and len(pending) + int(feedback is not None) + int(attention is not None or attention_ready) + int(ingress is not None or ingress_ready) < 4 and not self._closed.is_set():
+                        reports = pool.submit(report_provider.reconcile)
+                    if attention_ready and len(pending) + int(feedback is not None) + int(reports is not None) + int(ingress is not None or ingress_ready) < 4 and not self._closed.is_set():
                         attention = pool.submit(owner_attention.reconcile)
-                    if ingress_ready and len(pending) + int(attention is not None) < 4 and not self._closed.is_set():
+                    if ingress_ready and len(pending) + int(feedback is not None) + int(reports is not None) + int(attention is not None) < 4 and not self._closed.is_set():
                         ingress = pool.submit(observer.observe, cancelled=self._closed.is_set)
+                    app_feedback = getattr(transport, "reconcile_app_feedback", None)
+                    # Optional feedback uses one slot in this same bounded
+                    # pool and leaves capacity for canonical body deliveries.
+                    if (callable(app_feedback) and feedback is None and time.monotonic() >= feedback_due
+                            and len(pending) + int(reports is not None) + int(attention is not None)
+                            + int(ingress is not None) < 3 and not self._closed.is_set()):
+                        feedback = pool.submit(app_feedback)
                 except Exception:
                     logging.getLogger(__name__).warning("Private Chat delivery discovery is pending")
-                self._delivery_wakeup.wait(1)
+
+            self._delivery_worker.repeat(step, interval_seconds=1, wait=self._delivery_wakeup.wait,
+                on_error=lambda: logging.getLogger(__name__).warning(
+                    "Private Chat delivery discovery is pending"))
 
     def _admit_private(self, profile: str, event: dict[str, Any]) -> dict[str, Any]:
         if self._closed.is_set():
@@ -226,6 +266,7 @@ class LarkGoalTopicRuntimeService:
         return (
             str(profile_config.get("cli_bin") or "lark-cli"),
             str(profile_config.get("bot_app_id") or profile_config.get("binding_id") or ""),
+            str(profile_config.get("consumer_ref") or ""),
             callback_chats,
         )
 
@@ -333,16 +374,20 @@ class LarkGoalTopicRuntimeService:
                     # servers can use different runtime roots or ports. The
                     # consumer lease must therefore be machine/App scoped.
                     app_id = str(profile_config.get("bot_app_id") or "")
-                    # Both paths lease the same App-scoped digest, so aliases
-                    # or a second server cannot start another consumer.
-                    digest = (hashlib.sha256(app_id.encode("utf-8")).hexdigest()[:32]
-                              if app_id else str(profile_config.get("consumer_ref")
-                              or hashlib.sha256(profile.encode("utf-8")).hexdigest()[:32]))
-                    lease = Path.home() / ".loopx" / "lark-consumers" / digest
-                    with try_exclusive_file_lock(
-                        lease, operation="lark_event_consumer"
-                    ) as acquired:
-                        if acquired is None:
+                    # A composed legacy route explicitly retains its original
+                    # profile lease. Otherwise both paths use the App digest.
+                    digest = str(profile_config.get("consumer_ref") or (
+                        hashlib.sha256((app_id or profile).encode("utf-8")).hexdigest()[:32]))
+                    digests = {digest}
+                    if app_id:
+                        digests.add(hashlib.sha256(app_id.encode("utf-8")).hexdigest()[:32])
+                    # A legacy/shared consumer holds both identities: wait for
+                    # the old process and fence new aliases on other servers.
+                    with ExitStack() as leases:
+                        acquired = [leases.enter_context(try_exclusive_file_lock(
+                            Path.home() / ".loopx" / "lark-consumers" / key,
+                            operation="lark_event_consumer")) for key in sorted(digests)]
+                        if any(lease is None for lease in acquired):
                             self._update_health(
                                 profile,
                                 status="standby",
@@ -361,7 +406,7 @@ class LarkGoalTopicRuntimeService:
                             proposal_deliverer=deliver_proposals,
                             review_callback_handler=(
                                 handle_review_callback
-                                if self.action_service is not None and profile not in dict(self.snapshot_provider().get("private_profiles") or {})
+                                if self.action_service is not None and profile in runtime._active_group_profile_configs(self.snapshot_provider())
                                 else None
                             ),
                             health_sink=lambda update: self._update_health(
@@ -538,8 +583,7 @@ class LarkGoalTopicRuntimeService:
             stop.set()
         for _stop, thread, _fingerprint in workers:
             thread.join(timeout=3)
-        if self._delivery_thread is not None:
-            self._delivery_thread.join(timeout=3)
+        self._delivery_worker.close(timeout=3)
 
 
 __all__ = ["LarkGoalTopicRuntimeService"]

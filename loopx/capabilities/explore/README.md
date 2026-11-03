@@ -31,6 +31,61 @@ attachments also require the same `input_revision`. Use a new finding id per
 evaluated candidate, and reuse an id only to correct that finding. Missing values
 are explicit `null`; zero and negative values remain valid measurements.
 
+When an `execution_observation` declares a `result_ref`, each measurement must
+cite that same result. This applies to manual findings and writeback attachments,
+including shared comparison contexts. Listing both receipts in `evidence_refs`
+does not bind a different result to the executed candidate. No result is inferred
+when execution has not declared one. These consistency checks do not independently
+verify a producer's calculator or turn `confirmed` into an evaluator attestation.
+
+To reuse verified comparison conditions, save these three fields once in
+`conditions.json`:
+
+```json
+{"comparison_scope":"validation:fixed-budget-v1","input_revision":"dataset-v1",
+ "evaluation_ref":"evaluator:v1"}
+```
+
+Pass `--measurement-context-json conditions.json` alongside
+`--measurements-json observations.json`. Each observation then omits those
+three fields, for example:
+
+```json
+[{"metric":"quality","value":9,"unit":"points","higher_is_better":true,
+  "candidate_ref":"candidate:b","evidence_ref":"result:b"}]
+```
+
+Ordinary and path-delta attachments support the same optional
+`measurement_context` object alongside `measurements`. The writer expands it
+into the existing complete records; it stores no mutable context reference.
+Observation overrides, even equal ones, and incomplete or extra context fields
+reject before recording. The original complete-item format remains supported.
+Reusing a declaration does not verify comparability: select a different context
+when task, data, evaluator, model or budget changes. Keep unknown conditions
+separate. This convenience grants no evaluation, correction or execution authority.
+
+Keep comparison conditions separate from the candidate and its result:
+
+| Field | Meaning across successive findings |
+| --- | --- |
+| `input_revision` | Evaluated task/data revision; retain it when the evaluated inputs are verified unchanged. |
+| `evaluation_ref` | Evaluator/scoring protocol version; retain it when the evaluation protocol is verified unchanged. |
+| `candidate_ref` | Code/artifact version actually evaluated; change it when the candidate changes. |
+| `evidence_ref` | Individual evaluation result/receipt; retain its exact provenance in the finding's `evidence_refs`. |
+
+For example, record candidate A's score 8 and candidate B's score 9 as **two
+findings** on the same question. With the other comparison fields unchanged,
+both use `input_revision=dataset-v1` and `evaluation_ref=evaluator:v1`, while
+their candidate/result refs are `candidate:a`/`result:a` and
+`candidate:b`/`result:b`. Feedback has two measured records and improvement +1.
+Putting each candidate hash in `input_revision` or each submission id in
+`evaluation_ref` instead creates singleton groups with null improvement.
+That null is not zero gain. Check provenance before correcting a mistaken
+finding through the existing correction path; historical records remain intact.
+Changed or unknown evaluation conditions must stay separate. Do not invent a
+shared revision merely to obtain a comparison. A growing local corpus does not
+change the input revision for an unchanged evaluated subset; changed samples do.
+
 Comparisons require the same node, metric, unit, direction, comparison scope,
 input revision and evaluator. Producers must change the scope when task,
 model/resource budget or evaluation conditions change, and separate native
@@ -51,6 +106,13 @@ regressions or revisit better candidates before repeating work. Best does not
 identify the current retained candidate, establish causality, satisfy acceptance
 or authorize execution. Actual adoption and outcome benefit require subsequent
 work and evidence; automatic branch rankings remain unchanged.
+
+Manually captured measured findings also appear in the existing result pages
+and, when linked to eligible work, its exact-source comparison cards. They need
+no `writeback-result` origin tag. Read the page before optionally binding a
+`selected_candidate`; normal source-revision, Todo-link and followthrough checks
+still apply. Unmeasured manual notes retain their existing summary/audit path.
+Reading or selecting a measured result does not certify adoption or execution.
 
 ## At a Glance
 
@@ -356,6 +418,16 @@ or block valid writeback. Successful replay needs no second graph event or Todo
 mutation. This changes enabled evidence capture and explicit Todo-link edits;
 ordinary work and feature-off hooks retain their existing behavior.
 
+Writeback templates leave `status` blank so the caller explicitly selects
+`tentative`, `confirmed`, or `refuted`. `tentative` means the interpretation is
+unresolved, not that a verification job is queued. Choose `confirmed` or
+`refuted` only for the stated conclusion within its recorded applicability;
+evidence references or a successful check alone do not settle broader claims.
+Keep established observations, remaining uncertainty and the next useful check
+in the interpretation. Use the existing optional `question_update` to close an
+answered question independently of finding status or overall Goal completion.
+Existing recorded statuses and the CLI finding default are unchanged.
+
 Use `tentative` for inconclusive observations or prerequisite failures. Neither
 compilation failure nor a score alone supplies a scientific interpretation.
 Routine work without reusable evidence needs no attachment. Omitting the option
@@ -477,9 +549,9 @@ dependent* todo chains. It must not be used to size independent parallel
 worker lanes -- that misuse capped an early calibration run's treatment arm
 at 5 of 10 lanes; worker plans now use `schedule_independent_lanes` instead.
 
-The command is read-only and sits behind the same per-goal opt-in gate as
+The command is read-only and sits behind the same effective Goal-mode gate as
 `worker-branch-plan` (see "Per-Goal Opt-In Gate" below): without
-`explore_harness.enabled=true` on the goal's orchestration boundary it returns
+`explore_harness.enabled=true` on the Goal's effective orchestration boundary it returns
 a disabled packet, and `--width` is capped by `max_children` in addition to
 its own ceiling. It does not claim todos, acquire leases, launch agents,
 spend quota, or change the active state. Instead it emits a prediction
@@ -490,8 +562,8 @@ packet with:
   enter the exploration scheduler or consume branch width;
 - a dry-run A/B estimate comparing baseline serial execution with the
   DSpark-style selected prefix (`ab_result.estimated_speedup_vs_baseline`);
-- suggested `loopx todo claim` and `loopx task-lease acquire` commands for a
-  human operator or registered peer runner to execute explicitly;
+- suggested ordinary `loopx todo claim` commands for a human operator or
+  registered peer runner; the claim manages execution and returns its task reference;
 - the safety boundary that keeps the packet advisory rather than an
   replacement for `quota should-run`.
 
@@ -602,13 +674,18 @@ untagged todos retain their previous unconstrained behavior, while a tagged lane
 must have a matching declared capacity. Usage without a matching capacity fails
 closed to catch misspelled lane keys.
 
+Lane keys normalize case, spaces, and hyphens (`LONG POOL` and `long-pool`
+both name `long_pool`). Repeated normalized keys are rejected in both CLI and
+mapping inputs instead of overwriting capacity or usage. Counts must be
+non-negative whole numbers; booleans and fractional values are rejected.
+
 This remains analysis-only evidence: `resource_portfolio.score_delta=0`, typed
 evidence keeps `score_delta=0`, and the planner is read-only. Capacity and usage
 do not claim todos, acquire leases, launch workers, write state, or grant quota
 authority. They only constrain the predicted portfolio; execution still enters
 the normal LoopX lifecycle described below.
 
-This command is read-only and opt-in per goal. It is designed to sit on top of
+This command is read-only and requires an enabled effective Goal mode. It is designed to sit on top of
 the existing LoopX harness, not beside it and not instead of it:
 
 1. LoopX supplies the harness inputs: quota/status context outside this command,
@@ -617,12 +694,12 @@ the existing LoopX harness, not beside it and not instead of it:
 2. The opt-in planner groups todos into worker-lane candidates and uses
    DSpark-style confidence/prefix/load scoring to pick a worker branch prefix.
 3. Execution must return to the normal LoopX path: `quota should-run`,
-   `todo claim`, `task-lease acquire`, worker execution, `explore node|edge|finding`,
+   `todo claim`, worker execution, `explore node|edge|finding`,
    `refresh-state`, and `quota spend-slot`.
 
 For goals that have opted in, the packet therefore contains
 `harness_compatibility` and `boundary` fields: `replaces_loopx_runtime=false`,
-`launches_workers=false`, and `claim_and_lease_are_suggested_only=true`; the
+`launches_workers=false`, and `claim_is_suggested_only=true`; the
 deny-by-default disabled packet carries the `boundary` block plus the opt-in
 `required_contract` instead. The packet can be used by a controller or human
 operator to decide which workers to start, but it cannot launch workers or
@@ -771,11 +848,10 @@ contract does not enable Explore Harness.
 #### Explore Harness planning gate
 
 Both opt-in planners — `todo-branch-plan` and `worker-branch-plan` —
-are deny-by-default. The gate lives on the registered goal's `spawn_policy`,
-the single writable source that the quota/status pipeline projects into
-`quota should-run` as `goal_boundary.orchestration`. No other registry key is
-honored: a second source would be an authorization surface invisible to the
-quota boundary.
+are deny-by-default. The gate consumes the Goal's effective `spawn_policy`,
+composed from the explicit Goal mode or live machine preference and projected
+into `quota should-run` as `goal_boundary.orchestration`. Goal-owned spawn
+permissions are preserved; the machine preference adds no execution authority.
 
 ```yaml
 # inside the registered goal entry
@@ -1309,3 +1385,92 @@ recorded and fatal failures, concurrent groups without mutable-state aliasing,
 fatal structural preflight, record-mode malformed-item isolation with resume
 continuity, aggregate metric projection, and episode-only adapters without a
 legacy `execute` method.
+
+
+## Machine default
+
+In Settings → Device → Explore Harness, choose **Off**, **Evidence**, or
+**Planning**, preview, then apply. Planning includes the evidence graph and
+read-only branch guidance. The default is off until the owner configures it.
+
+The `explore_harness` machine namespace uses
+`{"schema_version":"explore_harness_machine_defaults_v0","mode":"planning"}`.
+It follows the same `machine-config` preview, exact-revision apply, remove and
+rollback transaction as other device preferences. Existing and new Goals with
+no explicit mode inherit live; no Goal registry is rewritten. Separate runtime
+roots retain their own settings, including isolated benchmark runtimes.
+
+Explicit Goal modes and legacy graph/harness `enabled` fields override the
+machine mode, including `false`. A profile or composition setting alone does
+not pin the mode. Goal settings show the effective mode and its source. Use
+**Restore inheritance** or `configure-goal --clear-explore-configuration` to
+remove the Goal's Explore overrides; this preserves other spawn settings.
+Set an explicit Goal mode to `off` to keep that Goal disabled.
+
+Editing a profile or composition setting in the form or JSON preserves mode
+inheritance; only an explicit mode choice creates a mode override.
+
+Turn context, planning, quota/history, Todo settlement, native completion and
+material-refresh readers use the same mode owner. Evidence does not grant external publication authority; machine
+activation retains local projection without enabling a sink. Profile, research
+scope, spawn permission, leases, quota and host continuation remain separately
+owned. Enabled configuration alone does not prove evidence adoption or better
+outcomes.
+
+Native research completion retains the graph lock and, when inheriting, the
+device-configuration lock until its transaction finishes. Inherited planning
+requires the same exact typed experiment evidence as an explicit Goal mode.
+
+Historical compatibility: stricter execution/measurement attribution is a new-write
+rule. Canonical readers preserve earlier records and their identities, including
+an inconsistent original followed by a correction. Current finding views expose
+`measurement_error` and omit contradictory quantities from comparison; raw history
+retains the producer's original statement. A matching correction becomes usable
+without deleting its prior version. Explicit ordered-prefix archival replay keeps
+the same audit boundary; ordinary single/batch writes still reject contradictions.
+Malformed, unsafe, unknown-field or forged canonical records remain rejected.
+Completed delivery replays only the original durable ingestion intent, exact
+source and recorded time, matching canonical finding and existing Todo link.
+That path performs no graph or Todo mutation; missing delivery still requires the
+ordinary write/ownership checks, and conflicting attachment retries reject.
+CLI attachment parsing preserves structurally valid historical input until the
+existing primary owner matches the immutable retry. New primary writes and new
+ingestion intents still validate execution/measurement attribution before effects;
+parsing is not a new-write eligibility decision or a public bypass.
+
+`explore source-history-reconcile` merges the latest missing registered results;
+it does not restore a complete archival prefix. Preview and execution apply the
+same ordinary-write validation to that subset; execution binds to the canonical
+snapshot under lock. Eligible results can be restored
+even when other historical findings contradict their execution. The plan reports
+`blocked_event_count`, a digest of the blocked event ids and `blocked_reasons`;
+warnings also show the reasons in Markdown output. Blocked records remain in the
+unchanged candidate source, do not enter quantitative comparison and do not by
+themselves require deleting registered sink rows. An all-blocked subset reports
+`blocked`; a partial recovery reports `would_reconcile_with_blocked_history` or
+`reconciled_with_blocked_history`. Append a valid correction for the same result
+id to the candidate history and preview again; recovery selects that latest
+record without rewriting its older evidence. Unrelated remote orphans retain
+their existing classification and status suffix.
+
+历史兼容：执行与测量的一致性约束限制新写入，不能阻断旧记录及其后续更正的读取。
+当前 finding 若有归因矛盾，会返回 `measurement_error` 并排除该数量比较；历史仍保留
+生产者的原始声明。正确更正可恢复当前比较，不能删改旧行。显式按顺序恢复归档前缀也
+保留此审计边界；普通单条和批量写入仍拒绝新矛盾，结构损坏、不安全及伪造记录仍拒绝。
+已完成交付仅重放原始持久化
+ingestion intent，并精确匹配来源、记录时间、canonical finding 与既有 Todo 关联；
+此路径不写图或 Todo。未完成交付仍须遵守普通写入与归属检查，冲突附件重试仍拒绝。
+CLI 附件解析保留结构合法的历史输入，由既有 primary owner 精确匹配不可变重试；
+新 primary 写入和新 ingestion intent 仍在产生效果前检查执行与测量归属。
+解析成功不代表新写入合格，也不提供公开的绕过参数。
+
+`explore source-history-reconcile` 合并已注册且缺失的各结果最新记录，不是恢复完整
+归档前缀。预览与执行对该子集应用相同的普通写入校验，并在锁内绑定 canonical
+快照；部分旧 finding 归因矛盾不会
+阻断其他合法结果恢复。计划通过 `blocked_event_count`、被阻断事件 id 的摘要和
+`blocked_reasons` 报告原因，Markdown 的 warnings 同时显示这些原因。被阻断记录
+保留在未改动的候选源中，不进入数量比较，也不因此要求删除已注册的 sink 行。
+全部阻断时状态为 `blocked`，部分恢复时为 `would_reconcile_with_blocked_history`
+或 `reconciled_with_blocked_history`。在候选历史中为同一 result id 追加正确更正后
+重新预览；恢复选择该最新记录，不能覆写旧证据。其他远端孤儿仍保留原有分类与状态
+后缀。

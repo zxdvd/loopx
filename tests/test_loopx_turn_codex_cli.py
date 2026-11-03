@@ -318,6 +318,8 @@ def test_codex_cli_result_schema_requires_only_bounded_contract_fields() -> None
         ("The service is overloaded.", "provider_overloaded"),
         ("Too many requests; retry later.", "rate_limited"),
         ("Quota exceeded. Check your plan and billing details.", "quota_exhausted"),
+        ("You've hit your usage limit. Try again after the reset.", "quota_exhausted"),
+        ("You’ve hit your usage limit. Try again after the reset.", "quota_exhausted"),
     ],
 )
 def test_codex_cli_diagnostic_fallback_keeps_failure_classes_distinct(
@@ -348,6 +350,19 @@ def test_codex_cli_unknown_structured_code_blocks_message_fallback() -> None:
     }
 
     assert _event_failure_category(event) == "unknown"
+
+
+@pytest.mark.parametrize("event_type", ["error", "turn.failed"])
+@pytest.mark.parametrize("apostrophe", ["'", "’"])
+def test_codex_cli_message_only_subscription_limit_is_not_a_transient_retry(event_type, apostrophe) -> None:
+    message = f"You{apostrophe}ve hit your usage limit. Try again after the reset."
+    event = {"type": event_type, "error": {"message": message}}
+    assert _event_failure_category(event) == "quota_exhausted"
+    # A present discriminator still wins over familiar prose.
+    event["error"]["code"] = "future_provider_failure"
+    assert _event_failure_category(event) == "unknown"
+    event["error"]["code"] = "rate_limit_exceeded"
+    assert _event_failure_category(event) == "rate_limited"
 
 
 @pytest.mark.parametrize(
@@ -1354,6 +1369,15 @@ def test_codex_cli_host_classifies_provider_capacity_as_retryable_without_prose(
         ),
         (
             {
+                "type": "turn.failed",
+                "error": {"message": "You’ve hit your usage limit. Try again after the reset."},
+            },
+            "codex_cli_quota_exhausted",
+            "quota_exhausted",
+            None,
+        ),
+        (
+            {
                 "type": "error",
                 "error": {"httpStatusCode": 429, "message": "opaque"},
             },
@@ -1478,6 +1502,37 @@ def test_codex_cli_host_discards_missing_resume_session(
     envelope = first_request["turn_envelope"]
     assert isinstance(envelope, dict)
     assert codex_cli_session_binding(runtime_root, envelope) is None
+
+
+def test_native_input_observation_is_opt_in_and_does_not_change_host_result(tmp_path, monkeypatch):
+    from loopx.control_plane.turn_driver import codex_input_trace as trajectory_input_capture
+
+    executable, log_path = _fake_codex(tmp_path)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log_path))
+    monkeypatch.delenv("CODEX_ROLLOUT_TRACE_ROOT", raising=False)
+    project = tmp_path / "project"
+    project.mkdir()
+    request = _request()
+    observed = []
+
+    def record(root, **fields):
+        observed.append((root, fields))
+        raise OSError("Synthetic diagnostic failure must not fail the Host")
+
+    monkeypatch.setattr(trajectory_input_capture, "record_codex_input_source", record)
+    baseline = run_codex_cli_host(request, runtime_root=tmp_path / "off", project=project,
+                                 codex_bin=str(executable), timeout_seconds=5)
+    assert observed == []
+    trace = tmp_path / "traces"
+    (trace / "trace-old").mkdir(parents=True)
+    monkeypatch.setenv("CODEX_ROLLOUT_TRACE_ROOT", str(trace))
+    result = run_codex_cli_host(request, runtime_root=tmp_path / "on", project=project,
+                               codex_bin=str(executable), timeout_seconds=5)
+    assert result == baseline
+    assert len(observed) == 1 and observed[0][0] == trace
+    fields = observed[0][1]
+    assert fields["text"] == _prompt(request) and fields["goal_id"] == "fixture-goal"
+    assert fields["prior_bundles"] == {"trace-old"}
 
 
 def test_public_e2e_smoke_runs_n_transactions_on_one_session() -> None:
@@ -1635,3 +1690,24 @@ def test_default_turn_cli_rejects_stopped_source_behind_stale_global_mirror(
     assert not _session_files(runtime)
     index = runtime / "goals/loopx-turn-fixture/runs/index.jsonl"
     assert not index.exists() or "quota_slot_spent" not in index.read_text()
+
+
+@pytest.mark.parametrize("declaration", ["envelope", "signature", "coverage"])
+def test_codex_host_rejects_unknown_contract_version_before_process(tmp_path, monkeypatch, declaration):
+    from loopx.control_plane.effect_runtime import EffectRuntimeRejected
+
+    executable, log = _fake_codex(tmp_path)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log))
+    request = _request()
+    envelope = request["turn_envelope"]
+    if declaration == "envelope":
+        envelope["schema_version"] = "unsupported_work_contract"
+    else:
+        envelope["action_signature"] = {
+            "schema_version" if declaration == "signature" else "coverage": "unsupported_required_semantics",
+        }
+    with pytest.raises(EffectRuntimeRejected, match="unsupported TurnEnvelope"):
+        run_codex_cli_host(request, runtime_root=tmp_path / "runtime", project=tmp_path,
+                           codex_bin=str(executable), timeout_seconds=5)
+    assert not log.exists()
+    assert not _session_files(tmp_path / "runtime")

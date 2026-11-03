@@ -35,9 +35,14 @@ def register_manager_inbox(subparsers, add_format):
             "configure-ssh-read-scope",
             "grant-delivery-target",
             "revoke-delivery-target",
+            "original-conversation",
         ),
     )
     parser.add_argument("--peer-agent-id", help="For request: a registered peer of the same Goal.")
+    parser.add_argument("--conversation-operation", choices=("discover", "request", "control"),
+                        help="For original-conversation: discover an explicit recipient, request help, or control the retained request.")
+    parser.add_argument("--conversation-file", help="For original-conversation: bounded JSON parameters; source identity comes from --goal-id/--agent-id.")
+    parser.add_argument("--chat-url", help="For original-conversation: intended local Chat service URL (default http://127.0.0.1:8767).")
     parser.add_argument(
         "--require-host-route", action="store_true",
         help="For request: require an observed exact host task before recording a peer request.",
@@ -54,7 +59,7 @@ def register_manager_inbox(subparsers, add_format):
     parser.add_argument("--brief-file", help="For request: collaboration_brief_v0 JSON file.")
     parser.add_argument("--parent-request-id", help="For request: an inbox request received by the sender.")
     parser.add_argument("--goal-id")
-    parser.add_argument("--goal-instance-id", help="Exact source Goal instance for request control.")
+    parser.add_argument("--goal-instance-id", help="Exact source Goal instance for request control or original-conversation.")
     parser.add_argument("--control-operation", choices=("inspect", "revise", "cancel", "recover"),
                         help="For control: inspect, correct, cancel or recover this original request.")
     parser.add_argument("--control-file", help="For control: bounded JSON operation parameters; no source or effect facts.")
@@ -74,6 +79,8 @@ def register_manager_inbox(subparsers, add_format):
         "--phase", choices=("decision", "conclusion"), default="conclusion"
     )
     parser.add_argument("--reply-text")
+    parser.add_argument("--remaining-work", help="For report: accepted work still owed after this partial conclusion; pair with --resume-when. No Todo or execution is created.")
+    parser.add_argument("--resume-when", help="For report: concrete continuation condition for --remaining-work; descriptive only, not a scheduler rule.")
     parser.add_argument("--attachment-ref", action="append", default=[],
                         help="For report: explicit relative file in the registered Goal workspace; bound-owner App only, at most four files.")
     parser.add_argument("--update-id", help="For report: stable identity for a later conclusion; retry the same id and text.")
@@ -90,6 +97,35 @@ def register_manager_inbox(subparsers, add_format):
 
 def handle_manager_inbox(args, registry_path, runtime_root):
     try:
+        remainder = getattr(args, "remaining_work", None)
+        resume = getattr(args, "resume_when", None)
+        if remainder is not None or resume is not None:
+            if args.manager_inbox_action != "report" or remainder is None or resume is None:
+                raise ValueError("--remaining-work and --resume-when require report and each other")
+        if args.manager_inbox_action == "original-conversation":
+            from ..control_plane.collaboration.peers import original_conversation_request
+            if not args.conversation_operation or not args.conversation_file:
+                raise ValueError("--conversation-operation and --conversation-file are required")
+            caller_goal_ref = None
+            if args.goal_instance_id is not None:
+                from ..control_plane.goals.goal_ref_validation import exact_goal_ref
+                if not args.goal_id:
+                    raise ValueError("--goal-instance-id requires --goal-id")
+                caller_goal_ref = exact_goal_ref(args.goal_id, args.goal_instance_id)
+            with Path(args.conversation_file).open("rb") as stream:
+                raw = stream.read(128001)
+            if len(raw) > 128000:
+                raise ValueError("original conversation parameters are too large")
+            parameters = json.loads(raw)
+            if not isinstance(parameters, dict) or any(key in parameters for key in ("operation", "requester", "coordination_runtime_root")):
+                raise ValueError("conversation parameters cannot assert source identity or routing")
+            result = original_conversation_request(runtime_root, registry_path, args.goal_id, args.agent_id,
+                operation=args.conversation_operation, parameters=parameters, caller_goal_ref=caller_goal_ref,
+                **({"chat_url": args.chat_url} if args.chat_url else {}))
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+        if any(getattr(args, key, None) is not None for key in ("conversation_operation", "conversation_file", "chat_url")):
+            raise ValueError("original conversation options require manager-inbox original-conversation")
         if getattr(args, "read_goal_scope", None) is not None and args.manager_inbox_action != "configure-read-scope":
             raise ValueError("--read-goal-scope is only supported for configure-read-scope")
         if args.manager_inbox_action != "control" and any(getattr(args, key, None) is not None for key in ("control_operation", "control_file", "goal_instance_id")):
@@ -266,6 +302,7 @@ def handle_manager_inbox(args, registry_path, runtime_root):
                 update_id=getattr(args, "update_id", None),
                 attachment_refs=getattr(args, "attachment_ref", None),
                 request_revision=getattr(args, "request_revision", None),
+                remaining_work={"summary": remainder, "resume_when": resume} if remainder is not None else None,
                 workspace=Path.cwd(),
                 registry=registry_path,
             )

@@ -1,7 +1,8 @@
+import {prepareClaimExecution, type ClaimWorkspaceObserver} from "./claim_execution.ts";
 import {retiredHandoffModeRejection, HANDOFF_MODE_RETIRED_REASON} from "./handoff_mode_policy.ts";
 import {AUTHORITY_SOURCE_CHANGED, uncheckedAuthoritySource, type AuthoritySourceCheck} from "./authority_source.ts";
 import {currentLeaseAcquisitionProof} from "./lease_acquisition_proof.ts";
-import {canonicalTaskLeaseAcquireFacts} from "./task_lease_state.ts";
+import {canonicalTaskLease, canonicalTaskLeaseAcquireFacts} from "./task_lease_state.ts";
 import {evaluateTaskLeaseAcquireDecision, materializeTaskLeaseAcquire} from "../work_items/task_lease_acquire_decision.ts";
 import type { JsonObject } from "../effect_program.ts";
 import type { AuthorityStore, AuthorityStoreCommit } from "./authority_store.ts";
@@ -61,6 +62,7 @@ export interface CoordinationTodoClaimInput {
   /** Optional causal binding materialized atomically with an actual runnable claim. */
   readonly replan_obligation_id?: string;
   readonly lease_request?: CoordinationTodoClaimLeaseRequest | null;
+  readonly manage_execution?: boolean;
   readonly dry_run: boolean;
   readonly now: Date;
 }
@@ -217,6 +219,7 @@ export function evaluateCoordinationTodoClaimDecision(
   todo: JsonObject,
   input: CoordinationTodoClaimInput,
   activeLeaseOwner?: string | null,
+  expiredLeaseOwner?: string | null,
 ): CoordinationTodoClaimDecision {
   const registered = input.registered_agents;
   const owner = input.claimed_by;
@@ -234,10 +237,12 @@ export function evaluateCoordinationTodoClaimDecision(
   const existing = typeof todo.claimed_by === "string" && todo.claimed_by.length > 0
     ? normalizeTodoAgent(todo.claimed_by, "todo.claimed_by")
     : null;
-  // Cross-agent transfer requires an explicit handoff transfer grant.
+  // A managed hard-lease claim can replace the matching expired holder.
+  // This fact is derived from canonical state, never a caller bypass flag.
+  // Other cross-agent transfer requires an explicit handoff transfer grant.
   // The grant binds source owner, target owner, todo id, revision, and
   // current continuation-note facts; it can only be produced by the handoff
-  // flow. Without a valid grant, foreign-owner claims are always rejected.
+  // flow. Without expiry or a valid grant, foreign-owner claims are rejected.
   // The final claim authority reuses the shared validateContinuationNote so
   // the prepared-note invariant is enforced in one place: an arbitrary JSON
   // note with matching hash is rejected because it lacks the typed marker,
@@ -262,7 +267,7 @@ export function evaluateCoordinationTodoClaimDecision(
         && registered.includes(owner);
     }
     const leasedByOther = activeLeaseOwner !== undefined && activeLeaseOwner !== null && activeLeaseOwner === existing;
-    if (leasedByOther || !grantValid) {
+    if (leasedByOther || !(grantValid || expiredLeaseOwner === existing)) {
       return decisionFailure(
         "claim_owner_mismatch",
         "Todo is already claimed by another agent",
@@ -335,13 +340,14 @@ export async function executeCoordinationTodoClaim(
   store: AuthorityStore,
   rawInput: CoordinationTodoClaimInput,
   authoritySourcesCurrent: AuthoritySourceCheck = uncheckedAuthoritySource,
+  observeWorkspace?: ClaimWorkspaceObserver,
 ): Promise<CoordinationTodoClaimResult> {
   // Retry only a conclusive provider CAS rejection. Each attempt rereads the
   // original receipt and the complete head, then rechecks source authorization,
   // claim ownership, acceptance and lease/write-scope exclusion. Pinned revisions
   // (including handoff grants) must return to their caller for a fresh observation.
   for (let attempt = 0; ; attempt++) {
-    const result = await executeClaimAttempt(store, rawInput, authoritySourcesCurrent);
+    const result = await executeClaimAttempt(store, rawInput, authoritySourcesCurrent, observeWorkspace);
     if (attempt >= 2 || rawInput.expected_provider_revision !== undefined ||
         rawInput.transfer_grant !== undefined || result.status !== "conflict" ||
         result.conflict_kind !== "provider_revision_mismatch") return result;
@@ -352,6 +358,7 @@ async function executeClaimAttempt(
   store: AuthorityStore,
   rawInput: CoordinationTodoClaimInput,
   authoritySourcesCurrent: AuthoritySourceCheck,
+  observeWorkspace?: ClaimWorkspaceObserver,
 ): Promise<CoordinationTodoClaimResult> {
   let input: CoordinationTodoClaimInput;
   try {
@@ -366,6 +373,12 @@ async function executeClaimAttempt(
       registered_agents: normalizeRegisteredTodoAgents(rawInput.registered_agents),
       lease_request: normalizeLeaseRequest(rawInput.lease_request),
     };
+    if (input.manage_execution !== undefined && typeof input.manage_execution !== "boolean") {
+      throw new AuthorityStoreProtocolError("manage_execution must be a boolean");
+    }
+    if (input.manage_execution && (input.lease_request != null || input.actor_agent_id !== input.claimed_by)) {
+      throw new AuthorityStoreProtocolError("Managed execution requires the claiming actor and no explicit lease request");
+    }
     if (typeof input.dry_run !== "boolean") {
       throw new AuthorityStoreProtocolError("dry_run must be a boolean");
     }
@@ -387,7 +400,7 @@ async function executeClaimAttempt(
 
   // Intent identity excludes observation time and current authorization facts.
   // A receipt proves historical acceptance, never a renewed/current lease.
-  const requestSha = canonicalAuthoritySha256({
+  const requestIdentity = {
     goal_id: input.goal_id,
     todo_id: input.todo_id,
     claimed_by: input.claimed_by,
@@ -398,8 +411,10 @@ async function executeClaimAttempt(
     ...(input.transfer_grant === undefined ? {} : {transfer_grant: input.transfer_grant}),
     dry_run: input.dry_run,
     ...(leaseRequest === null ? {} : {lease_request: leaseRequest}),
+    ...(input.manage_execution ? {manage_execution: true} : {}),
     ...(input.replan_obligation_id === undefined ? {} : {replan_obligation_id: input.replan_obligation_id}),
-  });
+  };
+  const requestSha = canonicalAuthoritySha256(requestIdentity);
   const receipt = new CoordinationCommandReceipt({result_schema: COORDINATION_TODO_CLAIM_RESULT_SCHEMA,
     identity: {schema_version: COORDINATION_TODO_CLAIM_RECEIPT_SCHEMA,
       operation_id: input.operation_id, goal_id: input.goal_id, request_sha256: requestSha},
@@ -414,13 +429,16 @@ async function executeClaimAttempt(
           result.mutation_authority === null || typeof result.mutation_authority !== "object") {
         throw new AuthorityStoreProtocolError("original claim result is invalid");
       }
+      if (input.manage_execution && (result.execution_managed !== true || result.claim_operation_id !== input.operation_id)) {
+        throw new AuthorityStoreProtocolError("managed claim receipt lost its execution reference");
+      }
       if (input.replan_obligation_id !== undefined && result.replan_obligation_id !== input.replan_obligation_id) {
         throw new AuthorityStoreProtocolError("claim replan binding differs from its original receipt");
       }
-      if (leaseRequest !== null) {
+      if (leaseRequest !== null || result.execution_managed === true && result.handoff_mode === "hard_lease") {
         const lease = canonicalAuthorityObject(result.lease, "original claim lease");
         if (lease.todo_id !== input.todo_id || lease.owner !== input.claimed_by ||
-            lease.idempotency_key !== leaseRequest.idempotency_key) {
+            leaseRequest !== null && lease.idempotency_key !== leaseRequest.idempotency_key) {
           throw new AuthorityStoreProtocolError("original claim lease identity is invalid");
         }
       }
@@ -430,10 +448,11 @@ async function executeClaimAttempt(
   const currentProof = async (result: CoordinationTodoClaimResult): Promise<CoordinationTodoClaimResult> => {
     if (!await authoritySourcesCurrent()) return failure(AUTHORITY_SOURCE_CHANGED.code, AUTHORITY_SOURCE_CHANGED.reason,
       {original_receipt: result.original_receipt}, "decision_rejection");
-    if (leaseRequest !== null) {
+    if (leaseRequest !== null || result.execution_managed === true && result.handoff_mode === "hard_lease") {
       try {
+        const key = leaseRequest?.idempotency_key ?? String(canonicalAuthorityObject(result.lease, "managed claim lease").idempotency_key);
         result = await currentLeaseAcquisitionProof(store, {...input, owner: input.claimed_by,
-          idempotency_key: leaseRequest.idempotency_key, required_handoff_mode: "hard_lease"}, result,
+          idempotency_key: key, required_handoff_mode: "hard_lease"}, result,
           (code, reason, detail = {}) => failure(code, reason, detail, "decision_rejection"));
       } catch (error) {
         return failure("invalid_coordination_task_lease", error instanceof Error ? error.message : "invalid canonical task lease",
@@ -454,11 +473,27 @@ async function executeClaimAttempt(
       {original_receipt: result.original_receipt}, "decision_rejection");
     return result;
   };
+  const recoverProof = async (result: CoordinationTodoClaimResult): Promise<CoordinationTodoClaimResult> => {
+    if (input.manage_execution && result.reason_code === "coordination_operation_identity_mismatch") {
+      const original = await store.readReceipt(input.operation_id);
+      const legacyIntent = {...requestIdentity};
+      delete legacyIntent.manage_execution;
+      if (original.status === "found" && original.receipts.length === 1 &&
+          original.receipts[0]?.schema_version === COORDINATION_TODO_CLAIM_RECEIPT_SCHEMA &&
+          original.receipts[0]?.goal_id === input.goal_id &&
+          original.receipts[0]?.request_sha256 === canonicalAuthoritySha256(legacyIntent)) {
+        // Preserve pre-upgrade assignment recovery. It remains historical, not
+        // a new managed execution; fresh work needs a new ordinary claim.
+        return executeClaimAttempt(store, {...input, manage_execution: false}, authoritySourcesCurrent);
+      }
+    }
+    return currentProof(result);
+  };
   const existing = await receipt.read(store);
-  if (existing !== null) return currentProof(existing);
+  if (existing !== null) return recoverProof(existing);
   if (!await authoritySourcesCurrent()) return failure(AUTHORITY_SOURCE_CHANGED.code, AUTHORITY_SOURCE_CHANGED.reason, {}, "decision_rejection");
   const observation = await receipt.observe(store);
-  if (observation.kind === "receipt") return currentProof(observation.result);
+  if (observation.kind === "receipt") return recoverProof(observation.result);
   const head = observation.authority;
   if (head.status !== "loaded") {
     return {
@@ -500,13 +535,20 @@ async function executeClaimAttempt(
     return failure("invalid_replan_successor_claim", "A successor must be open advancement work with a concrete action/target and unchanged causal identity");
   }
   const activeLeaseOwner = projection.leases.get(input.todo_id);
-  const activeLeaseActive = activeLeaseOwner !== undefined && leaseIsActive(activeLeaseOwner, input.now);
-  const activeLeaseHolder = activeLeaseActive && activeLeaseOwner !== undefined && typeof activeLeaseOwner.owner === "string"
-    ? normalizeTodoAgent(activeLeaseOwner.owner, "lease.owner")
-    : null;
   let authority: ReturnType<typeof evaluateCoordinationTodoClaimDecision>;
   try {
-    authority = evaluateCoordinationTodoClaimDecision(todo, input, activeLeaseHolder);
+    const activeLeaseActive = activeLeaseOwner !== undefined && leaseIsActive(activeLeaseOwner, input.now);
+    const activeLeaseHolder = activeLeaseActive && activeLeaseOwner !== undefined && typeof activeLeaseOwner.owner === "string"
+      ? normalizeTodoAgent(activeLeaseOwner.owner, "lease.owner")
+      : null;
+    let expiredLeaseHolder: string | null = null;
+    if (head.head.handoff_mode === "hard_lease" && input.manage_execution === true && activeLeaseOwner) {
+      const retained = canonicalTaskLease(activeLeaseOwner, input.goal_id, input.todo_id);
+      if (retained.status === "active" && !leaseIsActive(retained, input.now)) {
+        expiredLeaseHolder = normalizeTodoAgent(retained.owner, "lease.owner");
+      }
+    }
+    authority = evaluateCoordinationTodoClaimDecision(todo, input, activeLeaseHolder, expiredLeaseHolder);
   } catch (error) {
     return failure(
       "invalid_coordination_todo_claim",
@@ -543,9 +585,16 @@ async function executeClaimAttempt(
   let lease: JsonObject | null = null;
   let leaseChanged = false;
   let leaseIdempotent = false;
+  let overlapAdvisories: JsonObject[] = [];
   try {
     const currentLease = projection.leases.get(input.todo_id);
-    if (handoffMode === "hard_lease" && leaseRequest !== null) {
+    if (handoffMode === "hard_lease" && input.manage_execution === true) {
+      const prepared = await prepareClaimExecution(head.head, input, observeWorkspace);
+      lease = prepared.lease;
+      leaseChanged = prepared.changed;
+      leaseIdempotent = !leaseChanged;
+      overlapAdvisories = prepared.overlapAdvisories ?? [];
+    } else if (handoffMode === "hard_lease" && leaseRequest !== null) {
       // Validate required scopes before planning; a caller cannot omit a required conflict.
       const writeScopes = coordinationTodoWriteScopes(todo);
       const facts = canonicalTaskLeaseAcquireFacts(projection, input.goal_id, input.todo_id, input.registered_agents, input.now);
@@ -625,7 +674,7 @@ async function executeClaimAttempt(
     return failure(String(acceptance.reason_code), `${String(acceptance.reason)} Inspect Goal acceptance and ask the owner to configure or rebind this Todo.`,
       {goal_acceptance_guard: acceptance}, "decision_rejection");
   }
-  if (leaseRequest !== null) {
+  if (leaseRequest !== null || input.manage_execution) {
     const dependency = todoExecutionDependencyRejection(projection.todos, input.todo_id, input.now);
     if (dependency !== null) return failure(dependency.code, dependency.reason,
       {resume_condition: dependency.condition}, "decision_rejection");
@@ -647,7 +696,9 @@ async function executeClaimAttempt(
     handoff_mode: handoffMode,
     ...(changed ? {updated_at: updatedAt} : {}),
     mutation_authority: mutationAuthority,
-    ...(leaseRequest === null ? {} : {
+    ...(overlapAdvisories.length ? {integration_overlap_advisories: overlapAdvisories} : {}),
+    ...(input.manage_execution ? {execution_managed: true, claim_operation_id: input.operation_id} : {}),
+    ...(leaseRequest === null && !(input.manage_execution && handoffMode === "hard_lease") ? {} : {
       todo_changed: todoChanged,
       lease_changed: leaseChanged,
       lease_idempotent: leaseIdempotent,

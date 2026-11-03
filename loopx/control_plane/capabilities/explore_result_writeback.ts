@@ -13,6 +13,26 @@ export const EXPLORE_PATH_DELTA_ATTACHMENT_SCHEMA = "explore_result_from_path_de
 // The complete scoped finding fits the result-log owner: 160 revision + 200
 // applicability + 320 observation + 1200 interpretation + four labels < 2000.
 export const EXPLORE_WRITEBACK_SUMMARY_LIMIT = 2000;
+// These clauses constrain evidence collection, route selection or lease lifetime
+// before authoring. Keep them in the entry even when attachment syntax is read
+// later. The full standalone guidance retains its original order and bytes.
+const EXPLORE_BEFORE_WORK = {
+  openLease: "When execution fencing applies to an open Todo, keep its claimed execution through refresh-state and Explore graph/Todo-link delivery; end that execution only after explore_result_delivery.ok=true. The writeback resolves and checks execution proof internally.",
+  leaseRecovery: "If execution has ended or expired, re-enter the normal guard and todo claim path before retrying; a stale task reference cannot resume execution.",
+  completedLease: "When execution fencing applies to a completed Todo, only its existing owner-scoped additive evidence-link exception is permitted. Writeback checks retained execution history internally; this grants no new execution authority.",
+  deliveryReplay: "An exact replay of already-successful delivery is readback-only and needs no new claim; unfinished delivery still requires current ownership and execution checks.",
+  optionalFinding: "Routine work needs no attachment; do not invent findings.",
+  optionalCapture: "Capture is optional, not a settlement obligation.",
+  negativeEvidence: "A stopped route does not imply refuted status, and a score alone does not prove refutation.",
+  rawEvidence: "Keep raw logs local.",
+  measurementConditions: "Attach measurements when an evaluation returns quantitative evidence: include its metric, unit, explicit direction, candidate and result reference. Use the same comparison_scope only for the same task, evaluator, model/resource budget and evaluation conditions; separate local proxies from native results.",
+  measurementProvenance: "input_revision identifies the evaluated task/data revision; evaluation_ref identifies the evaluator/scoring protocol version. Keep both stable across candidates only when those conditions are verified unchanged. Put candidate code/artifact revisions in candidate_ref and individual evaluation/submission receipts in evidence_ref, not in the comparison keys. The measurement input revision and evidence reference must match this finding. If comparability is unknown, keep results separate and explain the uncertainty; never invent a shared version to obtain a delta.",
+  feedbackBeforeWork: "Use null for an unmeasured value. Read measurement_feedback before repeating a measured route: compare the latest recorded candidate with its same-scope best, investigate regressions and retain useful alternatives; a score does not itself close or authorize work.",
+  executionEvidence: "When an experiment has execution evidence, attach execution_observation: preserve its exact candidate and input version, planned versus executed method, change reason and measured resources. Missing measurements are null, not zero. A finding source digest is not an executable digest. Result evidence must name the candidate it actually evaluated, including delayed or regressing results; it does not certify current workspace quality or Goal completion.",
+};
+export function exploreBeforeWorkGuidance(): string {
+  return Object.values(EXPLORE_BEFORE_WORK).join(" ");
+}
 /** Shared point-of-use guidance; optional metadata never changes settlement. */
 export function exploreResultWritebackAffordance(): JsonObject {
   return {
@@ -25,11 +45,11 @@ export function exploreResultWritebackAffordance(): JsonObject {
     path_delta_attachment_schema: EXPLORE_PATH_DELTA_ATTACHMENT_SCHEMA,
     path_delta_attachment_template: {
       schema_version: EXPLORE_PATH_DELTA_ATTACHMENT_SCHEMA,
-      question: "", applicability: "", input_revision: "", status: "tentative",
+      question: "", applicability: "", input_revision: "", status: "",
     },
     linked_question_attachment_template: {
       schema_version: EXPLORE_PATH_DELTA_ATTACHMENT_SCHEMA,
-      node_id: "<linked-question-id>", input_revision: "", status: "tentative",
+      node_id: "<linked-question-id>", input_revision: "", status: "",
     },
     optional_question_evolution_example: {
       question_update: {status: "resolved"},
@@ -42,10 +62,10 @@ export function exploreResultWritebackAffordance(): JsonObject {
       candidate_ref: "candidate:revision-2", evidence_ref: "result:validation-2"}]},
     guidance: [
       "After validating reusable evidence, put explore_result in the vision JSON already submitted with --agent-vision-json.",
-      "For an open Todo under hard_lease, keep the active task lease through refresh-state and Explore graph/Todo-link delivery; release only after explore_result_delivery.ok=true.",
-      "If already released, re-enter the normal guard/claim/lease path before retrying.",
-      "A completed Todo under hard_lease permits only its existing additive evidence-link exception with the owner's retained released lease key and current version; this grants no new execution authority.",
-      "An exact replay of already-successful delivery is readback-only and needs no new lease; unfinished delivery still requires the applicable claim/lease proof.",
+      EXPLORE_BEFORE_WORK.openLease,
+      EXPLORE_BEFORE_WORK.leaseRecovery,
+      EXPLORE_BEFORE_WORK.completedLease,
+      EXPLORE_BEFORE_WORK.deliveryReplay,
       "Prefer path_delta_attachment_template when this same packet contains an evidence-linked path_delta: supply the question, applicability, tested input revision and explicit finding status.",
       "For a new question, omit node_id: the hook derives its identity from the exact question and applicability, creates it and links this Todo; no explore node call is needed.",
       "To add to a known question, reuse its returned node_id and canonical scope.",
@@ -57,16 +77,21 @@ export function exploreResultWritebackAffordance(): JsonObject {
       "The hook reuses the complete observation and route decision.",
       "For an existing question linked to this Todo, use linked_question_attachment_template: omit both question and applicability to reuse its canonical scope.",
       "New or unlinked questions still require explicit scope; input_revision and status are never inferred.",
+      "Choose status explicitly: tentative for unresolved interpretation, insufficient evidence or failed prerequisites; confirmed when evidence supports the stated conclusion within its applicability; refuted when evidence contradicts that conclusion within its applicability. Evidence references, a successful check, a score or a route decision alone do not choose the status.",
+      "Separate established observations from unresolved broader claims in interpretation; state what remains unknown and the next discriminating check when useful. Revisit the linked question at a meaningful conclusion using question_update; do not keep it open solely because the overall Goal is unfinished, or close it merely because a finding is confirmed.",
       "If path_delta also references local files, explicitly select its opaque identifiers with optional evidence_refs; selected refs must occur in this same path_delta.",
       "Without a selection, all refs must be opaque identifiers.",
       "Otherwise fill attachment_template, inline or via --explore-result-json.",
       "Matching sources coalesce; conflicts reject.",
-      "Routine work needs no attachment; do not invent findings.",
-      "Capture is optional, not a settlement obligation.",
-      "A stopped route does not imply refuted status, and a score alone does not prove refutation.",
-      "Keep raw logs local.",
-      "Attach measurements when an evaluation returns quantitative evidence: include its metric, unit, explicit direction, candidate and result reference. Use the same comparison_scope only for the same task, evaluator, model/resource budget and evaluation conditions; separate local proxies from native results. The measurement input revision and evidence reference must match this result. Use null for an unmeasured value. Read measurement_feedback before repeating a measured route: compare the latest recorded candidate with its same-scope best, investigate regressions and retain useful alternatives; a score does not itself close or authorize work.",
-      "When an experiment has execution evidence, attach execution_observation: preserve its exact candidate and input version, planned versus executed method, change reason and measured resources. Missing measurements are null, not zero. A finding source digest is not an executable digest. Result evidence must name the candidate it actually evaluated, including delayed or regressing results; it does not certify current workspace quality or Goal completion.",
+      EXPLORE_BEFORE_WORK.optionalFinding,
+      EXPLORE_BEFORE_WORK.optionalCapture,
+      EXPLORE_BEFORE_WORK.negativeEvidence,
+      EXPLORE_BEFORE_WORK.rawEvidence,
+      EXPLORE_BEFORE_WORK.measurementConditions,
+      EXPLORE_BEFORE_WORK.measurementProvenance,
+      "To reuse explicitly verified conditions, optional measurement_context supplies comparison_scope, input_revision and evaluation_ref for observations that omit those fields; conflicting fields reject. CLI finding accepts the same context via --measurement-context-json. This copies declared conditions, not proof of comparability.",
+      EXPLORE_BEFORE_WORK.feedbackBeforeWork,
+      EXPLORE_BEFORE_WORK.executionEvidence,
       "Observations allow 320 characters, interpretations 1200; the complete scoped summary is preserved within 2000 characters.",
     ].join(" "),
     // Blank evidence fields deliberately fail validation until the caller
@@ -75,13 +100,13 @@ export function exploreResultWritebackAffordance(): JsonObject {
     attachment_template: {
       schema_version: EXPLORE_RESULT_ATTACHMENT_SCHEMA,
       question: "", applicability: "", input_revision: "",
-      observation: "", interpretation: "", status: "tentative", evidence_refs: [],
+      observation: "", interpretation: "", status: "", evidence_refs: [],
     },
   };
 }
 
 const FIELDS = ["schema_version", "node_id", "question", "applicability", "input_revision",
-  "observation", "interpretation", "status", "evidence_refs", "question_update", "relations", "execution_observation", "measurements"];
+  "observation", "interpretation", "status", "evidence_refs", "question_update", "relations", "execution_observation", "measurements", "measurement_context"];
 // Reuse the persisted Explore node/edge vocabulary, distinct from finding status.
 const QUESTION_STATUSES = ["open", "exploring", "blocked", "resolved", "dead_end"] as const;
 const RELATION_TYPES = ["subtopic_of", "depends_on", "answers", "supports", "refutes", "leads_to"] as const;
@@ -164,7 +189,14 @@ function normalizeAttachment(value: unknown, visionPacket?: unknown, linkedScope
   });
   const execution = Object.hasOwn(row, "execution_observation")
     ? normalizeExploreExecutionObservation({observation: row.execution_observation}) : null;
-  const measurements = Object.hasOwn(row, "measurements") ? normalizeExploreMeasurements(row.measurements) : null;
+  if (Object.hasOwn(row, "measurement_context") && !Object.hasOwn(row, "measurements")) {
+    throw new EffectRuntimeRequestError("measurement_context requires measurements");
+  }
+  const measurements = Object.hasOwn(row, "measurements")
+    // Transport also reconstructs already committed inputs before replay is
+    // identified. New writes bind measurements in their precommit event plan;
+    // a new ingestion intent repeats that check below, never during replay.
+    ? normalizeExploreMeasurements(row.measurements, row.measurement_context) : null;
   if (measurements?.some(item => item.input_revision !== text(row.input_revision, "input_revision", 160)
     || !refs.includes(item.evidence_ref))) {
     throw new EffectRuntimeRequestError("measurements must retain this finding's input revision and evidence references");
@@ -187,7 +219,7 @@ function normalizeAttachment(value: unknown, visionPacket?: unknown, linkedScope
 }
 /** Explicit reference, not inferred evidence. Preserve every route item verbatim. */
 function attachmentFromPathDelta(row: JsonObject, visionPacket: unknown, linkedScope: unknown): JsonObject {
-  const fields = ["schema_version", "node_id", "question", "applicability", "input_revision", "status", "evidence_refs", "question_update", "relations", "execution_observation", "measurements"];
+  const fields = ["schema_version", "node_id", "question", "applicability", "input_revision", "status", "evidence_refs", "question_update", "relations", "execution_observation", "measurements", "measurement_context"];
   if (Object.keys(row).some(key => !fields.includes(key))) {
     throw new EffectRuntimeRequestError("Explore path_delta attachment contains unknown fields");
   }
@@ -285,6 +317,9 @@ export function planExploreQuestionEvolution(params: JsonObject): JsonObject {
 export function produceExploreResultIntent(params: JsonObject): JsonObject {
   const projection = requireJsonObject(params.projection, "writeback projection");
   const attachment = normalizeExploreResultAttachment({attachment: projection.explore_result});
+  if (attachment.measurements !== undefined) {
+    normalizeExploreMeasurements(attachment.measurements, undefined, attachment.execution_observation);
+  }
   const receipt = requireJsonObject(params.receipt, "writeback receipt");
   const source = text(receipt.event_id, "source receipt", 200);
   const key = createHash("sha256").update(source).digest("hex");

@@ -5,6 +5,28 @@ computed `quota should-run` decision. It gives an agent the next action and its
 safety contract without replaying every diagnostic lane in the full quota
 payload.
 
+This page describes the current versioned representation. The
+[unified-contract RFC](../../architecture/rfcs/controller-executor-unified-contract-v0.md)
+proposes replacing the live quota/envelope format choice with one complete
+contract, including differential delivery. Historical captures retain their
+original schema and signature; the proposal does not introduce a new CLI switch.
+The proposed composition point precedes capture and encoding. Today's action
+signature compares its registered projection; equality alone does not establish
+complete source-clause preservation or qualify the unified contract.
+The RFC's [C1 caller replacement](../../architecture/rfcs/controller-executor-unified-contract-v0.md#c1-caller-replacement-and-cutover-unit)
+also covers the direct Turn producer and final host prompts. Quota CLI output
+parity alone does not qualify those consumers. Historical v0 decoding remains
+separate from switching new admissions to a future unified version.
+
+中文：本页记录当前版本。[统一契约提案](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md)
+的终态是一份包含差分交付能力的完整契约，取消线上 quota/envelope 格式选择；
+历史捕获保留原 schema 与签名。本次文档更新不新增 CLI 开关。
+提议的组合点位于 capture 与编码之前。当前 action signature 比较其注册投影；
+仅签名相等不能证明完整来源条款得到保留，也不能验收统一契约。
+RFC 的 [C1 消费链替换](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md#c1-消费链替换与切换单元)
+还覆盖直接生产契约的 Turn 入口和最终 host prompt；仅 quota CLI 输出等价不能验收
+这些消费者。历史 v0 解码与新准入切换到未来统一版本分别处理。
+
 Preview it explicitly:
 
 ```bash
@@ -28,6 +50,9 @@ symlinks, and atomically publishes `decision.json` (0600 on POSIX) before printi
 the result. The file contains the unprojected decision and its original receipt;
 it excludes display-only host poll metadata. It can contain private Goal context:
 keep it out of public artifacts. No capture is created without a capture option.
+New captures use compact UTF-8 JSON with a final newline, retaining every value,
+including whitespace inside strings. Readers accept existing indented captures;
+recovery preserves their original bytes rather than rewriting their layout.
 
 If a tool truncates the displayed JSON, read this file instead of rerunning the
 guard merely to recover the observation. The file is **not fresh authority**:
@@ -73,6 +98,259 @@ CLI from becoming another reader of the legacy guidance field.
 中文：普通 quota CLI 热路径将完全相同的 fallback 副本改为本包根字段引用，完整
 事实仍在当前包内，不需再次执行 guard。不同副本和既有详细视图保留；原始决定与
 capture 不变。动作维度等价不意味着不同渲染可以共用原始 source hash。
+
+### Captured replan reads / 捕获后的重规划读取
+
+For a successful replan with `--decision-output-dir` or `--decision-output-root`,
+the CLI and TurnEnvelope expose `replan_action_packet.review` followed by
+`writeback`. Both are executable `quota replan-view` commands bound to the same
+captured JSON value and source hash. The first read supplies goal context,
+previous decision/results, planning dependencies and evidence references; the
+second supplies the existing authoring shape and settlement commands. No read
+runs another guard, writes a receipt or authorizes work. There is no additional
+read acknowledgement, mandatory model call or prescribed route change.
+
+The required review is the delivery owner for the captured Goal and planning
+horizon. The CLI entry and staged Host presentation do not repeat those bodies.
+They retain admission, selected work, required reads, authority and stop rules;
+the CLI also retains its current action portfolio for explicit selection. The
+signed executor envelope and complete capture remain unchanged. Each Turn must
+read its own review before deciding: a changed dependency or priority changes
+the source-bound reader even when native context delta transport is disabled.
+Uncaptured consumers keep the inline path. This changes presentation timing,
+not the Goal requirements or which work is authorized.
+
+中文：必读 review 统一交付本次捕获的 Goal 与规划范围，CLI 入口和分段 Host
+呈现不再重复这两份正文。入口保留准入、已选工作、必读项、权限与停止规则，
+CLI 也保留供显式选项使用的当前 action portfolio。执行器签名包和完整 capture
+不变；每个 Turn 决策前须读取自己的 review。依赖或优先级变化会改变绑定源摘要的
+读取命令，关闭原生差分时也生效。未捕获的调用保留原内联路径。这调整交付时序，
+不改变目标要求或授权工作范围。
+
+Captured reads retain the caller's explicit `--cli-bin` route, including later
+acceptance and Explore reads; an ambient executable cannot silently replace it.
+Without an explicit route, new captured readers use the current installed Python
+interpreter's `-m loopx.entrypoint` route rather than an unrelated PATH executable.
+Native reads propagate that route through review, acceptance and writeback; the
+complete original observation is not rewritten to carry a new command.
+The review stage provides structured facts without a prescribed diagnostic
+method. Writeback omits the generic filled-in Vision example while retaining
+field limits, legal options, source bindings and settlement rules. Enabled
+Stride retains its owner's current `minimal_example`, including the nested
+previous-decision and Explore review fields when applicable. Top-level required
+field names alone do not describe that authoring shape. The example supplies
+syntax, not a recommended decision or evidence of adoption; replace its claims
+with the reviewed facts. Decision evidence remains in review/Explore and the
+unchanged full capture. This changes no acceptance, authority, stop rule or
+validation budget, and does not establish fewer model retries or better results.
+
+中文：写回保留 Stride owner 的当前格式示例，包含适用的上次决策与 Explore 复盘
+嵌套字段。示例只说明语法，判断与证据仍来自本次复盘；验收、权限、停止条件和校验
+预算不变。字段完整性不代表模型已采用，也不证明重试减少或结果改善。
+
+Cumulative outcome requirements are indexed by exact content hash. Every
+objective, revision and requirement count remains visible; the acceptance read
+returns the complete original outcome. Identical IDs with different revisions
+or evidence remain distinct. Equal context/horizon copies share references;
+differing goal scopes remain separate. The full capture retains all evidence,
+original guidance and authoring examples. Explore has an optional, separately
+readable basis; unavailable evidence remains unavailable. These views do not
+assess acceptance, infer execution from counts or make a dependency global.
+
+The captured CLI Todo summary also reuses this outcome index when its complete
+acceptance contract exactly matches the reviewed Goal contract. Summary counts
+and selection facts remain intact; differing contracts or an existing summary
+index stay unchanged. This needs no extra read or native delta transport.
+
+中文：捕获后的 CLI Todo 摘要若携带与复盘 Goal 完全相同的验收契约，也复用
+同一验收索引，避免把已分段的细则重新整段交付。计数和任务选择事实保留；
+不同版本或已有摘要索引不变。无需新增读取或开启原生差分传输。
+
+`quota replan-view --decision-file <file> --source-hash <hash>` defaults to
+`--replan-stage review`; `writeback`, `acceptance --outcome-ref <ref>` and
+`explore` read the corresponding original-source detail. Missing/mutated sources
+fail without guard replay. Existing uncaptured calls, old native journals
+without a saved reader route, and direct structured Host requests without that
+route retain their prior full-source delivery. Those consumers can retire the
+legacy prompt only after retaining a valid original capture and executable
+reader; a missing source is never replaced by a fresh guard. The existing generic
+followthrough is now available with stride off; its result-class counts and
+observations remain evidence, not successful-work or goal-gain verdicts.
+
+Captured replans also reference Explore attachment syntax already present in the
+same captured writer instead of repeating it in the entry work context. This
+applies to default CLI/full recovery as well as optional delta delivery. Evidence,
+pagination, before-work feedback comparison, measurement provenance, optionality,
+privacy and lease-lifetime rules remain in the entry. Full authoring guidance and
+templates remain byte-for-byte in the writer. Only exact recognized guidance and
+matching fields with one captured Explore attachment qualify; unknown/custom
+text, differing templates, missing writers and uncaptured/non-replan calls stay
+inline. No new reader round trip or automatic evidence attachment is introduced.
+
+捕获的重规划入口复用同一写回阶段已有的 Explore 附件说明，默认 CLI、完整恢复和可选
+差分传输均适用。证据、分页、执行前反馈比较、测量来源、可选性、隐私与租约期限规则
+仍在入口；完整写回说明及模板逐字保留。仅对已识别且完全一致、具有唯一捕获写回附件
+的字段引用；未知或自定义说明、不同模板、缺少写回及未捕获或非重规划情形保持内联。
+不增加读取往返，也不自动附加研究结论。
+
+Live decisions replace the previous method checklist and duplicate stride
+planning advice with compact goal, evidence and authority boundaries. Review
+delivers those boundaries once, with the facts; writeback delivers the existing
+format. Eligible Todo order and agent-proposed candidate rules remain revisable
+planning choices, while original priorities, constraints, budgets and stops
+remain binding. Old captures retain their original text. This is an intentional
+change to advisory prompting, not a lossless claim about model behavior.
+
+The benchmark checkpoint preflight uses the same CLI decision capture with
+TurnEnvelope off. It retains the complete captured source for checkpoint
+selection and verification, and sends the projected CLI view to the model.
+The view's review/writeback commands read that exact observation; capture does
+not rerun admission, change evaluation opportunities or select a strategy.
+Identical work-context acceptance copies use that same read; other revisions
+stay inline. A source exceeding the RPC request bound uses the existing bounded
+local-snapshot transport for pure projection, preserving both transport limits.
+
+With native context delivery off, captured CLI and TurnEnvelope entries share
+one projection that defers the settlement plan/command list to the writeback
+read instead of printing both. The signed settlement identity stays inline for
+the outer Turn executor; the reader returns the complete canonical plan.
+The required review retains the current Core Goal and planning horizon; these
+bodies are not repeated in the model entry. Only cumulative acceptance detail
+is indexed; dependency, priority, blocker and plan changes remain visible in
+that Turn's review. This uses the existing optional full/delta owner, not a new
+cache or acknowledgement. Its default-off path needs no retained baseline.
+
+New native Turn journals bind the same readers to their original observation
+without rewriting it or inventing a quota receipt. Native Codex and structured
+Hosts use the shared review-before-format instruction. The Codex model receives
+verified Turn authority and reader routes while its journal and executor retain
+the full signed envelope. The model returns a semantic result; it does not run
+the CLI settlement sequence. A canonical replan attempt permits that semantic
+slice even when ordinary delivery is closed; explicit delivery denial/null,
+missing attempt, user and Stop restrictions retain their existing precedence.
+Full-source fallback remains available on the same capture. Whole-path cost
+must include entry, detail reads and recovery; indexing alone does not establish
+lower total cost or better decisions.
+
+中文：关闭差分时，CLI 与短包入口也共享延后结算格式的投影，完整计划只在写回
+读取时交付；外层仍拿到签名结算身份。每轮必读 review 保留当前 Core Goal 和
+规划窗口，模型入口不再重复这两份正文；累计验收明细才索引读取，依赖、优先级、
+阻塞与计划变化不可省略。新原生 journal
+绑定同源读取，模型使用事实审视后再读格式，执行器保留完整签名包并独占状态、
+额度与调度结算。规范 replan attempt 只允许该语义切片，不绕过显式拒绝、缺失
+attempt、用户或 Stop 限制。旧 journal 与没有安全读取路由的调用继续读原包；
+缺源只能恢复，不能重新准入补包。成本须计算全部读取及回退，不能只报告短包尺寸。
+未显式指定 CLI 时，新读取命令固定当前已安装 Python 的模块入口，后续验收和写回
+也沿用该路径，避免落到 PATH 中不支持该协议的另一份安装；原观察字节保持不变。
+
+Selection, current admission and stop facts stay inline. Optional native
+full/delta presentation and full recovery carry this same CLI view; the original
+source remains unchanged for checkpoint qualification and authority inspection.
+For a captured autonomous replan with no admitted Todo and no Explore attachment
+in its settlement plan, the entry omits the current owner's unusable attachment
+syntax. It retains evidence, feedback, before-work obligations and independent
+graph commands, and explains that Todo-bound attachment is unavailable. Unknown
+guidance, missing binding proof and uncaptured reads remain unchanged. This
+neither grants attachment authority nor defers another required read.
+
+中文：已捕获的纯自主 replan 没有准入 Todo、结算计划也没有 Explore 附件时，入口
+不再投递当前不可用的附件格式。事实、反馈、工作前义务及独立图谱记录入口完整保留，
+并说明附件需要 Todo 身份。未知指令、缺少绑定证明或未捕获的读取保持原样；这不增加
+附件权限，也不增加必须执行的后续读取。
+
+Writeback also offers `refresh-state --settle-turn`: after successful writeback
+and delivery postconditions it follows the canonical owed quota command for the
+same Goal, Agent, Todo/obligation and Turn, then verifies receipts. It collects no
+guard, changes no binding and performs no Todo completion. Failed validation,
+unsatisfied checkpoints, dry runs and no-spend closeout cannot debit quota.
+An ambiguous response is reconciled through the original receipts; exact retry
+cannot debit twice. Ordinary refresh without the option retains its behavior.
+When `--delivery-workspace-path` names the producing worktree, the combined
+operation also runs the owed command there, using the originating CLI's
+implementation. The normal workspace and settlement guards still apply; a
+missing or incompatible workspace leaves the original owed command recoverable.
+
+An in-flight recommendation does not require keeping a completed Todo open.
+Validate its original declaration, use ordinary completion when satisfied, and
+write semantic closeout with an evidence-linked vision decision on the original
+Turn. Unfinished bounded progress may retain the open Todo. On a fresh Turn,
+an explicit prior closeout or typed `path_delta.outcome=replan` releases the old
+continuation preference for ordinary eligible selection; it does not complete
+the Todo, infer intent from prose, or override a committed same-Turn binding.
+New route changes still use semantic closeout under the existing Vision
+contract. Reading a prior typed replan is recovery of committed intent, not
+permission to author a route change as in-flight progress.
+
+中文：关闭 native 上下文差分传输时，CLI 捕获入口也将已有结算计划与命令表推迟到
+writeback 读取，避免重复交付；当前准入、选择与停止事实仍在入口。可选 full/delta
+展示和完整恢复沿用这份 CLI 视图，原始源包保留用于 checkpoint 资格与权限检查。
+`refresh-state --settle-turn` 在写回与交付后置条件通过后，执行原 Goal/Agent/
+Todo 或 obligation/Turn 的 canonical 待结算命令并验证回执；不重新 guard、换绑或
+完成 Todo。验证失败、检查点未满足、dry-run 与无扣额收尾不能扣额；响应不确定时
+按原回执恢复，精确重试不会重复扣额。不传此选项保持原 refresh 行为。
+指定 `--delivery-workspace-path` 后，组合操作也在该交付工作区执行待结算命令，
+继续使用原调用方的 CLI 实现。原工作区和结算校验保持；目录缺失或不兼容时保留
+原待结算命令以便恢复。
+
+执行中续跑建议不要求把已完成的 Todo 保持开放。原声明验收满足后可正常完成，并
+在原 Turn 上按语义收尾写入有证据的 vision；未完成的阶段进展仍可保留开放状态。
+新 Turn 尊重上轮明确收尾或结构化 `path_delta.outcome=replan`，放开旧续跑偏好，
+重新按现有资格选任务；不自动完成 Todo、不按文案猜意图，也不覆盖已提交的当轮绑定。
+新的路线变更仍须按既有 Vision 契约使用语义收尾；读取历史结构化 replan 是恢复已
+提交的意图，不是允许把路线变更伪装为执行中进展。
+
+对使用 `--decision-output-dir` 或 `--decision-output-root` 的成功 replan，CLI 和
+TurnEnvelope 先给出 `review` 状态读取，再给出 `writeback` 格式读取。两步绑定同一
+快照和来源哈希，不重新准入、不新增回执或授权，也不强制换路线。累计验收按完整
+内容哈希建立索引：每个目标、版本及要求数量可见，明细完整读回；相同 ID 的不同
+版本不会覆盖。相同的目标上下文副本共享引用，不同范围保留。Explore 明细单独按需
+读取；不可用保持不可用。完整快照仍保存原指导、示例和证据。没有捕获或没有 CLI
+读取路径的原生 journal 保持原交付方式。通用执行回顾不再依赖 stride 开关；分类
+计数只表示观测，不等于工作成功或目标收益。
+
+捕获后的读取沿用调用方显式选择的 `--cli-bin`，后续验收和 Explore 读取也不会
+悄悄切换到环境中的其他版本。复盘视图提供结构化事实，不预设诊断方法；写回视图
+只移除通用 Vision 的预填示例，保留字段限制、合法选项、来源绑定和结算规则。
+启用 Stride 时保留当前 owner 的嵌套语法示例，必需字段与 basis 选项也独立展示；
+判断和证据仍须来自实际复盘，完整快照仍可按需读取。示例不代表推荐决定或已采用
+证据，不删除验收、权限或停止义务，也不证明自主决策质量提升。
+
+新决定用精简的目标、证据和权限边界替换原方法清单及重复的 stride 规划建议：复盘
+一次交付这些边界与事实，写回提供既有格式。可执行 Todo 的次序和 agent 自拟候选
+规则可以调整，原有优先目标、硬约束、预算与停止仍须保留。旧快照保留原文；这是
+有意改变建议性提示，不能称为对模型行为无损。benchmark checkpoint 前置检查也
+使用同一 CLI 捕获入口，TurnEnvelope 关闭仍生效：完整源包供 checkpoint 选择和
+校验，模型读取投影视图，再从同一观察分段读取。不重复准入、不改变评测机会，
+也不替 agent 选择策略。
+work context 中完全相同的验收副本复用该读取，不同版本保留。超过 RPC 请求限额的
+完整源包用既有有界本地快照传输做纯投影；两种传输限额均不放宽。
+
+Regression budgets use compact UTF-8 JSON, separately from compute quota and
+provider tokens. The synthetic workload uses a real append index with 1,500
+records, 21 later observations, 24 cumulative outcomes and a populated Explore
+log. Limits protect default input while exact details remain readable:
+
+| View | Regression allocation |
+| --- | --- |
+| Replan entry packet | 2 KiB |
+| Populated history review | 16 KiB |
+| Planning inventory increment | 8 KiB |
+| Cumulative acceptance index increment | 12 KiB |
+| Explore increment in entry / review | 128 B / 768 B |
+| Explore detail / writeback | 8 KiB / 16 KiB |
+
+The whole-envelope differential also prevents a large acceptance copy moving to
+another hot carrier. These are fixture regression allocations, not runtime
+truncation or refusal limits; the existing 8 KiB envelope warning remains.
+File/SQLite CLI tests cover capture → reads → existing writeback, hash rejection
+and unchanged state during reads. They do not establish model choice quality,
+installed adoption, token savings or matched long-horizon benefit.
+
+大小回归使用紧凑 UTF-8 JSON，与算力 quota 和 provider token 分开。通用 review、
+累计验收索引和 Explore 分别约束增量，同时检查整个 envelope，防止把大副本挪到
+另一处热输入。预算不在运行时截断或拒绝合法内容，原 8 KiB envelope 警告保留。
+File/SQLite CLI 验证快照、分步读取、既有写回和哈希拒绝，不据此宣称模型决策、
+已安装采用、token 节省或长程收益改善。
 
 ### Native Turn Host capture
 
@@ -268,6 +546,42 @@ work context 中已加载的来源，其次保留 planning horizon 或第一份�
 签名覆盖的 work context，拒绝缺失或不可用来源。这只证明展示成本下降，尚不证明
 上游读取减少、模型采用或完整任务效率提升。
 
+Known Todo diagnostic lanes share `quota/diagnostic_projection.ts` through the
+existing coarse context call. Read-only status/plan projects all rows in one
+call, rather than a call per Goal or lane. Unknown lists, fields, versions and
+complex nested item content remain full; field recognition reuses the canonical
+Todo contract. Retained items, capability candidates, portfolio text, planning
+horizon and selected-work sources are not shortened. Explicit detail returns the
+original summaries. Upstream compaction remains visible as `source_projection`.
+Status/plan adds one projection request; Agent/vision detail still needs one
+when the User summary remains compact. Explicit full Todo roles bypass that
+diagnostic request. These transport costs must be included in comparisons.
+Diagnostic replies carry only display edits and references to the immutable
+input. The Python adapter applies them to its original facts, preserving float
+spelling, negative zero, large-integer precision and relocated upstream metadata.
+Reference-only callers keep their existing transport; no Python compaction
+decision is reintroduced. The read codec's `content_revision` is recognized as
+known display metadata and remains on retained items.
+The legacy detail command observes current state and cannot recover an earlier
+decision. The scoped native consumer and original-capture reference are a separate
+[controller integration proposal](https://github.com/loopx-project/loopx/pull/7430),
+which reuses this same owner. This does not change admission, claims, leases,
+settlement or native context defaults; it does not qualify net efficiency gains.
+
+中文：已知 Todo 诊断列表通过既有粗粒度上下文调用复用同一 typed owner；只读
+status/plan 整批行只调用一次，不逐 Goal 或列表调用。未知列表、字段、版本和
+复杂嵌套条目保留全文，字段识别复用规范 Todo 契约；保留条目、候选、portfolio
+正文、规划视野和当前工作来源不截短，详情返回原摘要，上游压缩信息保留于
+`source_projection`。旧详情命令读取当前状态，不能恢复历史决定。
+status/plan 新增一次投影请求；Agent/vision 详情若仍压缩 User 摘要，也需一次；
+显式展开两类 Todo 则跳过诊断投影。这些传输成本须计入比较。scoped 原生
+消费者及同 capture 引用属于单独的 controller 集成提案 #7430，复用同一 owner。
+此处不改准入、claim、lease、结算或原生默认，也不代表完整效率收益通过。
+诊断回复只传展示变更及不可变输入的引用；Python adapter 在原始事实上应用，
+保留浮点表示、负零、大整数精度及迁移后的上游元数据。仅引用的旧调用方保持
+原传输行为，不重新引入 Python 裁剪决定。读取 codec 已有的 `content_revision`
+属于已知展示元数据，在保留条目上仍完整存在。
+
 The selected-Todo display body is display-only and may be bounded; the typed
 owner validates the exact read against selected identity, lifecycle, claim and
 source revision. A supplied full-body snapshot must match before fulfilling the read. If the full body is already
@@ -360,8 +674,9 @@ The envelope flag selects a projection of the full decision. The original v0
 contract left the default `quota should-run` output unchanged; the
 [PR-05 migration](protocol-action-packet-decision-v0.md) omits
 `protocol_action_packet` from new full decisions, including live, paused and
-recovery output, from the first release containing #4794. Historical v0 reads
-remain supported for the v0 reader lifetime. The v0 envelope keeps:
+recovery output, from the first release containing #4794. The subsequent
+reader retirement in #7161 explicitly rejects packet-bearing decisions and
+capsule witnesses. Packet-free v0 envelopes remain supported. The envelope keeps:
 
 - the selected todo, claim, and effective action;
 - the bounded action portfolio when the agent must choose among multiple
@@ -375,13 +690,91 @@ remain supported for the v0 reader lifetime. The v0 envelope keeps:
 - validation/writeback and quota-spend policy;
 - the current scheduler action and cadence acknowledgement command.
 
-The envelope also carries a bounded `contract_capsule` for interaction mode,
+The envelope also carries a `contract_capsule` for interaction mode,
 work-lane and execution obligations, successor/replan duties, automation
 liveness, vision/handoff state, and actionable warning references. A canonical
 `action_signature` is independently built from the full decision and from the
 envelope; matching hashes prove the covered action dimensions agree for that
 projection. They do not prove that every possible quota state has test
 coverage.
+
+The five execution-contract objects `work_lane_contract`,
+`execution_obligation`, `autonomous_replan_scope`, `agent_scope_frontier`, and
+`automation_liveness` retain their complete source JSON, including nested data,
+ordered lists, empty values and unrecognized metadata. Their clauses are not
+subject to display truncation. Both quota-envelope emission and direct Turn
+composition use this shared producer. The shared structured Host prompt now
+forwards the remaining signed capsule for ordinary execution as well as staged
+replanning; previously the ordinary path omitted it. Retaining metadata does
+not interpret it as a new execution permission or support a new required
+semantic. Existing schema/signature coverage and historical captured envelopes
+remain readable without rewriting them. Re-projecting an older raw decision
+with the corrected producer can produce a different signature; validate an
+existing envelope against its saved content and digest. Raw quota output and admission,
+scheduler and settlement decisions are unchanged. Larger capsule bytes remain
+visible in the existing diagnostic budget warning; this correction does not
+claim lower token cost or complete controller-contract unification.
+
+中文：上述五份执行契约完整保留源 JSON，包括嵌套数据、有序列表、空值和未知
+元数据，不按展示预算截断条款。quota 短包与直接 Turn 共用该生产者；共享结构化
+Host 在普通执行和分阶段重规划中都传递剩余的已签名 capsule，修复普通执行
+原先遗漏的问题。保留元数据不表示解释新权限或支持新的必需语义。既有 schema、
+签名覆盖与历史捕获内容继续可读，不改写旧记录。用修正后的生产者重新投影旧
+原始决定可能得到不同签名；既有 envelope 应按保存内容与摘要校验。原始 quota
+输出、准入、调度和
+结算决定不变。增长的字节量仍通过既有预算诊断可见；这项修正不证明 token
+成本下降，也不表示 controller 契约已完全统一。
+
+Live Turn planning, native Codex prompt construction and structured Host
+consumption share the TypeScript owner's version gate. The current consumer
+accepts `loopx_turn_envelope_v0`, action-signature schema v0 and the registered
+v0–v5 coverage versions. An explicitly unknown or null version is rejected
+before Host launch, even when its unchanged action digest still matches. The
+historical digest document does not sign these version declarations, so digest
+equality alone cannot establish consumer compatibility. Existing v0 callers
+that omit signature-version metadata retain their prior behavior; digest,
+lineage, current authority and settlement checks remain separate. Saved capture
+bytes and old signature documents are not rewritten. This gate does not qualify
+a future unified schema or interpret unknown required nested semantics.
+
+中文：实时 Turn 规划、原生 Codex 提示构造和结构化 Host 消费共用 TypeScript
+owner 的版本门。当前 consumer 接受 envelope v0、action-signature schema v0
+及已注册的 v0–v5 coverage；显式未知或 null 版本即使仍携带匹配的旧行动摘要，
+也会在 Host 启动前拒绝。历史摘要文档不签署这些版本声明，摘要相等不能证明
+消费者兼容。省略签名版本元数据的既有 v0 调用方保持原行为；摘要、谱系、当前
+权限和结算校验仍各自负责。既有捕获字节和历史签名文档不改写。此门不表示未来
+统一 schema 已获得资格，也不负责解释未知的必需嵌套语义。
+
+Ordinary structured Host prompts also retain the signed `user`,
+`execution_policy`, `scheduler`, `response_plan`, and
+`task_orchestration_contract` sections, plus the existing captured-decision
+reference when present. These sections are no longer conditional on a staged
+replan reader. Notification policy does not grant or cancel execution authority;
+carrying surrounding Turn plans does not delegate their effects. The prompt
+keeps state writeback, quota and scheduler operations with the outer Turn
+executor and asks the work segment to return its semantic result.
+
+中文：普通结构化 Host 还保留已签名的用户通知、执行策略、调度、响应计划、
+任务编排五个区段，以及已有的捕获决定引用，不再以分阶段 replan reader
+是否存在为条件。通知策略不授予或取消执行权限；传递外围 Turn 计划不等于
+委派其副作用。提示明确由外围 Turn executor 负责状态写回、quota 和调度操作，
+工作段返回语义结果。
+
+The structured Host also receives signed `agent_id`, `decision`, `should_run`,
+`effective_action` and `state`. Its `action` object retains execution flags,
+action choices and capability intent while the existing task/planning carriers
+keep their established locations. `recommended_action` remains a display
+fallback, omitted from this Host projection because it can retain an older
+recommendation than the authoritative `primary_action`. Neither a suggested
+alternative nor a transported intent overrides admission, scope or effect
+ownership. This is input preservation, not a new admission decision or the
+unified-contract writer transition.
+
+中文：结构化 Host 同时收到已签名的 Agent 身份、决定、是否运行、有效行动和
+状态；`action` 保留执行标记、行动选项及能力意图，任务和规划字段沿用已有位置。
+`recommended_action` 是可能落后于权威 `primary_action` 的展示回退，仍不放入
+此 Host 投影。建议选项和传递的意图不覆盖准入、作用域或副作用归属。这是输入
+保真修复，不增加准入决策，也不表示统一契约 writer 已切换。
 
 Required reads use the authoritative `interaction_contract.agent_channel` list,
 including an explicit empty list. Historical interaction-root and payload lists
@@ -536,16 +929,33 @@ read basis，同一 TS recommendation owner 仍在追加 run 前拒绝跨任务�
 本项修复此前错误接受的跨任务写入，不清依赖、不改变 Todo 权威或授予新 Turn。
 
 For an eligible explicit choice deferred solely by runnable autonomous replan,
-the typed qualifier adds `inline_reentry_allowed=true`. After durably retaining
-that choice, the CLI now executes one same-Turn guard reentry and returns its
-fresh result directly, including in TurnEnvelope mode. This changes the previous
-default of returning a failed selection before asking the caller to reenter.
+the typed qualifier adds `inline_reentry_allowed=true`. The CLI executes one
+same-Turn guard reentry and returns its fresh result directly, including in
+TurnEnvelope mode. With an existing receipt it first durably retains the choice.
+On the first guard it carries that choice internally until the final receipt,
+without emitting an intermediate refusal or an unbound discovery packet. A
+concurrent receipt appearing during this first-call retry stops the retry;
+it cannot replace the other caller's binding. This changes the previous first-call
+refusal that required the model to read discovery and binding packets separately.
 It grants no delivery or spend authority: the fresh guard and receipt owner
 still decide the Todo/replan binding, and may return a newly changed gate. It
-does not retry other hard lanes, missing candidates, or a first-call refusal
-without a durable choice receipt. The reentry has no explicit selection, so it
+does not retry other hard lanes or missing candidates. The reentry has no explicit selection, so it
 cannot recursively retry. Hosts that do not execute this CLI path can continue
 to use the existing recovery command.
+
+When native context delivery is enabled, rejected guards keep their error,
+original receipt and recovery action within the configured output budget.
+The full captured rejection is optional diagnostic detail, available through
+the digest-checked reader. Oversized diagnostics use a selected read of those
+failure fields. Neither response enters pending context delivery or establishes
+a differential baseline; disabled context delivery keeps its ordinary output.
+
+中文：已知且合格的任务仅因自主重规划被推迟时，首次调用内部完成一次同 Turn
+重判，只交付最终绑定结果，不要求模型先读拒绝、再读发现包、再读绑定包。
+已有回执仍先持久化选择；首次重试期间出现并发回执则拒绝覆盖。
+重判仍检查当前停止条件和额度，后续交付仍需新 Turn。启用原生上下文传输时，
+拒绝响应有界交付错误、原回执及恢复动作；完整失败包仅供按需诊断，
+不会建立差分基线。关闭该功能时保留原输出。
 
 For other refusals, the agent receives
 `recovery_action=reenter_guard_without_selection` and one executable
@@ -615,26 +1025,21 @@ The compact envelope does not truncate those executable commands into unusable
 strings. It carries non-exhaustive `writeback.suggested_todo_ids` plus
 `selection_command_ref`; the full decision remains the authority for exact argv.
 
-Historical full decisions may carry `protocol_action_packet`. For those inputs,
-the envelope reconstructs its ordered semantic fields from `action`, `user`,
-work-lane, automation, and scheduler contracts, while carrying the explicit
-`llm_policy=no_api` invariant. Exact reconstruction retains the source summary
-hash and derivation status; a differing compact action retains field-level
-`residue`; an opaque summary follows `unverified_retain_summary`. These remain
-historical read paths and do not rewrite stored packets or envelopes.
+Packet-bearing historical decisions and `contract_capsule.protocol_action_packet`
+witnesses are unsupported under [the retirement contract](protocol-action-packet-decision-v0.md).
+Presence, even null or empty, fails before conversion, hashing, capture binding
+or Host admission. Ordered legacy reconstruction, residue and opaque-summary
+fallback are removed. No signed dimension is silently dropped and no historical
+record or signature is rewritten. Callers must acquire a fresh typed decision;
+this does not introduce a question or an additional admission workflow.
 
-Under PR-05, a new source without a packet produces no
-`contract_capsule.protocol_action_packet` witness. The ordered semantic
-projection `protocol_action_packet_fields` and historical summary renderer
-remain; packet absence does not remove typed obligations or their signature
-coverage. Source and envelope signature documents must match for that input.
-Compared with a packet-bearing source, the document may lack the capsule's
-packet witness and have a different hash. This is not a cross-version hash
-compatibility promise; existing signature checks and historical signatures
-remain intact. The v1.1.0 reader/host accepts the tested new and stored v0 examples.
-The [migration contract](protocol-action-packet-decision-v0.md) defines the
-release boundary, v0 reader lifetime, consumer set and rollback steps; unknown
-external readers and complete private archives are not implicitly qualified.
+Packet-free sources produce no packet witness. All other typed obligations and
+signature dimensions retain their existing interpretation, including frozen
+packet-free v0 records. Source and envelope canonical documents must agree;
+missing, mismatched or tampered signatures still fail. This is a deliberate
+input-format retirement, not a retirement of all Envelope v0 records. The
+contract defines the source/release boundary and recovery without promising a
+whole-store rollback or qualification of unknown external readers.
 
 Large todo summaries, frontier diagnostics, readiness history, compatibility
 fields, and warning collections stay on the referenced full-decision/status

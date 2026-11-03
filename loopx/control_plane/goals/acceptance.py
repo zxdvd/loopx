@@ -195,23 +195,31 @@ def inspect_goal_acceptance(
     agent_id: str | None = None,
     todo_id: str | None = None,
     include_work_details: bool = True,
+    context_agent_id: str | None = None,
     delivery_workspace: Mapping[str, Any] | None = None,
     validation_workspace_path: Path | None = None,
 ) -> dict[str, Any]:
     """Read one canonical basis; command declarations stay inside the host."""
-    registry_path, _, route = _routing(registry_path, goal_id, runtime_root, agent_id)
+    registry_path, goal, route = _routing(registry_path, goal_id, runtime_root, agent_id)
     basis = _result(
         _INSPECT_METHOD,
-        {**route,
+        {**route, "registered_agents": registered_agent_ids_for_goal(goal),
          **({"agent_id": agent_id} if agent_id is not None else {}),
          **({"todo_id": todo_id} if todo_id is not None else {}),
+         **({"context_agent_id": context_agent_id} if context_agent_id is not None else {}),
          **({"include_work_details": False} if not include_work_details else {})},
     )
+    from copy import deepcopy
+    captured_contract = deepcopy(basis["goal_acceptance_contract"]) if "outcome_context" in basis else None
     basis["goal_acceptance_contract"] = observe_goal_acceptance_oracles(
         registry_path=registry_path, goal_id=goal_id,
         contract=basis["goal_acceptance_contract"], criteria=(basis.get("contract") or {}).get("criteria", []),
         task_repository=(basis.get("todo") or {}).get("task_repository"),
         delivery_workspace=delivery_workspace, validation_workspace_path=validation_workspace_path)
+    if captured_contract is not None and basis["goal_acceptance_contract"] != captured_contract:
+        # The optional navigation binds the exact owner's observation. Do not
+        # reuse it after host-side oracle readback changes those facts.
+        basis.pop("outcome_context", None)
     return basis
 
 
@@ -509,7 +517,9 @@ def run_goal_acceptance_validation_effect(
     return receipt
 
 
-def public_goal_acceptance(value: dict[str, Any]) -> dict[str, Any]:
+def public_goal_acceptance(
+    value: dict[str, Any], *, include_contract: bool = True,
+) -> dict[str, Any]:
     """Expose projections and revision tokens, never executable declarations."""
     keys = (
         "status",
@@ -524,7 +534,10 @@ def public_goal_acceptance(value: dict[str, Any]) -> dict[str, Any]:
         "goal_objective_guard",
         "reason_code",
     )
-    return {"ok": True, **{key: value[key] for key in keys if key in value}}
+    return {"ok": True, **{
+        key: value[key] for key in keys
+        if key in value and (include_contract or key != "goal_acceptance_contract")
+    }}
 
 
 def verify_goal_acceptance(

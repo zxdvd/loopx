@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import shlex
 import tempfile
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Iterable
 
 from harbor.agents.installed.base import with_prompt_template
@@ -47,6 +48,7 @@ _AGENT_ID = "benchmark-agent"
 NATIVE_GOAL_SOURCE_PATHS = (
     "benchmark/runtime",
     "loopx/capabilities/benchmark_toolkit/native_codex_goal.py",
+    "loopx/capabilities/benchmark_toolkit/native_codex_process.py",
     "loopx/control_plane/turn_driver/codex_stdio.py",
 )
 
@@ -58,7 +60,7 @@ class BenchmarkCodex(CodexOffline):
         self,
         *args,
         execution_mode="heartbeat",
-        iteration_context="fresh",
+        iteration_context=None,
         codex_sandbox="danger-full-access",
         validation_command=None,
         turn_timeout_sec=None,
@@ -72,6 +74,8 @@ class BenchmarkCodex(CodexOffline):
         task_entry=None,
         planning_timeout_sec=None,
         turn_envelope=False,
+        context_delivery=None,
+        provider_request_admission=False,
         native_goal_continue=False,
         task_objective=None,
         execution_observation=None,
@@ -96,7 +100,13 @@ class BenchmarkCodex(CodexOffline):
             validation_command if validation_command is not None else (),
             task_entry,
             turn_envelope,
+            context_delivery,
         )
+        if type(provider_request_admission) is not bool:
+            raise ValueError("provider_request_admission must be a boolean opt-in")
+        if provider_request_admission and self.execution.mode != "heartbeat":
+            raise ValueError("provider_request_admission requires heartbeat execution")
+        self.provider_request_admission = provider_request_admission
         if planning_timeout_sec is not None:
             raise ValueError(
                 "Remove planning_timeout_sec; planning shares scheduler_timeout_sec with execution"
@@ -145,6 +155,10 @@ class BenchmarkCodex(CodexOffline):
                 raise ValueError("checkpoint_request requires its staged guest path")
             from .checkpoint import parse_checkpoint_request
             self._checkpoint_declaration = parse_checkpoint_request(checkpoint_request)
+            if self._checkpoint_declaration.get("trigger") == "fresh_replan":
+                expected = PurePosixPath(_WAKE_LOG_DIR).parent / "checkpoints"
+                if PurePosixPath(self._checkpoint_declaration["destination"]) != expected:
+                    raise ValueError(f"fresh_replan destination must be {expected} in the worker")
         if checkpoint_request_path is not None:
             if self.execution.mode not in {"heartbeat", "turn"}:
                 raise ValueError("checkpoint_request_path requires a settled-work worker")
@@ -165,9 +179,17 @@ class BenchmarkCodex(CodexOffline):
             raise ValueError("Task objective must be a non-empty string")
         self.task_objective = task_objective
         super().__init__(*args, **kwargs)
+        if self.provider_request_admission:
+            if not (self._get_env("OPENAI_BASE_URL") or "").strip() or not (
+                self._get_env("OPENAI_API_KEY") or ""
+            ).strip():
+                raise ValueError("provider_request_admission requires a custom provider URL and API key")
+            if (self._get_env("CODEX_WIRE_API") or "responses") != "responses":
+                raise ValueError("provider_request_admission requires the Responses wire API")
 
     def _turn_envelope_receipt(self) -> dict:
-        return turn_envelope_receipt(explicit=self.execution.turn_envelope)
+        return {**turn_envelope_receipt(explicit=self.execution.turn_envelope),
+                **({"context_delivery": "on"} if self.execution.context_delivery != "off" else {})}
 
     def _planning_receipt(self) -> dict:
         return {"native_goal_continue": True} if self.native_goal_continue else {}
@@ -360,6 +382,7 @@ class BenchmarkCodex(CodexOffline):
                if self.execution_observation is not None else {}),
             **self._turn_envelope_receipt(),
             **self._planning_receipt(),
+            **({"provider_request_admission": "on"} if self.provider_request_admission else {}),
             "home_scope": "trial",
             "loopx_usage_ping_enabled": False,
             "login_shell_node_path": _BASH_ENV,
@@ -611,6 +634,8 @@ class BenchmarkCodex(CodexOffline):
                 **({"LOOPX_CHECKPOINT_REQUEST": self.checkpoint_request_path}
                    if self.checkpoint_request_path is not None else {}),
                 **({"LOOPX_TURN_ENVELOPE": "1"} if self.execution.turn_envelope else {}),
+                "LOOPX_CONTEXT_DELIVERY": self.execution.context_delivery,
+                **({"LOOPX_PROVIDER_REQUEST_ADMISSION": "on"} if self.provider_request_admission else {}),
                 **({"LOOPX_NATIVE_GOAL_CONTINUE": "1"} if self.native_goal_continue else {}),
                 "LOOPX_ITERATION_CONTEXT": self.execution.context,
                 "LOOPX_CODEX_SANDBOX": self.execution.sandbox,
@@ -652,26 +677,37 @@ class BenchmarkCodex(CodexOffline):
 
     @staticmethod
     def _totals(trajectories: Iterable[Trajectory]) -> dict[str, int | float | None]:
-        prompt = completion = cached = 0
-        costs: list[float] = []
-        for trajectory in trajectories:
-            metrics = trajectory.final_metrics
-            if metrics is None:
-                continue
-            prompt += metrics.total_prompt_tokens or 0
-            completion += metrics.total_completion_tokens or 0
-            cached += metrics.total_cached_tokens or 0
-            if metrics.total_cost_usd is not None:
-                costs.append(metrics.total_cost_usd)
-        return {
-            "prompt": prompt,
-            "completion": completion,
-            "cached": cached,
-            "cost": sum(costs) if costs else None,
+        # These are Harbor's converted session metrics, not a proof of raw-log
+        # or billing coverage. A partial field must never become a run total.
+        metrics = [trajectory.final_metrics for trajectory in trajectories]
+        fields = {
+            "prompt": "total_prompt_tokens",
+            "completion": "total_completion_tokens",
+            "cached": "total_cached_tokens",
+            "cost": "total_cost_usd",
         }
+        totals: dict[str, int | float | None] = {}
+        for key, field in fields.items():
+            values = [getattr(metric, field, None) for metric in metrics]
+            if not values or any(
+                type(value) not in ((int, float) if key == "cost" else (int,))
+                or value < 0
+                or (isinstance(value, float) and not math.isfinite(value))
+                for value in values
+            ):
+                totals[key] = None
+                continue
+            total = sum(values)
+            totals[key] = (
+                None if isinstance(total, float) and not math.isfinite(total) else total
+            )
+        return totals
 
-    def _write_aggregate_trajectory(self) -> list[Trajectory]:
-        trajectories = self._session_trajectories([self.logs_dir])
+    def _write_aggregate_trajectory(
+        self, trajectories: list[Trajectory] | None = None
+    ) -> list[Trajectory]:
+        if trajectories is None:
+            trajectories = self._session_trajectories([self.logs_dir])
         if not trajectories:
             return []
         steps = []
@@ -687,9 +723,9 @@ class BenchmarkCodex(CodexOffline):
             agent=trajectories[0].agent,
             steps=steps,
             final_metrics=FinalMetrics(
-                total_prompt_tokens=totals["prompt"] or None,
-                total_completion_tokens=totals["completion"] or None,
-                total_cached_tokens=totals["cached"] or None,
+                total_prompt_tokens=totals["prompt"],
+                total_completion_tokens=totals["completion"],
+                total_cached_tokens=totals["cached"],
                 total_cost_usd=totals["cost"],
                 total_steps=len(steps),
                 extra={"native_sessions": len(trajectories)},
@@ -703,33 +739,38 @@ class BenchmarkCodex(CodexOffline):
     def _populate_context(
         self, context: AgentContext, before: dict | None = None
     ) -> None:
-        totals = self._totals(self._session_trajectories([self.logs_dir]))
-        before = before or {}
-        context.n_input_tokens = int(totals["prompt"] or 0) - int(
-            before.get("prompt") or 0
-        )
-        context.n_output_tokens = int(totals["completion"] or 0) - int(
-            before.get("completion") or 0
-        )
-        context.n_cache_tokens = int(totals["cached"] or 0) - int(
-            before.get("cached") or 0
-        )
-        context.cost_usd = (
-            totals["cost"] - (before.get("cost") or 0)
-            if totals["cost"] is not None
-            else None
-        )
+        trajectories = self._session_trajectories([self.logs_dir])
+        totals = self._totals(trajectories)
+
+        def delta(key: str) -> int | float | None:
+            current = totals[key]
+            # Only an absent pre-phase observation means cumulative reporting.
+            # A present but incomplete baseline cannot establish a phase delta.
+            previous = 0 if before is None else before.get(key)
+            if current is None or previous is None or current < previous:
+                return None
+            return current - previous
+
+        def token_delta(key: str) -> int | None:
+            value = delta(key)
+            return value if type(value) is int else None
+
+        context.n_input_tokens = token_delta("prompt")
+        context.n_output_tokens = token_delta("completion")
+        context.n_cache_tokens = token_delta("cached")
+        context.cost_usd = delta("cost")
         context.metadata = {
             "execution_mode": self.execution.mode,
             "iteration_context": self.execution.context,
             "task_entry": self.execution.task_entry,
             **self._turn_envelope_receipt(),
             **self._planning_receipt(),
+            **({"provider_request_admission": "on"} if self.provider_request_admission else {}),
             "home_scope": "trial",
             **self._replan_receipt(),
             "benchmark_phase": self._phase_number,
         }
-        self._write_aggregate_trajectory()
+        self._write_aggregate_trajectory(trajectories)
 
     def populate_context_post_run(self, context: AgentContext) -> None:
         self._populate_context(context)
@@ -753,6 +794,10 @@ class BenchmarkCodex(CodexOffline):
             )
 
         before = self._totals(self._session_trajectories([self.logs_dir]))
+        # A genuinely empty pre-phase log set has no prior session usage. An
+        # existing rollout that Harbor cannot convert is not a zero baseline.
+        if not any(self.logs_dir.glob("sessions/**/*.jsonl")):
+            before = None
         try:
             if self.execution.uses_loopx:
                 await self._prepare_phase(environment, instruction, cwd=cwd)

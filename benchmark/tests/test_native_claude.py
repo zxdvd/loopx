@@ -9,8 +9,10 @@ import subprocess
 
 import pytest
 
+pytest.importorskip("sforge")
+
 from sforge.harness.config import SForgeConfig
-from benchmark.runtime.sforge_claude import NativeClaudeDockerBackend, NativeClaudeWorker
+from benchmark.runtime.sforge_claude import NativeClaudeWorker
 
 
 def worker(tmp_path):
@@ -67,7 +69,9 @@ def test_native_stop_hook_is_executable_under_private_umask(tmp_path):
 def test_real_upload_checks_agent_permissions(tmp_path):
     import docker
     import uuid
-    backend = NativeClaudeDockerBackend(docker.from_env())
+    from sforge.harness.backend.docker_backend import DockerBackend
+    from sforge.harness.run_agent import _install_task_file
+    backend = DockerBackend(docker.from_env())
     image = backend.client.images.get("python:3.12-slim")
     handle = backend.create_container(image.id, "claude-install-" + uuid.uuid4().hex[:10],
                                       cpu_limit=1, mem_limit="256m")
@@ -91,11 +95,15 @@ def test_real_upload_checks_agent_permissions(tmp_path):
         backend.copy_to_container(handle, prompt, PurePosixPath("/tmp/unrelated-private.md"))
         assert backend.exec_run(handle, ["cat", "/tmp/unrelated-private.md"],
                                 user="agent").exit_code != 0
-        backend.copy_to_container(handle, prompt, PurePosixPath("/tmp/agent_prompt.md"))
+        assert backend.exec_run(handle, ["cat", "/tmp/unrelated-private.md"],
+                                user="nobody").exit_code != 0
+        # Exercise the production owner, including its post-copy chmod/readback.
+        # The pinned provider explicitly classifies task files as non-secret.
+        _install_task_file(backend, handle, prompt, PurePosixPath("/tmp/agent_prompt.md"))
         readback = backend.exec_run(handle, ["cat", "/tmp/agent_prompt.md"], user="agent")
         assert readback.exit_code == 0 and readback.output == "Synthetic task instruction"
-        assert backend.exec_run(handle, ["cat", "/tmp/agent_prompt.md"],
-                                user="nobody").exit_code != 0
+        assert backend.exec_run(handle, ["stat", "-c", "%a", "/tmp/agent_prompt.md"],
+                                user="agent").output.strip() == "644"
         assert json.loads((tmp_path / "claude-install.json").read_text())["installation_verified"]
     finally:
         os.umask(old)

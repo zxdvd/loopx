@@ -109,6 +109,28 @@ test("time-anchored reading keeps record-time thirds, routes and explicit decisi
   assert.equal(parseExploreFindingSections("free-form finding text"), null, "unstructured findings stay raw prose");
 });
 
+test("short record span collapses thirds into one whole-history reading group", async () => {
+  const {buildExploreTimeline, MIN_THIRDS_SPAN_MS} = await import("../../loopx/control_plane/presentation/explore_timeline.ts");
+  // All records within one minute: thirds would create two empty reading groups.
+  const rows = [
+    event({event_id: "n1", result_id: "q1", title: "First", recorded_at: "2026-01-01T00:00:00Z"}),
+    event({event_id: "n2", result_id: "q2", title: "Second", recorded_at: "2026-01-01T00:00:30Z"}),
+    event({event_id: "f1", event_kind: "finding", result_id: "f1", node_id: "q1", status: "confirmed", recorded_at: "2026-01-01T00:00:45Z"}),
+  ];
+  const timeline = buildExploreTimeline(projectExploreHistory(rows, goal).nodes, [], projectExploreHistory(rows, goal).events);
+  assert.equal(timeline.phases.length, 1, "a sub-6h span reads as one whole-history group");
+  assert.equal(timeline.phases[0]!.nodes, 2);
+  assert.equal(timeline.phases[0]!.findings, 1);
+  // Long spans keep the three reading groups.
+  const long = [
+    event({event_id: "l1", result_id: "lq1", recorded_at: "2026-01-01T00:00:00Z"}),
+    event({event_id: "l2", result_id: "lq2", recorded_at: "2026-01-01T12:00:00Z"}),
+  ];
+  const longTimeline = buildExploreTimeline(projectExploreHistory(long, goal).nodes, [], projectExploreHistory(long, goal).events);
+  assert.equal(longTimeline.phases.length, 3);
+  assert.ok(MIN_THIRDS_SPAN_MS > 0);
+});
+
 test("phase reading retains successive decisions for one question, including a late backfill", async () => {
   const {buildExploreTimeline, exploreTimelinePhaseAt, selectExploreTimelineDecisions} = await import("../../loopx/control_plane/presentation/explore_timeline.ts");
   const finding = (id: string, at: string, outcome: string) => event({event_id: id, event_kind: "finding", result_id: id, node_id: "route", recorded_at: at, status: "tentative",
@@ -176,4 +198,26 @@ test("three unchanged research checkpoints retain their actual findings and miss
     }
     assert.equal(view.edges.length, 0, "the real solver recorded no typed relationships; chronology cannot supply them");
   }
+});
+
+test("decision history groups by declared question, never title, after time filtering", async () => {
+  const {buildExploreTimeline, groupExploreTimelineDecisions} = await import("../../loopx/control_plane/presentation/explore_timeline.ts");
+  const question = (id: string) => event({event_id: id, result_id: id, title: "Same question"});
+  const decision = (id: string, node: string, at: string, status = "tentative") => event({event_id: id,
+    event_kind: "finding", result_id: id, node_id: node, title: "Same question", status, recorded_at: at,
+    summary: "Input revision: fixed Applicability: synthetic Observation: evidence Interpretation: Outcome: continue changed: - inspect evidence"});
+  const rows = [question("a"), question("b"), decision("old", "a", "2026-01-01T01:00:00Z", "refuted"),
+    decision("other", "b", "2026-01-01T02:00:00Z"), decision("latest", "a", "2026-01-01T20:00:00Z"),
+    decision("backfill", "a", "2026-01-01T03:00:00Z"), decision("unknown", "a", "unknown"),
+    decision("unlinked-one", "", "unknown"), decision("unlinked-two", "", "unknown")];
+  const view = projectExploreHistory(rows, goal), timeline = buildExploreTimeline(view.nodes, view.edges, view.events);
+  const groups = groupExploreTimelineDecisions(timeline, null);
+  assert.deepEqual(groups.map(group => group.items.map(item => item.event.event_id)),
+    [["latest", "backfill", "old", "unknown"], ["other"], ["unlinked-two"], ["unlinked-one"]]);
+  assert.equal(groups[0]!.title, groups[1]!.title, "Identical wording does not merge distinct questions");
+  assert.equal(groups[0]!.items[2]!.event.status, "refuted", "Historical negative evidence survives grouping");
+  assert.deepEqual(groupExploreTimelineDecisions(timeline, 0).map(group => group.items.map(item => item.event.event_id)),
+    [["backfill", "old"], ["other"]], "Filter first; group ordering and counts reflect the selected interval");
+  assert.deepEqual(groupExploreTimelineDecisions(timeline, 1), []);
+  assert.equal(view.nodes.find(node => node.id === "a")!.latest.status, "open", "Presentation never changes the state owner");
 });

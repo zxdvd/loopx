@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from canonical_authority_fixture import initialize_canonical_source_fixture
 
 from loopx.control_plane.effect_runtime import effect_runtime_result
 from loopx.control_plane.quota import live_decision, should_run_packet
@@ -519,6 +520,7 @@ def test_managed_turn_projects_prior_unsettled_heartbeat_recovery(
         },
         claim_scope_agent_id=agent_id,
     )
+    initialize_canonical_source_fixture(runtime_root, GOAL_ID, state_path=state_path, provider="sqlite")
     packet = build_live_quota_should_run_decision(
         status,
         goal_id=GOAL_ID,
@@ -724,6 +726,7 @@ def test_managed_turn_accepts_exact_material_monitor_poll_closeout(
         coordination={"registered_agents": [agent_id], "agent_model": "peer_v1"},
         claim_scope_agent_id=agent_id,
     )
+    initialize_canonical_source_fixture(runtime_root, GOAL_ID, state_path=state_path, provider="sqlite")
     packet = build_live_quota_should_run_decision(
         status,
         goal_id=GOAL_ID,
@@ -820,6 +823,7 @@ def test_recovery_reads_lifecycle_when_status_summary_omits_bound_todo(
         coordination={"registered_agents": [agent_id], "agent_model": "peer_v1"},
         claim_scope_agent_id=agent_id,
     )
+    initialize_canonical_source_fixture(runtime_root, GOAL_ID, state_path=state_path, provider="sqlite")
     packet = build_live_quota_should_run_decision(
         status,
         goal_id=GOAL_ID,
@@ -1253,6 +1257,7 @@ def test_prior_closeout_identity_conflict_fails_closed(
         },
         claim_scope_agent_id=agent_id,
     )
+    initialize_canonical_source_fixture(runtime_root, GOAL_ID, state_path=state_path, provider="sqlite")
     with pytest.raises(HeartbeatReceiptIdentityConflictError):
         build_live_quota_should_run_decision(
             status,
@@ -1357,6 +1362,14 @@ def test_packet_retirement_preserves_reads_and_independent_capability_command(tm
     assert "protocol_action_packet" not in envelope["contract_capsule"]
     authority = extract_turn_authority({"turn_envelope": envelope})
     assert authority["primary_action"] == "Generate the exact report."
+    assert authority["action"]["capability_intent"]["command"] == command
+    assert authority["action"]["capability_intent"]["generation_authorized"] is True
+    assert authority["action"]["capability_intent"]["external_delivery_authorized"] is True
+    # This admitted capability operation is allowed while ordinary delivery
+    # remains unavailable. The Host must retain both distinct source facts.
+    assert authority["action"]["delivery_allowed"] is True
+    assert authority["execution_policy"]["normal_delivery_allowed"] is False
+    assert authority["effective_action"] == "governed_capability_intent"
     assert envelope["writeback"]["next_cli_actions"] == [command]
     assert authority["required_reads"]
 

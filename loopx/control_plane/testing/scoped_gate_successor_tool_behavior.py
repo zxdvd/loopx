@@ -19,6 +19,8 @@ from .doubao_model_behavior_actor import (
     _direct_ark_transport,
 )
 from .model_tool_behavior import (
+    QuotaToolContext,
+    is_context_read_command,
     DoubaoExecToolClient,
     QUOTA_FIRST_TOOL_INSTRUCTION,
     digest_text,
@@ -131,7 +133,7 @@ def _build_scoped_gate_fixture(root: Path) -> _SelectedTodoToolFixture:
         "## Completed Work Archive\n\n"
         "- [x] [P0] Complete the quality prerequisite.\n"
         "  <!-- loopx:todo "
-        f"todo_id={SCOPED_GATE_PREREQUISITE_TODO_ID} status=done "
+        f"todo_id={SCOPED_GATE_PREREQUISITE_TODO_ID} role=agent status=done "
         "task_class=advancement_task priority=P0 -->\n",
         encoding="utf-8",
     )
@@ -167,6 +169,12 @@ def _build_scoped_gate_fixture(root: Path) -> _SelectedTodoToolFixture:
     for registry_path in (local_registry_path, global_registry_path):
         registry_path.parent.mkdir(parents=True, exist_ok=True)
         registry_path.write_text(registry_text + "\n", encoding="utf-8")
+
+    from .canary_harness import import_fixture_authority
+
+    import_fixture_authority(
+        global_registry_path, SELECTED_TODO_TOOL_FIXTURE_GOAL_ID, provider="sqlite",
+    )
 
     prompt = build_heartbeat_prompt(
         goal_id=SELECTED_TODO_TOOL_FIXTURE_GOAL_ID,
@@ -372,6 +380,7 @@ class DoubaoScopedGateSuccessorToolBehaviorActor:
         ]
         steps: list[dict[str, Any]] = []
         quota_observed = False
+        quota_context: QuotaToolContext | None = None
         notice_surfaced = False
         selected_action_executed = False
         contract: dict[str, Any] | None = None
@@ -442,6 +451,8 @@ class DoubaoScopedGateSuccessorToolBehaviorActor:
                 fixture=fixture,
                 quota_observed=quota_observed,
             )
+            if is_context_read_command(tool_call.command):
+                kind, tool_output = "context_read", None
             if (
                 kind == "unexpected_command"
                 and rejected_read_count == 0
@@ -495,14 +506,22 @@ class DoubaoScopedGateSuccessorToolBehaviorActor:
                             "--turn-instance-id": turn_instance_id,
                         },
                     )
-                    quota_packet = json.loads(tool_output)
-                    contract = _scoped_gate_quota_contract(quota_packet)
+                    quota_context = QuotaToolContext.from_output(tool_output)
+                    contract = _scoped_gate_quota_contract(quota_context.packet)
                     quota_observed = True
                 except (RuntimeError, ValueError, json.JSONDecodeError):
                     return receipt(
                         passed=False,
                         failure_code="quota_execution_failed",
                     )
+            elif kind == "context_read":
+                try:
+                    if quota_context is None:
+                        raise ValueError("context read before quota")
+                    tool_output = quota_context.read(tool_call.command,
+                        source_root=fixture.source_root, project_root=fixture.project_root)
+                except (OSError, RuntimeError, ValueError):
+                    return receipt(passed=False, failure_code="context_read_failed")
             elif kind == "workspace_read":
                 try:
                     tool_output = _execute_workspace_read(

@@ -9,6 +9,7 @@ import {FRESH_PATH_DISPOSITIONS, requiredSemanticOutcomes} from "./replan_semant
 import {readReplanSnapshot} from "./replan_history_snapshot.ts";
 import {normalizeGoalPathDelta} from "../goals/vision_checkpoint.ts";
 import {normalizeRecordedStrideDecision, normalizeStrideStrategy, projectStrideExploreBasis} from "./stride_policy.ts";
+import {PROGRESS_RESULT_CLASSES} from "./replan_history.ts";
 import {MATERIAL_DELIVERY_OUTCOMES} from "./delivery_outcome.ts";
 
 const CONTEXT_SCHEMA = "replan_context_v0";
@@ -201,6 +202,24 @@ function observationTodo(row: JsonObject): unknown {
   return work == null ? row.todo_id : row.todo_id == null || row.todo_id === work ? work : null;
 }
 
+/** Reserve one source-ordered observation per displayed planned Todo before
+ * filling the remaining slots. Repetition on one work item must not hide all
+ * followthrough on another; the cap is presentation, never evidence eligibility. */
+function boundedWorkEvidence(rows: JsonObject[], todoIds: string[]): JsonObject[] {
+  const first = new Set<JsonObject>();
+  const displayed = new Set(todoIds.slice(0, 6));
+  for (const id of displayed) {
+    const row = rows.find(row => observationTodo(row) === id);
+    if (row) first.add(row);
+  }
+  const relevant = rows.filter(row => displayed.has(String(observationTodo(row))));
+  for (const row of [...relevant, ...rows]) {
+    if (first.size >= 6) break;
+    first.add(row);
+  }
+  return rows.filter(row => first.has(row));
+}
+
 /** Recover the result -> decision -> subsequent work relation from the existing
  * source history. A citation alone does not consume a result, and no extra
  * ledger or execution authority is created. These are recorded associations,
@@ -325,7 +344,8 @@ function decisionFollowthrough(rows: JsonObject[], goalFacts: unknown, fromFullI
   // The complete denominator is retained even when the review details are capped.
   const observations = [...subsequent.values()];
   const ordinaryEvidence = [...ordinary.values()];
-  const visibleOrdinary = ordinaryEvidence.slice(0, 6);
+  const visibleOrdinary = boundedWorkEvidence(ordinaryEvidence, todoIds);
+  const visible = boundedWorkEvidence(observations, todoIds);
   const resultUse = workResultUse(scoped);
   const todos = todoItems == null ? [] : objects(todoItems, "Todo source");
   const plannedWork = todoIds.slice(0, 6).map(todoId => {
@@ -336,28 +356,26 @@ function decisionFollowthrough(rows: JsonObject[], goalFacts: unknown, fromFullI
     return {todo_id: todoId,
       current: current ? Object.fromEntries(["status", "claimed_by", "task_class", "action_kind"]
         .filter(key => Object.hasOwn(current, key)).map(key => [key, current[key]])) : null,
-      observation_refs: observations.filter(row => observationTodo(row) === todoId)
-        .slice(0, 6).map(row => "replan-evidence-" + digest(readableEvidenceRow(row))),
+      observation_refs: visible.filter(row => observationTodo(row) === todoId)
+        .map(row => "replan-evidence-" + digest(readableEvidenceRow(row))),
       ...(ordinaryEvidence.length ? {ordinary_evidence_refs: visibleOrdinary
         .filter(row => row.todo_id === todoId).map(row => row.evidence_ref)} : {})};
   });
-  // Keep relevant experiment observations in the small visible window even
-  // when newer unrelated work would otherwise crowd them out.
-  const linkedRefs = new Set(plannedWork.flatMap(work => work.observation_refs));
-  const visible = [...observations.filter(row => linkedRefs.has("replan-evidence-" + digest(readableEvidenceRow(row)))),
-    ...observations.filter(row => !linkedRefs.has("replan-evidence-" + digest(readableEvidenceRow(row))))].slice(0, 6);
-  const visibleRefs = new Set(visible.map(row => "replan-evidence-" + digest(readableEvidenceRow(row))));
-  for (const work of plannedWork) work.observation_refs = work.observation_refs.filter(ref => visibleRefs.has(ref));
   return {
     previous_decision: decision,
     source_history_complete: fromFullIndex,
     unsequenced_progress_count: rows.filter(row => row.progress_observation &&
       !Number.isSafeInteger(objectOrNull(row._source_facts)?.history_position)).length,
+    // Compatibility count of observations, not a count of successful work.
     recorded_progress_count: observations.length,
+    result_counts: Object.fromEntries(PROGRESS_RESULT_CLASSES.map(result => [result,
+      observations.filter(row => (row.progress_observation as JsonObject).result_class === result).length])),
     observations: visible.map(row => ({
       evidence_ref: "replan-evidence-" + digest(readableEvidenceRow(row)),
       generated_at: row.generated_at, todo_id: row.todo_id,
       coverage_ref: (row.progress_observation as JsonObject).fingerprint,
+      result_class: (row.progress_observation as JsonObject).result_class,
+      delivery_outcome: row.delivery_outcome ?? null,
     })),
     omitted_observation_count: Math.max(0, observations.length - 6),
     // Ordinary writebacks are source evidence, never fabricated typed progress.
@@ -441,6 +459,13 @@ export function validateReplanContext(value: unknown): JsonObject {
     identifier(row.evidence_ref, "evidence.evidence_ref");
     requireNonEmptyString(row.generated_at, "evidence.generated_at");
   }
+  if (context.evidence_read_action_template !== undefined) {
+    const template = requireNonEmptyString(context.evidence_read_action_template, "evidence_read_action_template");
+    if (!context.agent_id || template.split("{evidence_ref}").length !== 2 ||
+        !template.endsWith(" --evidence-ref {evidence_ref}")) {
+      throw new EffectRuntimeRequestError("evidence read template requires one scoped evidence_ref placeholder");
+    }
+  }
   const frontier = requireJsonObject(context.uncovered_frontier, "replan_context.uncovered_frontier");
   if (!Array.isArray(frontier.required_any_of)) {
     throw new EffectRuntimeRequestError("replan_context uncovered_frontier requires required_any_of");
@@ -448,8 +473,8 @@ export function validateReplanContext(value: unknown): JsonObject {
   if (context.stride_strategy !== undefined) normalizeStrideStrategy(context.stride_strategy);
   if (context.decision_followthrough !== undefined) {
     const follow = requireJsonObject(context.decision_followthrough, "decision_followthrough");
-    if (context.stride_strategy !== "evidence_conditioned_v1" || follow.execution_and_goal_gain !== "unknown") {
-      throw new EffectRuntimeRequestError("decision followthrough requires the enabled strategy and unknown utility");
+    if (follow.execution_and_goal_gain !== "unknown") {
+      throw new EffectRuntimeRequestError("decision followthrough requires unknown utility");
     }
     const observations = objects(follow.observations, "decision_followthrough.observations");
     validateWorkResultUse(follow);
@@ -459,6 +484,16 @@ export function validateReplanContext(value: unknown): JsonObject {
           key => !Number.isSafeInteger(follow[key]) || Number(follow[key]) < 0) ||
         Number(follow.recorded_progress_count) !== observations.length + Number(follow.omitted_observation_count)) {
       throw new EffectRuntimeRequestError("decision followthrough requires bounded detail and explicit coverage counts");
+    }
+    if (follow.result_counts !== undefined) {
+      const counts = requireJsonObject(follow.result_counts, "followthrough result counts");
+      if (Object.keys(counts).length !== PROGRESS_RESULT_CLASSES.length ||
+          PROGRESS_RESULT_CLASSES.some(result => !Number.isSafeInteger(counts[result]) || Number(counts[result]) < 0) ||
+          Object.values(counts).reduce<number>((sum, count) => sum + Number(count), 0) !== follow.recorded_progress_count ||
+          observations.some(row => !PROGRESS_RESULT_CLASSES.some(result => result === row.result_class)) ||
+          PROGRESS_RESULT_CLASSES.some(result => observations.filter(row => row.result_class === result).length > Number(counts[result]))) {
+        throw new EffectRuntimeRequestError("invalid followthrough result counts");
+      }
     }
     const previous = requireJsonObject(follow.previous_decision, "decision_followthrough.previous_decision");
     identifier(previous.evidence_ref, "previous_decision.evidence_ref");
@@ -632,11 +667,19 @@ export function projectReplanContext(value: unknown): JsonObject {
   const selectedCoverage = new Set(chosen.flatMap(({row}) => row.progress_observation
     ? [String((row.progress_observation as JsonObject).fingerprint)] : []));
   const ledger = [...coverage].filter(([key]) => selectedCoverage.has(key)).map(([, value]) => value);
+  // Keep a directly executable action for a single row. Multiple rows share
+  // only their command route; evidence text, identity and ordering stay intact.
+  // This is same-response factoring, with no retained-context prerequisite.
+  const evidenceReadTemplate = agent && shown.length > 1 && !prefix.includes("{evidence_ref}")
+    ? `${prefix} --format json history --goal-id ${goal} --agent-id ${agent} --evidence-ref {evidence_ref}`
+    : null;
+  if (evidenceReadTemplate) for (const row of shown) delete row.read_action;
   const core = projectCoreGoal(request.goal_facts);
   const exploreBasis = strideStrategy !== "off" ? projectStrideExploreBasis(request.explore_context, goal, agent) : null;
-  const followthrough = agent && strideStrategy !== "off"
+  const followthrough = agent
     ? decisionFollowthrough(rows, request.goal_facts, request.from_full_index === true, request.todo_items) : null;
   const contextId = "replan-context-" + digest({goal, agent, obligationId, core, ledger, shown, frontier,
+    ...(evidenceReadTemplate ? {evidence_read_action_template: evidenceReadTemplate} : {}),
     ...(strideStrategy !== "off" ? {stride_strategy: strideStrategy} : {}),
     ...(followthrough ? {decision_followthrough: followthrough} : {}),
     ...(exploreBasis ? {explore_basis: exploreBasis} : {})});
@@ -646,6 +689,7 @@ export function projectReplanContext(value: unknown): JsonObject {
     from_full_index: request.from_full_index === true,
     core_goal: core,
     evidence: shown, evidence_count: evidence.length, distinct_observation_count: candidates.length,
+    ...(evidenceReadTemplate ? {evidence_read_action_template: evidenceReadTemplate} : {}),
     evidence_truncated: omitted.length > 0,
     coverage_ledger: ledger, coverage_count: coverage.size, coverage_truncated: coverage.size > ledger.length,
     uncovered_frontier: frontier,

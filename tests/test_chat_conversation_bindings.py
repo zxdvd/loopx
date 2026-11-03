@@ -4,10 +4,470 @@ import json
 
 import pytest
 
+from extensions.test_lark_private_manager_returns import private_return, return_root  # noqa: F401
 from test_chat_ordinary_project import ordinary  # noqa: F401, F811
 from test_native_steward_private import steward  # noqa: F401
+from test_manager_context_roundtrip import flow  # noqa: F401
 from loopx.capabilities.native_chat.conversation_bindings import ChatConversationBindings
 from loopx.extensions.lark.conversation_identity import identity_ref
+
+
+@pytest.mark.parametrize("command", ["stop", "new"])
+def test_quota_backlog_observes_a_later_source_stop_before_new_admission(ordinary, monkeypatch, command):  # noqa: F811
+    from datetime import datetime, timedelta, timezone
+    from loopx.capabilities.native_chat import external_conversations
+    from test_lark_private_conversations import connect
+
+    store, runtime, provider, transport = connect(ordinary)
+    fake = ordinary[-2]
+    fake.write_text(fake.read_text().replace('"codexErrorInfo": "cyberPolicy"',
+        '"codexErrorInfo": "usageLimitExceeded"').replace(
+        '            print(json.dumps({"method": "item/agentMessage/delta", "params": {"threadId": "durable-thread", "turnId": active_turn, "delta": "Partial answer."}}), flush=True)\n', ''))
+    try:
+        transport.admit("notes-app", provider.event("notes-app", "quota-stop", "typed terminal failure"))
+        row = transport.core.pending()[0]
+        failed = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)
+        assert failed["error_code"] == "usage_limit_exceeded"
+        transport.reconcile()
+        clock = datetime.now(timezone.utc) + timedelta(seconds=61)
+        class AfterBackoff(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return clock
+        monkeypatch.setattr(external_conversations, "datetime", AfterBackoff)
+        original = transport.core.read_request(row["request_ref"])
+        assert transport.core._context_recovery_plan(original, discovery_only=True)["recovery_candidate"]
+        transport.admit("steward-app", provider.event("steward-app", "unrelated-stop", "/stop"))
+        assert transport.core._context_recovery_plan(original, discovery_only=True)["recovery_candidate"]
+        assert transport.health()[row["binding_id"]]["pending_count"] == 1
+        transport.admit("notes-app", provider.event("notes-app", "later-stop", f"/{command}"))
+        transport.reconcile()
+        assert transport.health()[row["binding_id"]]["pending_count"] == 0
+        calls = ordinary[4].read_bytes()
+        assert not transport.core._context_recovery_plan(original, discovery_only=True)["recovery_candidate"]
+        assert ordinary[4].read_bytes() == calls
+        assert store.load_turn(row["session_id"], row["turn_id"]) == failed
+        transport.admit("notes-app", provider.event("notes-app", "future-request", "A new independent request"))
+        newer = next(x for x in transport.core.pending() if x.get("message") == "A new independent request")
+        completed = runtime.wait_for_turn(session_id=newer["session_id"], turn_id=newer["turn_id"], timeout_sec=10)
+        assert completed["status"] == "completed"
+        transport.reconcile()
+        from loopx.extensions.lark.private_conversations import LarkPrivateConversations
+        restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+            runner=provider, cli_bin="lark-cli")
+        before = ordinary[4].read_bytes(), list(provider.calls)
+        assert restarted.health()[row["binding_id"]]["pending_count"] == 0
+        assert (ordinary[4].read_bytes(), provider.calls) == before
+        assert store.load_turn(row["session_id"], row["turn_id"]) == failed
+    finally:
+        runtime.close()
+
+
+@pytest.fixture
+def recorded_return_continuation(private_return, monkeypatch):  # noqa: F811
+    """Use the real admission/recovery owners; only model/provider IO is fake."""
+    from datetime import datetime, timedelta, timezone
+    from pathlib import Path
+    from loopx.capabilities import manager_context
+    from loopx.capabilities.native_chat import external_conversations
+    from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+
+    sender, session, _, route, _, provider, transport, _ = private_return
+    runtime = transport.core.controller
+    store = transport.core.controller.store
+    runtime.adapters.pop(session["session_id"]).close_session()
+    fake = Path(runtime.codex_bin)
+    marker = fake.with_name("quota-failed-once")
+    source = fake.read_text().replace('"codexErrorInfo": "cyberPolicy"', '"codexErrorInfo": "usageLimitExceeded"')
+    source = source.replace('        if "typed terminal failure" in json.dumps(request.get("params") or {}):',
+        f'        if "typed terminal failure" in json.dumps(request.get("params") or {{}}) and not __import__("os").path.exists({str(marker)!r}):\n'
+        f'            open({str(marker)!r}, "w").close()')
+    source = source.replace('            print(json.dumps({"method": "item/agentMessage/delta", "params": {"threadId": "durable-thread", "turnId": active_turn, "delta": "Partial answer."}}), flush=True)\n', '')
+    fake.write_text(source)
+    transport.runner = provider
+    event = provider.event("steward-app", "quota-original", "typed terminal failure")
+    if route["source_id"].startswith("lark:"):
+        register = manager_context.register_ingress
+        def legacy_ingress(root, **kwargs):
+            if kwargs["message"] == event["content"]:
+                kwargs["source_id"] = "lark:" + event["message_id"]
+            return register(root, **kwargs)
+        monkeypatch.setattr(manager_context, "register_ingress", legacy_ingress)
+    transport.admit("steward-app", event)
+    ref = identity_ref(session["steward_context"]["provider_ref"], event["message_id"])
+    row = transport.core.read_request(ref)
+    failed = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)
+    assert failed["status"] == "failed" and failed["delta_count"] == 0
+    failed_path = store._turn_path(row["session_id"], row["turn_id"])
+    failed_bytes = failed_path.read_bytes()
+    transport.reconcile()
+    clock = datetime.now(timezone.utc) + timedelta(seconds=61)
+    class AfterBackoff(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock
+    monkeypatch.setattr(external_conversations, "datetime", AfterBackoff)
+    monkeypatch.setattr(CodexAppServerAdapter, "failed_request_observation", staticmethod(lambda **_: {
+        "thread_id": "durable-thread", "turn_id": failed["upstream_turn_id"],
+        "only_original_user_item": True, "codex_error_info": "usageLimitExceeded",
+        "quota_available": True, "quota_observed_at": clock.timestamp() - 1}))
+    # A restarted reply worker has no previous monotonic discovery hint.
+    transport._context_recovery_probe_at.clear()
+    transport.reconcile()
+    row = transport.core.read_request(ref)
+    assert row["turn_id"] != failed["turn_id"]
+    turn = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)
+    assert turn["status"] == "completed" and turn["client_turn_id"].endswith("-quota-1")
+    transport.reconcile()
+    session = store.load_session(row["session_id"])
+    delivered = manager_context.deliver(sender.root, runtime.registry_path,
+        session=session, turn=turn, request={k: route[k] for k in ("goal_id", "agent_id")},
+        source_store=store)
+    route = {**route, "source_id": "lark:" + event["message_id"] if route["source_id"].startswith("lark:") else ref,
+             "request_id": delivered["request_id"]}
+    replies = []
+    def runner(args, cwd=None, timeout=None):
+        if "+messages-reply" not in args and not ("+messages-send" in args and "--content" in args):
+            return provider(args, cwd, timeout)
+        provider.calls.append(list(args))
+        assert args[args.index("--profile") + 1] == "steward-app"
+        if "--message-id" in args:
+            assert args[args.index("--message-id") + 1] == event["message_id"]
+        else:
+            assert args[args.index("--chat-id") + 1] == event["chat_id"]
+        content = args[args.index("--content") + 1]
+        if "--dry-run" in args:
+            data = {"api": [{"body": {"msg_type": "post", "content": content}}]}
+        else:
+            replies.append(list(args))
+            provider.messages["om_out_recovered_worker"] = {"message_id": "om_out_recovered_worker", "msg_type": "post", "body": {"content": content}}
+            data = {"data": {"message_id": "om_out_recovered_worker"}}
+        return {"returncode": 0, "stdout": json.dumps(data)}
+    transport.runner = runner
+    yield sender, session, turn, route, row, provider, transport, replies
+    assert failed_path.read_bytes() == failed_bytes
+
+
+def test_recorded_continuation_returns_original_worker_result_once(recorded_return_continuation):
+    from datetime import datetime, timedelta, timezone
+    from loopx.capabilities.manager_context import acknowledge
+    from loopx.capabilities.manager_context.roundtrip import drain, report, reply_status
+    from loopx.chat_store import ChatSessionStore
+
+    sender, session, turn, route, _, provider, transport, replies = recorded_return_continuation
+    controller = transport.core.controller
+    store = controller.store
+    capture = store.root.parent.parent / "requests.jsonl"
+    before_host_calls = capture.read_bytes()
+    before_turns = sorted(store._session_dir(session["session_id"]).glob("turns/*.json"))
+    acknowledge(sender.root, route["goal_id"], route["agent_id"], route["request_id"], "adopt", "Use the original audience")
+    report(sender.root, route["goal_id"], route["agent_id"], route["request_id"], "conclusion", "Verified worker conclusion")
+    provider.verify_replies = False
+    drain(sender.root, controller.registry_path, store, sender)
+    assert len(replies) == 1
+    assert reply_status(sender.root, route)[0]["status"] == "verification_required"
+    provider.verify_replies = True
+    cold = ChatSessionStore(store.root.parent)
+    drain(sender.root, controller.registry_path, cold, sender,
+          now=datetime.now(timezone.utc) + timedelta(minutes=10))
+    assert reply_status(sender.root, route)[0]["status"] == "delivered"
+    assert len(replies) == 1
+    returned = [r for r in cold.messages(session["session_id"]) if r.get("origin") == "manager_followup"]
+    assert len(returned) == 1 and returned[0]["turn_id"] == turn["turn_id"]
+    assert "Verified worker conclusion" in returned[0]["text"]
+    assert sorted(store._session_dir(session["session_id"]).glob("turns/*.json")) == before_turns
+    assert capture.read_bytes() == before_host_calls
+
+
+@pytest.mark.parametrize("fault", ["unrecorded", "transport", "native", "unknown-client", "review-policy", "binding", "source"])
+def test_continuation_return_rejects_missing_or_changed_source(recorded_return_continuation, fault):
+    from loopx.chat_store import _atomic_write_json, _read_json
+
+    sender, session, turn, route, row, provider, transport, replies = recorded_return_continuation
+    if fault in {"unrecorded", "transport", "native", "review-policy"}:
+        roots = (transport.root, transport.core.root) if fault == "unrecorded" else (
+            transport.core.root if fault in {"native", "review-policy"} else transport.root,)
+        for root in roots:
+            path = root / f"{row['request_ref']}.json"
+            value = _read_json(path)
+            if fault == "unrecorded":
+                value.pop("context_recovery")
+            elif fault == "review-policy":
+                value["context_recovery"]["read_only_review"] = True
+            else:
+                value["context_recovery"]["client_turn_id"] += "-changed"
+            _atomic_write_json(path, value)
+    elif fault == "unknown-client":
+        turn = {**turn, "client_turn_id": turn["client_turn_id"] + "-unknown"}
+    elif fault == "binding":
+        transport.bindings.disconnect(row["binding_id"], expected_revision=transport.bindings.read()["revision"])
+    else:
+        record = _read_json(transport.root / f"{row['request_ref']}.json")
+        provider.messages[record["event"]["message_id"]]["sender"]["id"] = "ou_other"
+    try:
+        result = sender(route, session, turn, "Must stay with the original authorized source")
+        assert not result["reply_verified"]
+    except ValueError:
+        pass
+    assert replies == []
+
+
+def _history_page_brief():
+    return {"schema_version": "collaboration_brief_v0", "purpose": "Inspect original history",
+        "context": "Keep the original conversation", "constraints": ["Do not publish"],
+        "inputs": [], "acceptance": ["Return the original conclusion"], "return_requirement": "Return here"}
+
+
+@pytest.mark.parametrize("change", ["status", "new-input", "source-read-input", "unrelated-source", "revoked", "unknown-native", "unchanged"])
+def test_slow_failed_request_probe_does_not_hold_the_source_route(steward, monkeypatch, change):  # noqa: F811
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from pathlib import Path
+    from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+
+    store, runtime, provider, transport, binding, capture, _ = steward
+    fake = Path(runtime.codex_bin)
+    fake.write_text(fake.read_text().replace('"codexErrorInfo": "cyberPolicy"',
+        '"codexErrorInfo": "contextWindowExceeded"').replace(
+        '            print(json.dumps({"method": "item/agentMessage/delta", "params": {"threadId": "durable-thread", "turnId": active_turn, "delta": "Partial answer."}}), flush=True)\n', ''))
+    event = provider.event("steward-app", "slow-native-read", "typed terminal failure")
+    transport.admit("steward-app", event)
+    ref = identity_ref(binding["provider_ref"], event["message_id"])
+    row = transport.core.read_request(ref)
+    failed = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)
+    assert failed["status"] == "failed" and failed["delta_count"] == 0
+    store.update_session(row["session_id"], manager_context_version=20)
+    assert transport.reconcile() == 1
+    original = store._turn_path(row["session_id"], row["turn_id"]).read_bytes()
+    before = capture.read_bytes()
+    started, release = threading.Event(), threading.Event()
+
+    def slow_probe(**_):
+        started.set()
+        assert release.wait(10)
+        # Even a valid read cannot override input or revocation during IO.
+        return None if change == "unknown-native" else {"thread_id": "durable-thread",
+            "turn_id": failed["upstream_turn_id"], "only_original_user_item": True,
+            "codex_error_info": "contextWindowExceeded"}
+
+    monkeypatch.setattr(CodexAppServerAdapter, "failed_request_observation", staticmethod(slow_probe))
+
+    def source_observation(_):
+        if change == "source-read-input":
+            store.create_queued_turn(row["session_id"], client_turn_id="input-during-source-read",
+                message="A correction while reading the provider", origin="web")
+        return {"verified": True}
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        recovery = pool.submit(transport.core.recover_failed_request, ref,
+            source_observation=source_observation)
+        try:
+            assert started.wait(5)
+            if change in {"status", "unknown-native"}:
+                begin = time.monotonic()
+                admitted = transport.admit("steward-app", provider.event("steward-app", "during-native-read", "/status"))
+                assert admitted["status"] == "command_recorded"
+                assert time.monotonic() - begin < 1, "Native readback must not block fresh source admission"
+            elif change == "new-input":
+                store.create_queued_turn(row["session_id"], client_turn_id="later-correction",
+                    message="A later original correction", origin="lark")
+            elif change == "unrelated-source":
+                assert transport.admit("notes-app", provider.event("notes-app", "other-original-source", "/status"))["status"] == "command_recorded"
+            elif change == "revoked":
+                transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+        finally:
+            release.set()
+        if change == "revoked":
+            with pytest.raises(ValueError):
+                recovery.result(timeout=10)
+        elif change in {"unchanged", "unrelated-source"}:
+            continued = recovery.result(timeout=10)
+            assert continued["turn_id"] != row["turn_id"]
+            assert continued["session_id"] == row["session_id"]
+            runtime.wait_for_turn(session_id=row["session_id"], turn_id=continued["turn_id"], timeout_sec=10)
+            assert transport.core.recover_failed_request(ref, source_observation=lambda _: pytest.fail("duplicate recovery"))["turn_id"] == continued["turn_id"]
+        else:
+            assert recovery.result(timeout=10)["turn_id"] == row["turn_id"]
+    assert bool(transport.core.read_request(ref).get("context_recovery")) is (change in {"unchanged", "unrelated-source"})
+    assert store._turn_path(row["session_id"], row["turn_id"]).read_bytes() == original
+    if change not in {"unchanged", "unrelated-source"}:
+        assert capture.read_bytes() == before, "Unknown or changed state cannot create or resume model work"
+
+
+def test_history_page_keeps_one_original_collaboration_carrier(flow, monkeypatch):  # noqa: F811
+    from loopx.capabilities.manager_context.roundtrip import project_chat_session_snapshot
+
+    root, registry, store, create = flow
+    session, turn, _ = create(brief=_history_page_brief())
+    sid, tid = session["session_id"], turn["turn_id"]
+    for i in range(200 - len(store.messages(sid))):
+        store.append_message(sid, role="user", text=f"Independent history row {i}")
+    answer = store.append_message(sid, role="agent", text="Original answer", turn_id=tid)
+    load_turn, reads = store.load_turn, []
+    def observed(*args):
+        reads.append(args)
+        return load_turn(*args)
+    monkeypatch.setattr(store, "load_turn", observed)
+    first = project_chat_session_snapshot(root, store, sid, registry=registry, message_limit=200)
+    assert reads == [], "A page without the original carrier must not project off-page Turns"
+    assert not any(row.get("collaboration") for row in first["messages"])
+    store.append_message(sid, role="agent", text="Later answer outside frozen prefix", turn_id=tid)
+    second = project_chat_session_snapshot(root, store, sid, registry=registry,
+        message_limit=200, message_cursor=first["message_page"]["next_cursor"])
+    assert len(second["messages"]) == 1 and second["message_page"]["next_cursor"] is None
+    assert second["messages"][0]["message_id"] == answer["message_id"]
+    assert second["messages"][0]["collaboration"]["agent_id"] == "worker"
+    assert reads == [(sid, tid)]
+
+
+def test_return_delivery_readback_survives_a_separate_history_page(flow):  # noqa: F811
+    from loopx.capabilities.manager_context import acknowledge
+    from loopx.capabilities.manager_context.roundtrip import drain, report, project_chat_session_snapshot
+
+    root, registry, store, create = flow
+    session, turn, receipt = create(brief=_history_page_brief())
+    sid = session["session_id"]
+    store.append_message(sid, role="agent", text="Original commitment", turn_id=turn["turn_id"])
+    acknowledge(root, "research", "worker", receipt["request_id"], "adopt", "Keep original audience")
+    report(root, "research", "worker", receipt["request_id"], "conclusion", "Original conclusion")
+    drain(root, registry, store, lambda *_: pytest.fail("A private App return must not send to a provider"))
+    expected = project_chat_session_snapshot(root, store, sid, registry=registry)["messages"]
+    assert len(expected) == 4 and expected[-1].get("return_delivery")
+    cursor, rows = None, []
+    while True:
+        page = project_chat_session_snapshot(root, store, sid, registry=registry,
+            message_limit=1, message_cursor=cursor)
+        rows.extend(page["messages"])
+        cursor = page["message_page"]["next_cursor"]
+        if cursor is None:
+            break
+    assert rows == expected
+    assert sum(bool(row.get("collaboration")) for row in rows) == 1
+
+
+def test_original_history_pages_freeze_append_boundary_and_keep_full_rows(ordinary, monkeypatch):  # noqa: F811
+    from urllib.parse import urlencode
+    from loopx.chat_server import ChatHTTPServer
+
+    store, runtime, contexts, request, capture, _, _ = ordinary
+    monkeypatch.setattr(ChatHTTPServer, "runtime_root", store.root.parent, raising=False)
+    monkeypatch.setattr(ChatHTTPServer, "registry_path", runtime.registry_path, raising=False)
+    status, opened = request("/api/chat/sessions", {
+        "context_kind": "project", "project_ref": contexts.available()[0]["project_ref"],
+    })
+    assert status == 201
+    sid = opened["session_id"]
+    rows = [store.append_message(sid, role="user" if i % 2 == 0 else "agent",
+        text="完整正文" * 3000 if i == 201 else f"Original message {i}",
+        turn_id=None, attachments=[{"name": "original.png", "data_url": "data:image/png;base64,AA=="}] if i == 201 else None)
+        for i in range(451)]
+    native_before = capture.read_bytes()
+    path = f"/api/chat/sessions/{sid}"
+    code, first = request(path + "?message_limit=200")
+    assert code == 200 and len(first["messages"]) == 200
+    assert first["message_page"]["total"] == 451
+    cursor = first["message_page"]["next_cursor"]
+    store.append_message(sid, role="agent", text="Appended during history read")
+    code, second = request(path + "?" + urlencode({"message_limit": 200, "message_cursor": cursor}))
+    assert code == 200 and len(second["messages"]) == 200
+    code, last = request(path + "?" + urlencode({"message_limit": 200,
+        "message_cursor": second["message_page"]["next_cursor"]}))
+    assert code == 200 and last["message_page"]["next_cursor"] is None
+    assert first["messages"] + second["messages"] + last["messages"] == rows
+    assert request(path)[1]["messages"][-1]["text"] == "Appended during history read"
+    assert request(path + "?message_limit=200")[1]["message_page"]["total"] == 452
+    assert capture.read_bytes() == native_before, "History reads must not execute or replay a Turn"
+    for query in ["message_limit=0", "message_limit=201", "message_limit=2&message_limit=3",
+                  "message_cursor=invalid", "message_limit=2&message_cursor=invalid"]:
+        assert request(path + "?" + query)[0] == 400
+    def unreadable(*_, **__):
+        raise PermissionError("private journal path")
+    with monkeypatch.context() as patch:
+        patch.setattr(store, "messages", unreadable)
+        code, unavailable = request(path + "?message_limit=200")
+    assert code == 503 and "private journal path" not in json.dumps(unavailable)
+
+
+def test_app_steward_corrupt_legacy_configuration_never_falls_back(tmp_path):
+    bindings = ChatConversationBindings(root=tmp_path, project_contexts=None,
+        observe=lambda _: pytest.fail("an unselected entry must not probe a provider"))
+    assert bindings.app_steward_target() == {"binding_id": None, "session_id": None}
+    valid = bindings.read()
+    for change in [{"schema_version": "unrecognized"}, {"revision": True},
+                   {"bindings": None}, {"app_steward_binding_id": "invalid"}]:
+        bindings.path.write_text(json.dumps({**valid, **change}))
+        with pytest.raises(ValueError):
+            bindings.app_steward_target()
+    bindings.path.write_text(json.dumps(valid))
+    before = bindings.path.read_bytes()
+    assert bindings.app_steward_target() == {"binding_id": None, "session_id": None}
+    assert bindings.path.read_bytes() == before
+    assert bindings.select_app_steward(None, expected_revision=valid["revision"])["bindings"] == []
+    assert bindings.path.read_bytes() == before
+
+
+def test_app_steward_snapshot_does_not_wait_for_background_mutation(steward):  # noqa: F811
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from loopx.file_lock import exclusive_file_lock
+
+    store, runtime, provider, transport, binding, capture, _ = steward
+    event = provider.event("steward-app", "snapshot-original", "Read the workspace")
+    transport.admit("steward-app", event)
+    request = transport.core.read_request(identity_ref(binding["provider_ref"], event["message_id"]))
+    sid = request["session_id"]
+    assert runtime.wait_for_turn(session_id=sid, turn_id=request["turn_id"], timeout_sec=10)["status"] == "completed"
+    bindings = transport.bindings
+    bindings.select_app_steward(binding["binding_id"], expected_revision=bindings.read()["revision"])
+    expected = {"binding_id": binding["binding_id"], "session_id": sid}
+    assert bindings.app_steward_target() == expected
+    before = capture.read_bytes(), store.messages(sid), bindings.path.read_bytes()
+    held, release = threading.Event(), threading.Event()
+
+    def background_inspection():
+        with runtime.lock, exclusive_file_lock(bindings.path, operation="inspect_native_steward_turn"):
+            held.set()
+            assert release.wait(10)
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        inspection = workers.submit(background_inspection)
+        try:
+            assert held.wait(2)
+            target = workers.submit(bindings.app_steward_target)
+            assert target.result(timeout=.75) == expected
+            assert not release.is_set(), "Snapshot discovery must complete while inspection is blocked"
+        finally:
+            release.set()
+            inspection.result(timeout=2)
+    assert (capture.read_bytes(), store.messages(sid), bindings.path.read_bytes()) == before
+
+
+@pytest.mark.parametrize("change", ["selection", "revocation"])
+def test_app_steward_snapshot_rechecks_grant_after_core_discovery(steward, monkeypatch, change):  # noqa: F811
+    store, runtime, provider, transport, binding, capture, _ = steward
+    event = provider.event("steward-app", "snapshot-race", "Read the workspace")
+    transport.admit("steward-app", event)
+    request = transport.core.read_request(identity_ref(binding["provider_ref"], event["message_id"]))
+    sid = request["session_id"]
+    assert runtime.wait_for_turn(session_id=sid, turn_id=request["turn_id"], timeout_sec=10)["status"] == "completed"
+    bindings = transport.bindings
+    bindings.select_app_steward(binding["binding_id"], expected_revision=bindings.read()["revision"])
+    before = capture.read_bytes(), store.messages(sid)
+    core = bindings._core
+
+    def change_after_discovery(operation, params, **kwargs):
+        result = core(operation, params, **kwargs)
+        if operation == "collaboration.conversation.local_sessions":
+            if change == "selection":
+                bindings.select_app_steward(None, expected_revision=bindings.read()["revision"])
+            else:
+                bindings.disconnect(binding["binding_id"], expected_revision=bindings.read()["revision"])
+        return result
+
+    monkeypatch.setattr(bindings, "_core", change_after_discovery)
+    with pytest.raises(ValueError, match="changed"):
+        bindings.app_steward_target()
+    assert (capture.read_bytes(), store.messages(sid)) == before
 
 
 def _request_for_event(transport, event):
@@ -436,6 +896,43 @@ def _bound_project(fixture):
         message="wait for interrupt", work_dir=workspace, objective="", origin="lark")
     _wait_for_native_turn(store, session["session_id"], turn["turn_id"])
     return bindings, args, binding, session, turn
+
+
+def test_bound_http_continuation_preserves_identity_after_json_key_reordering(ordinary):  # noqa: F811
+    store, runtime, _contexts, request, capture, _fake, _workspace = ordinary
+    bindings, _args, binding, session, active = _bound_project(ordinary)
+    sid = session["session_id"]
+    original_thread = store.load_session(sid)["upstream_thread_id"]
+    runtime.interrupt_turn(session_id=sid, turn_id=active["turn_id"])
+    # A JSON writer may reorder object members without changing their values.
+    # Exercise the real store, HTTP discovery/admission and queued worker path.
+    saved = dict(reversed(list(session["project_context"].items())))
+    try:
+        # Re-serialize only this idle, isolated fixture. Source context remains
+        # immutable through the production Session update API.
+        from loopx.chat_store import _atomic_write_json
+        _atomic_write_json(store._session_path(sid), {**store.load_session(sid), "project_context": saved})
+        status, discovered = request(f"/api/chat/sessions?conversation_binding_id={binding['binding_id']}")
+        assert status == 200, discovered
+        assert [row["session_id"] for row in discovered["sessions"]] == [sid]
+        body = {"message": "Continue in the original project", "client_turn_id": "reordered-context", "delivery": "queue"}
+        status, accepted = request(f"/api/chat/sessions/{sid}/turns", body)
+        assert status == 202, accepted
+        assert runtime.wait_for_turn(session_id=sid, turn_id=accepted["turn_id"], timeout_sec=10)["status"] == "completed"
+        status, replay = request(f"/api/chat/sessions/{sid}/turns", body)
+        assert status == 202 and not replay["created"] and replay["turn_id"] == accepted["turn_id"]
+        current = store.load_session(sid)
+        assert current["goal_id"] is None and current["upstream_thread_id"] == original_thread
+        assert current["project_context"] == saved
+        inputs = [row for row in store.messages(sid) if row["turn_id"] == accepted["turn_id"] and row["role"] == "user"]
+        assert len(inputs) == 1 and inputs[0]["origin"] == "web"
+        calls = [json.loads(line) for line in capture.read_text().splitlines()]
+        assert sum(row.get("method") == "turn/start" for row in calls) == 2
+        bindings.disconnect(binding["binding_id"], expected_revision=bindings.read()["revision"])
+        status, _ = request(f"/api/chat/sessions/{sid}/turns", {**body, "client_turn_id": "revoked-context"})
+        assert status == 400 and store.turn_for_client(sid, "revoked-context") is None
+    finally:
+        runtime.close()
 
 
 @pytest.mark.parametrize("committed", [False, True])

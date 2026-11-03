@@ -4,16 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "loopx"
-version = "2.1.0"
+version = "2.2.0"
 description = "A Loop Engineering control plane for long-running agent goals (requires Node.js 22.22.3+)."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE", "LICENSE-MIT"]
 authors = [{ name = "LoopX contributors" }]
-# No Python runtime dependencies, but the TypeScript control plane needs a
-# system Node.js >= 22.22.3 (MINIMUM_NODE_VERSION); pip cannot install it.
-dependencies = []
+# Windows does not supply the IANA database used by zoneinfo for schedules.
+# The TypeScript control plane also needs system Node.js >= 22.22.3
+# (MINIMUM_NODE_VERSION); pip cannot install it.
+dependencies = ["tzdata; sys_platform == 'win32'"]
 
 [project.urls]
 Homepage = "https://loopx-project.github.io/loopx/"
@@ -23,6 +24,9 @@ Issues = "https://github.com/loopx-project/loopx/issues"
 Changelog = "https://github.com/loopx-project/loopx/releases"
 
 [project.optional-dependencies]
+input-token-estimates = [
+  "tiktoken==0.12.0",
+]
 ego-source-reader = [
   "mcp==1.30.0",
 ]
@@ -43,6 +47,8 @@ test-core = [
   "pytest>=9.0.3,<10",
 ]
 test = [
+  "hypothesis==6.142.4",
+  "tiktoken==0.12.0",
   "distlib>=0.3.9,<1; sys_platform == 'win32'",
   "docker==7.2.0",
   "resvg-py==0.5.0",

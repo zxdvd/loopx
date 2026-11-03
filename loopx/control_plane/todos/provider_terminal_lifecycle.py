@@ -19,6 +19,7 @@ from ..coordination.local_authority import (
     LocalCoordinationAuthorityUnavailable,
     read_canonical_todos_if_promoted,
     require_canonical_authority,
+    raise_canonical_write_failure,
 )
 from ...paths import effective_runtime_root
 from ..effect_runtime import (
@@ -133,6 +134,7 @@ def route_terminal_call(command: str, call: Mapping[str, Any]) -> dict[str, Any]
         completion_validation_workspace_path=(
             call.get("completion_validation_workspace_path") if complete else None
         ),
+        claim_operation_id=call.get("claim_operation_id"),
         task_lease_idempotency_key=call.get("task_lease_idempotency_key"),
         task_lease_expected_version=_non_negative_integer(
             call.get("task_lease_expected_version"),
@@ -258,6 +260,7 @@ def terminal_canonical_todo_if_promoted(
     completion_identity_source: str | None,
     completion_delivery_workspace: Mapping[str, Any] | None,
     completion_validation_workspace_path: Path | None,
+    claim_operation_id: str | None,
     task_lease_idempotency_key: str | None,
     task_lease_expected_version: int | None,
     no_followup: bool,
@@ -298,6 +301,9 @@ def terminal_canonical_todo_if_promoted(
                 "legacy_markdown_fallback_allowed": False,
                 "retry_after": "canonical_provider_readback_loaded",
             }
+        raise_canonical_write_failure(
+            {**payload, "error_code": exc.code}, goal_id=goal_id, operation="todo_terminal",
+        )
         raise LocalCoordinationAuthorityUnavailable(
             str(exc), code=exc.code, payload=payload
         ) from exc
@@ -358,7 +364,8 @@ def terminal_canonical_todo_if_promoted(
             and target.get("task_class") == "continuous_monitor"
         )
         request = {
-            "schema_version": _TERMINAL_REQUEST_SCHEMA,
+            "schema_version": ("loopx_local_coordination_todo_terminal_lifecycle_request_v4"
+                               if claim_operation_id is not None else _TERMINAL_REQUEST_SCHEMA),
             **({"review_basis": dict(review_basis)} if review_basis is not None else {}),
             **({"expected_todo_text_sha256": expected_todo_text_sha256}
                if expected_todo_text_sha256 is not None or require_captured_todo_text else {}),
@@ -385,6 +392,7 @@ def terminal_canonical_todo_if_promoted(
                     completion_turn_key=completion_turn_key,
                 )}
             ),
+            **({"claim_operation_id": claim_operation_id} if claim_operation_id is not None else {}),
             "lease_idempotency_key": task_lease_idempotency_key,
             "lease_expected_version": task_lease_expected_version,
             "allow_user_gate_auto_acquire": command == "complete",
@@ -532,9 +540,15 @@ def archive_canonical_todos_if_promoted(
     project: Path | None = None,
     state_file: Path | None = None,
 ) -> dict[str, Any] | None:
-    authority_read = read_canonical_todos_if_promoted(
-        runtime_root=runtime_root, goal_id=goal_id
-    )
+    try:
+        authority_read = read_canonical_todos_if_promoted(
+            runtime_root=runtime_root, goal_id=goal_id
+        )
+    except LocalCoordinationAuthorityUnavailable as exc:
+        raise_canonical_write_failure(
+            {**exc.payload, "error_code": exc.code}, goal_id=goal_id, operation="todo_archive",
+        )
+        raise
     if authority_read is None:
         return None
     provider_revision = authority_read.get("provider_revision")

@@ -4,6 +4,7 @@ from __future__ import annotations
 import shlex
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 
 BOOTSTRAP_INSTRUCTION = (
@@ -35,7 +36,7 @@ def render_heartbeat_bootstrap(command: list[str]) -> str:
     )
 
 
-def _goal_command(args, *, registry: Path, legacy: bool) -> list[str]:
+def _goal_command(args: Any, *, registry: Path, legacy: bool) -> list[str]:
     """Preserve explicit caller inputs, not yesterday's resolved registry values.
 
     The loaded command deliberately omits --bootstrap: one load cannot recurse.
@@ -66,6 +67,9 @@ def _goal_command(args, *, registry: Path, legacy: bool) -> list[str]:
         ("runtime_profile", "--runtime-profile"), ("visible_goal_host", "--visible-goal-host"),
         ("host_surface", "--host-surface"), ("scheduler_owner", "--scheduler-owner"),
         ("execution_mode", "--execution-mode"),
+        ("decision_output_root", "--decision-output-root"),
+        ("codex_context_root", "--codex-context-root"),
+        ("context_delivery", "--context-delivery"),
     ):
         value = getattr(args, field, None)
         if value is not None:
@@ -78,6 +82,8 @@ def _goal_command(args, *, registry: Path, legacy: bool) -> list[str]:
             command += [flag, value]
     if args.cli_bin != "loopx":
         command += ["--cli-bin", args.cli_bin]
+    if getattr(args, "turn_envelope", False):
+        command.append("--turn-envelope")
     if legacy:
         if args.codex_app:
             command.append("--codex-app")
@@ -87,7 +93,7 @@ def _goal_command(args, *, registry: Path, legacy: bool) -> list[str]:
     return command
 
 
-def goal_bootstrap(args, *, registry: Path) -> str:
+def goal_bootstrap(args: Any, *, registry: Path) -> str:
     """Use the heartbeat wrapper only for an App heartbeat scheduler."""
     heartbeat = (
         args.codex_app
@@ -102,7 +108,7 @@ def goal_bootstrap(args, *, registry: Path) -> str:
                             entry=LEGACY_HOST_BOOTSTRAP_ENTRY)
 
 
-def host_bootstrap_binding(prompt: str) -> dict | None:
+def host_bootstrap_binding(prompt: str) -> dict[str, Any] | None:
     """Recognize complete v2 loaders and the exact legacy host wrapper."""
     if not prompt.startswith((HEARTBEAT_BOOTSTRAP + "\n", LEGACY_HOST_BOOTSTRAP + "\n")):
         return None
@@ -110,19 +116,21 @@ def host_bootstrap_binding(prompt: str) -> dict | None:
         command = shlex.split(prompt.split("```sh\n", 1)[1].split("\n```", 1)[0])
         if command[1:3] != ["--format", "json"]:
             return None
-        values = dict(cli_bin=command[0], turn_instance_id=None, codex_app=False,
+        values: dict[str, Any] = dict(cli_bin=command[0], turn_instance_id=None, codex_app=False,
                       trae_app=False,
-                      full=False, compact=False, brief=False, thin=False,
+                      full=False, compact=False, brief=False, thin=False, turn_envelope=False,
                       visible_goal_host=None, available_capabilities=[], agent_scopes=[],
                       runtime_root=None)
         singles = {"--" + name.replace("_", "-"): name for name in (
             "registry", "runtime_root", "goal_id", "agent_id", "active_state",
             "material_rule", "permission_rule", "runtime_profile", "visible_goal_host",
-            "host_surface", "scheduler_owner", "execution_mode", "cli_bin")}
+            "host_surface", "scheduler_owner", "execution_mode", "cli_bin",
+            "decision_output_root", "codex_context_root", "context_delivery")}
         repeated = {"--agent-scope": "agent_scopes", "--available-capability": "available_capabilities"}
         booleans = {
             "--codex-app": "codex_app",
             "--trae_app": "trae_app",
+            "--turn-envelope": "turn_envelope",
             **{"--" + name.replace("_", "-"): name for name in ("full", "compact", "brief", "thin")},
         }
         index = 3

@@ -687,6 +687,11 @@ _QUOTA_PROJECTION_ENVELOPE_V0_MIGRATION_ALLOWANCE = GrowthAllowance(
     json={"chars": 3_000, "utf8_bytes": 3_000, "lines": 110, "compact_payload_chars": 2_800},
     markdown={"chars": 192, "utf8_bytes": 224, "lines": 3, "compact_payload_chars": 0},
 )
+# The unchanged 18-row Todo matrix adds 783–854 JSON chars and no lines.
+# Source freshness and omitted-work coverage are useful; Markdown is unchanged.
+_TODO_PROJECTION_ENVELOPE_V0_MIGRATION_ALLOWANCE: dict[Metric, int] = {
+    "chars": 896, "utf8_bytes": 896, "lines": 0, "compact_payload_chars": 896,
+}
 
 
 def _projection_envelope_migration(
@@ -698,6 +703,13 @@ def _projection_envelope_migration(
     if before == after:
         return {}, [], []
     surface_id = str(base.get("surface_id") or "")
+    row_surface = str(base.get("row_id") or "").partition("/")[2].partition("/")[0]
+    if (surface_id == "todo_list" and row_surface in {
+            "todo_list", "todo_list_limited", "todo_list_thin"}
+            and output_format == "json" and before == ()
+            and after == ("loopx_projection_envelope_v0",)):
+        return _TODO_PROJECTION_ENVELOPE_V0_MIGRATION_ALLOWANCE, [], [
+            "Todo projection envelope schema migrated: none -> loopx_projection_envelope_v0"]
     if (surface_id in {"status", "quota_should_run"}
             and before == () and after == ("loopx_projection_envelope_v0",)):
         migration_allowance = (
@@ -880,6 +892,49 @@ def _turn_projection_migration(
 ) -> tuple[dict[str, int], list[str]]:
     old_paths = set(base.get("json_shape_paths") or [])
     new_paths = set(candidate.get("json_shape_paths") or [])
+    # Inherited Stride now supplies the existing bounded decision contract on
+    # the required-review route. Only absence -> complete projection receives
+    # this one-time allowance; later growth, removed facts and other paths do not.
+    stride_routes = {
+        "surface/quota_should_run/crowded/json": ("$", 6_800),
+        "surface/loopx_turn_plan/crowded/json": ("$.turn_envelope", 6_500),
+    }
+    stride_route = stride_routes.get(str(base.get("row_id")))
+    if stride_route and candidate.get("row_id") == base.get("row_id"):
+        root, bound = stride_route
+        control = f"{root}.replan_action_packet.stride_control"
+        strategy = f"{root}.autonomous_replan_obligation.replan_context.stride_strategy"
+        required = {f"{control}.{key}" for key in (
+            "schema_version", "strategy_version", "reference_context_id",
+            "reference_obligation_id", "required_fields", "rule",
+            "minimal_example.schema_version", "minimal_example.strategy_version",
+            "minimal_example.reference_context_id", "minimal_example.reference_obligation_id",
+            "minimal_example.basis", "minimal_example.action",
+            *[f"minimal_example.axes.{axis}.{field}"
+              for axis in ("work_slice", "route_distance", "validation_scope")
+              for field in ("plan", "reason")],
+            *[f"minimal_example.next_probe.{field}" for field in (
+                "scope", "prediction", "adoption_criterion", "cost_bound", "minimum_evidence",
+            )],
+        )}
+        # Optional review blocks are required in full once projected. Presence
+        # of representative leaves cannot qualify a truncated decision example.
+        for review, fields in (
+            ("previous_review", ("reference_decision_ref", "adoption", "information_gain",
+                                 "goal_gain", "evidence_refs", "lesson")),
+            ("explore_review", ("revision", "disposition", "considered_refs", "reason")),
+        ):
+            prefix = f"{control}.minimal_example.{review}"
+            if any(path == prefix or path.startswith(prefix + ".") for path in new_paths):
+                required.update(f"{prefix}.{field}" for field in fields)
+        added = new_paths - old_paths
+        if (base.get("format") == candidate.get("format") == "json"
+            and control not in old_paths and required <= new_paths and old_paths <= new_paths
+            and all(path == control or path.startswith(control + ".") or path == strategy
+                    for path in added)):
+            return {metric: bound for metric in ("chars", "utf8_bytes", "compact_payload_chars")}, [
+                "inherited Stride decision context enabled; bounded one-time JSON growth"
+            ]
     profile = "$.turn_envelope.contract_capsule.execution_profile"
     restored = {f"{profile}.{field}" for field in (
         "small_scale_streak_threshold", "outcome_floor", "outcome_floor.configured",

@@ -7,6 +7,7 @@ or a second Goal/work authority. Each concrete part keeps its own exact receipt.
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,12 @@ from .manager_reply_delivery import write_delivery
 from .presentation.markdown_parts import split_lark_markdown_posts
 
 POST_PARTS_LOCATOR = re.compile(r"^lark-parts:([a-f0-9]{64})$")
+
+
+def _part_identity(arguments, index):
+    identity = arguments.get("delivery_id")
+    return ({"delivery_id": hashlib.sha256(f"{identity}:part:{index}".encode()).hexdigest()}
+            if identity is not None else {})
 
 
 def _path(project, config_path, intent_digest):
@@ -122,6 +129,9 @@ def deliver_post_parts(*, receipt, intent_digest, template, reply_text, argument
                     "source_membership_verifier"
                 ),
                 "source_authority_verifier": arguments.get("source_authority_verifier"),
+                **({"reply_placement": arguments["reply_placement"]}
+                   if arguments.get("reply_placement") is not None else {}),
+                **_part_identity(arguments, index),
                 "before_send": (lambda _part_intent: outer_hook(intent_digest))
                 if outer_hook
                 else None,
@@ -132,6 +142,7 @@ def deliver_post_parts(*, receipt, intent_digest, template, reply_text, argument
                 "attachment_names": arguments.get("attachment_names", ())
                 if final
                 else (),
+                "image_keys": arguments.get("image_keys", ()) if final else (),
             }
 
         result = deliver_manager_reply_parts(
@@ -151,7 +162,7 @@ def deliver_post_parts(*, receipt, intent_digest, template, reply_text, argument
                 int(state.get("delivery_part_stall_count") or 0) + 1
             )
             notice_options = options(0)
-            notice_options.update(attachment_keys=(), attachment_names=())
+            notice_options.update(attachment_keys=(), attachment_names=(), image_keys=())
             notice = deliver_stall_notice(
                 delivery_state=state,
                 delivery_path=path,
@@ -245,9 +256,13 @@ def verify_post_parts(*, receipt, intent_digest, attempt, arguments, resume=Fals
             runner=arguments["runner"],
             source_membership_verifier=arguments.get("source_membership_verifier"),
             source_authority_verifier=arguments.get("source_authority_verifier"),
+            **({"reply_placement": arguments["reply_placement"]}
+               if arguments.get("reply_placement") is not None else {}),
+            **_part_identity(arguments, index),
             finalize_reactions=False,
             attachment_keys=arguments.get("attachment_keys", ()) if final else (),
             attachment_names=arguments.get("attachment_names", ()) if final else (),
+            image_keys=arguments.get("image_keys", ()) if final else (),
         )
         if not result.get("reply_verified"):
             return result
@@ -273,7 +288,7 @@ def verify_post_parts(*, receipt, intent_digest, attempt, arguments, resume=Fals
 
 
 def attachment_reply(*, project, config_path, attempt, text):
-    """Files belong to the last concrete post, never to the composite locator."""
+    """Resources belong to the last concrete post, never the composite locator."""
     match = POST_PARTS_LOCATOR.fullmatch(str(attempt.get("message_ref") or ""))
     if not match:
         return text, attempt

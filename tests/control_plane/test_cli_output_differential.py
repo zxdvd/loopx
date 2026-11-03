@@ -78,6 +78,107 @@ def _receipt(*rows: dict[str, object]) -> dict[str, object]:
     }
 
 
+def test_base_ceiling_observation_is_bounded_and_contains_only_metrics():
+    import runpy
+    from pathlib import Path
+    from loopx.control_plane.testing.cli_output_budget import CLI_OUTPUT_BUDGET_BY_ID
+
+    smoke = runpy.run_path(str(
+        Path(__file__).resolve().parents[2]
+        / "examples/control_plane/cli-output-base-head-differential-smoke.py"
+    ))
+    rows = [
+        _row(
+            row_id=f"surface/{surface}/crowded/json", surface_id=surface,
+            scenario="crowded", chars=spec.max_chars["crowded"]["json"] + 1,
+            lines=1, raw_output="unbounded source text must stay private",
+        )
+        for surface, spec in list(CLI_OUTPUT_BUDGET_BY_ID.items())[:5]
+    ]
+    # Variant receipts have separate contracts; this diagnostic must not claim
+    # they are covered by default-surface ceilings.
+    receipt = _receipt(*rows, _row(
+        row_id="variant/status/small/json", variant_id="status_task_graph_detail",
+    ), _row(
+        row_id="surface/status/small/json", variant_id="status_task_graph_detail",
+    ))
+    original = copy.deepcopy(receipt)
+    observation = smoke["_base_ceiling_observation"](receipt)
+    assert observation["scope"] == "default_surface_baselines"
+    assert observation["failure_count"] == 5
+    assert observation["omitted_count"] == 1
+    assert [row["row_id"] for row in observation["rows"]] == [row["row_id"] for row in rows[:4]]
+    assert all(set(row) == {"row_id", "base", "current_ceiling"} for row in observation["rows"])
+    assert all(row["base"]["chars"] == row["current_ceiling"]["chars"] + 1 for row in observation["rows"])
+    assert "unbounded source text" not in json.dumps(observation)
+    assert receipt == original
+    assert len(json.dumps(observation)) < 3000  # The outer smoke retains this tail.
+    clean = smoke["_base_ceiling_observation"](_receipt(_row(chars=1, lines=1)))
+    assert clean["failure_count"] == 0 and clean["rows"] == []
+
+
+def test_over_budget_base_is_reported_before_candidate_failure_without_waiver(
+    monkeypatch, capsys,
+):
+    import runpy
+    from pathlib import Path
+    from loopx.control_plane.testing.cli_output_budget import (
+        CLI_OUTPUT_BUDGET_BY_ID, assert_cli_output_baseline,
+    )
+
+    smoke = runpy.run_path(str(
+        Path(__file__).resolve().parents[2]
+        / "examples/control_plane/cli-output-base-head-differential-smoke.py"
+    ))
+    main = smoke["main"]
+    namespace = main.__globals__
+    spec = CLI_OUTPUT_BUDGET_BY_ID["quota_should_run"]
+    chars = spec.max_chars["crowded"]["json"] + 1
+    row = _row(
+        row_id="surface/quota_should_run/crowded/json", surface_id="quota_should_run",
+        scenario="crowded", chars=chars, lines=1,
+    )
+    probes, git_commands = [], []
+
+    def git_transport(command, **_):
+        git_commands.append(command)
+        if "add" in command:
+            base_test = Path(command[-2]) / namespace["PROBE_TEST"].relative_to(namespace["REPO_ROOT"])
+            base_test.parent.mkdir(parents=True)
+            base_test.write_text("# Synthetic historical fixture\n")
+
+    def probe_transport(**kwargs):
+        probes.append(kwargs["enforce_budget"])
+        if not kwargs["enforce_budget"]:
+            kwargs["receipt_path"].write_text(json.dumps(_receipt(row)))
+        else:
+            # Exercise the real ceiling failure. The diagnostic must neither
+            # skip enforcement nor turn an unchanged over-budget base green.
+            assert_cli_output_baseline(
+                spec, scenario="crowded", output_format="json", text="{}",
+                measurement={"chars": chars, "lines": 1},
+            )
+
+    monkeypatch.setitem(namespace, "_run", git_transport)
+    monkeypatch.setitem(namespace, "_run_probe", probe_transport)
+    monkeypatch.setitem(namespace, "_is_ancestor", lambda *_: True)
+    monkeypatch.setitem(namespace, "_pin_probe_base_ref", lambda ref, **_: ref)
+    monkeypatch.setattr(sys, "argv", ["probe", "--base-ref", "synthetic-base"])
+    with pytest.raises(AssertionError, match="baseline ceiling"):
+        main()
+    assert probes == [False, True]
+    assert "remove" in git_commands[-1]
+    output = capsys.readouterr().out
+    prefix = "cli-output-base-current-ceilings "
+    assert output.startswith(prefix)
+    observation = json.loads(output.removeprefix(prefix))
+    assert observation["base_ref"] == "synthetic-base"
+    assert observation["rows"] == [{
+        "row_id": row["row_id"], "base": {"chars": chars, "lines": 1},
+        "current_ceiling": {"chars": chars - 1, "lines": spec.max_lines["crowded"]["json"]},
+    }]
+
+
 @pytest.mark.parametrize("coverage", ["turn_envelope_action_dimensions_v0", "turn_envelope_action_dimensions_v2"])
 def test_complete_work_profile_growth_is_one_time_and_preserves_other_guards(coverage):
     from loopx.control_plane.testing.cli_output_differential import _compare_row
@@ -375,6 +476,130 @@ def test_sync_commit_uses_main_as_cli_output_base() -> None:
     )
 
     assert selected == "origin/main"
+
+
+@pytest.mark.parametrize("growth,explicit_base,advance_main", [
+    (0, False, False), (0, False, True), (1000, False, True), (0, True, True),
+])
+def test_probe_compares_pinned_candidate_ancestry_when_main_advances(
+    tmp_path, monkeypatch, growth, explicit_base, advance_main,
+):
+    import os
+    import runpy
+    import subprocess
+    from pathlib import Path
+
+    from loopx.control_plane.testing.cli_output_budget import (
+        CLI_OUTPUT_BUDGET_BY_ID, assert_cli_output_baseline,
+    )
+
+    source = Path(__file__).resolve().parents[2]
+    smoke = runpy.run_path(str(
+        source / "examples/control_plane/cli-output-base-head-differential-smoke.py"
+    ))
+    main = smoke["main"]
+    namespace = main.__globals__
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args):
+        return subprocess.run(
+            ["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+             "-c", f"core.hooksPath={os.devnull}", "-c", "commit.gpgsign=false",
+             *args], cwd=repo, check=True, text=True, encoding="utf-8",
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        ).stdout.strip()
+
+    git("init", "-b", "main")
+    packet = repo / "packet.json"
+    common_payload = {
+        "interaction_contract": {}, "scheduler_hint": {}, "selected_todo": {},
+        "note": "x" * 4000,
+    }
+    packet.write_text(json.dumps(common_payload), encoding="utf-8")
+    probe_test = repo / "tests" / "probe.py"
+    probe_test.parent.mkdir()
+    probe_test.write_text("# Public synthetic probe\n", encoding="utf-8")
+    git("add", "packet.json", "tests/probe.py")
+    git("commit", "-m", "common baseline")
+    common = git("rev-parse", "HEAD")
+    git("checkout", "-b", "candidate")
+    packet.write_text(json.dumps({**common_payload, "note": "x" * (4000 + growth)}), encoding="utf-8")
+    git("add", "packet.json")
+    git("commit", "--allow-empty", "-m", "candidate")
+    candidate = git("rev-parse", "HEAD")
+    git("checkout", "main")
+    if advance_main:
+        packet.write_text(json.dumps({**common_payload, "note": "short"}), encoding="utf-8")
+        git("add", "packet.json")
+        git("commit", "-m", "later upstream compaction")
+    upstream = git("rev-parse", "HEAD")
+    git("update-ref", "refs/remotes/origin/main", upstream)
+    git("checkout", "candidate")
+    probes = []
+    pinned = []
+    run = namespace["_run"]
+
+    def git_transport(command, **kwargs):
+        if "worktree" in command and "add" in command:
+            pinned.append(command[-1])
+            # Advance the ref again after selection but before checkout.
+            git("update-ref", "refs/remotes/origin/main", candidate)
+        run(command, **kwargs)
+
+    def probe_transport(**kwargs):
+        text = (kwargs["source_root"] / "packet.json").read_text(encoding="utf-8")
+        measured = measure_cli_output(text, output_format="json")
+        row = _row(
+            row_id="surface/quota_should_run/crowded/json",
+            surface_id="quota_should_run", scenario="crowded",
+            **{key: measured[key] for key in (
+                "chars", "utf8_bytes", "lines", "compact_payload_chars",
+            )},
+        )
+        if kwargs["enforce_budget"]:
+            assert_cli_output_baseline(
+                CLI_OUTPUT_BUDGET_BY_ID["quota_should_run"], scenario="crowded",
+                output_format="json", text=text, measurement=measured,
+            )
+        probes.append(kwargs["enforce_budget"])
+        kwargs["receipt_path"].write_text(json.dumps(_receipt(row)), encoding="utf-8")
+
+    monkeypatch.setitem(namespace, "REPO_ROOT", repo)
+    monkeypatch.setitem(namespace, "PROBE_TEST", probe_test)
+    monkeypatch.setitem(namespace, "_run", git_transport)
+    monkeypatch.setitem(namespace, "_run_probe", probe_transport)
+    # An explicit historical commit remains authoritative even off this branch.
+    args = ["probe", "--base-ref", upstream] if explicit_base else ["probe"]
+    monkeypatch.setattr(sys, "argv", args)
+    if growth or explicit_base:
+        delta = 3995 if explicit_base else growth
+        with pytest.raises(AssertionError, match=f"chars grew by {delta}") as error:
+            main()
+        assert f"base_ref={upstream if explicit_base else common}" in str(error.value)
+    else:
+        assert main() == 0
+    assert probes == [False, True]
+    assert pinned == [upstream if explicit_base else common]
+    assert git("worktree", "list", "--porcelain").count("worktree ") == 1
+    assert git("rev-parse", "HEAD") == candidate
+    assert git("show", f"{common}:packet.json") == json.dumps(common_payload)
+
+
+@pytest.mark.parametrize("base_ref", ["origin/main", "missing-base"])
+def test_probe_rejects_an_unresolvable_base(tmp_path, monkeypatch, base_ref):
+    import runpy
+    import subprocess
+    from pathlib import Path
+
+    pin = runpy.run_path(str(
+        Path(__file__).resolve().parents[2]
+        / "examples/control_plane/cli-output-base-head-differential-smoke.py"
+    ))["_pin_probe_base_ref"]
+    subprocess.run(["git", "init", str(tmp_path)], check=True, capture_output=True)
+    monkeypatch.setitem(pin.__globals__, "REPO_ROOT", tmp_path)
+    with pytest.raises(RuntimeError, match="select an explicit --base-ref commit"):
+        pin(base_ref, main_ref="origin/main")
 
 
 @pytest.mark.parametrize("row_kind", ["surface", "variant"])
@@ -1465,6 +1690,23 @@ def test_projection_envelope_migration_is_bounded_and_one_time(
         assert not compare_cli_output_receipts(_receipt(outside_base), _receipt(outside))["ok"]
 
 
+@pytest.mark.parametrize("row_prefix", [
+    "surface/todo_list", "variant/todo_list_limited", "variant/todo_list_thin",
+])
+def test_todo_envelope_migration_retains_a_bounded_one_time_allowance(row_prefix):
+    base = _row(row_id=f"{row_prefix}/small/json", surface_id="todo_list")
+    candidate = {**base,
+        "projection_envelope_schema_versions": ["loopx_projection_envelope_v0"],
+        **{metric: base[metric] + 896 for metric in ("chars", "utf8_bytes", "compact_payload_chars")}}
+    assert compare_cli_output_receipts(_receipt(base), _receipt(candidate))["ok"]
+    excessive = {**candidate, "chars": candidate["chars"] + 1}
+    assert not compare_cli_output_receipts(_receipt(base), _receipt(excessive))["ok"]
+    repeated = {**candidate, "chars": candidate["chars"] + 896}
+    assert not compare_cli_output_receipts(_receipt(candidate), _receipt(repeated))["ok"]
+    unsupported = {**candidate, "projection_envelope_schema_versions": ["loopx_projection_envelope_v1"]}
+    assert not compare_cli_output_receipts(_receipt(candidate), _receipt(unsupported))["ok"]
+
+
 def test_both_command_routes_are_counted_in_either_order() -> None:
     text = (
         "loopx --registry '/tmp/registry path' --runtime-root /tmp/root refresh-state\n"
@@ -1803,3 +2045,47 @@ def test_objective_replan_cost_is_complete_once_and_carrier_scoped():
         assert _compare_row(base, {**head, "chars": 1769})["failures"]
     assert not observe(prior + " " + " ".join(reversed(clauses)))["objective_replan_after"]
     assert not observe(json.dumps({"prior": prior, "clauses": clauses}))["objective_replan_after"]
+
+
+@pytest.mark.parametrize("surface,root,growth", [
+    ("quota_should_run", "$", 6684),
+    ("loopx_turn_plan", "$.turn_envelope", 6364),
+])
+def test_inherited_stride_projection_growth_is_one_time_and_bounded(surface, root, growth):
+    from loopx.control_plane.testing.cli_output_differential import _compare_row
+
+    control = f"{root}.replan_action_packet.stride_control"
+    paths = [control, *[f"{control}.{key}" for key in (
+        "schema_version", "strategy_version", "reference_context_id", "reference_obligation_id",
+        "required_fields", "rule", "minimal_example.schema_version", "minimal_example.strategy_version",
+        "minimal_example.reference_context_id", "minimal_example.reference_obligation_id",
+        "minimal_example.basis", "minimal_example.action",
+        *[f"minimal_example.axes.{axis}.{field}"
+          for axis in ("work_slice", "route_distance", "validation_scope")
+          for field in ("plan", "reason")],
+        *[f"minimal_example.next_probe.{field}" for field in (
+            "scope", "prediction", "adoption_criterion", "cost_bound", "minimum_evidence",
+        )],
+    )]]
+    base = _row(row_id=f"surface/{surface}/crowded/json")
+    candidate = {**base, "json_shape_paths": [*base["json_shape_paths"], *paths]}
+    for metric in ("chars", "utf8_bytes", "compact_payload_chars"):
+        candidate[metric] += growth
+    result = _compare_row(base, candidate)
+    assert not result["failures"] and result["review_signals"]
+    assert _compare_row({**base, "json_shape_paths": candidate["json_shape_paths"]}, candidate)["failures"]
+    assert _compare_row(base, {**candidate, "json_shape_paths": candidate["json_shape_paths"][:-1]})["failures"]
+    assert _compare_row(base, {**candidate, "json_shape_paths": [*candidate["json_shape_paths"], "$.unrelated"]})["failures"]
+    assert _compare_row(base, {**candidate, "json_shape_paths": paths})["failures"]
+    for metric in ("chars", "utf8_bytes", "lines", "compact_payload_chars"):
+        assert _compare_row(base, {**candidate, metric: base[metric] + result["allowances"][metric] + 1})["failures"]
+    for review, fields in (
+        ("previous_review", ("reference_decision_ref", "adoption", "information_gain", "goal_gain", "evidence_refs", "lesson")),
+        ("explore_review", ("revision", "disposition", "considered_refs", "reason")),
+    ):
+        review_paths = [f"{control}.minimal_example.{review}.{field}" for field in fields]
+        complete = {**candidate, "json_shape_paths": [*candidate["json_shape_paths"], *review_paths]}
+        assert not _compare_row(base, complete)["failures"]
+        for missing in review_paths:
+            partial = {**complete, "json_shape_paths": [p for p in complete["json_shape_paths"] if p != missing]}
+            assert _compare_row(base, partial)["failures"], missing

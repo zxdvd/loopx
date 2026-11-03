@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -18,9 +17,7 @@ from ..control_plane.goals.first_party_host_admission import (
 from ..control_plane.quota.heartbeat_receipt import (
     ensure_turn_heartbeat_settlement_receipt,
 )
-from ..control_plane.quota.live_decision import (
-    build_live_quota_should_run_decision,
-)
+from ..control_plane.quota.live_decision import build_live_quota_should_run_decision
 from ..control_plane.quota.settlement import (
     SettlementIdentity,
     SettlementStepKind,
@@ -37,6 +34,7 @@ from ..control_plane.todos.durable_completion import (
     read_persisted_todo_record,
     read_persisted_todo_record_with_source,
 )
+from ..control_plane.todos.completion_fence import evaluate_todo_completion_fence
 from ..control_plane.turn_driver import (
     build_loopx_turn_command_validator,
     codex_cli_session_binding,
@@ -49,6 +47,7 @@ from ..quota import spend_quota_slot
 from ..state_refresh import refresh_state_run
 from ..control_plane.todos.path_resolution import resolve_todo_state_path
 from .turn_cadence import managed_cadence_start
+from .turn_host_request import build_codex_cli_host_runner, prepare_turn_host_request
 from .turn_decision import collect_turn_status_payload, current_turn_host_launch_decision
 from .turn_dsh_host import build_dsh_host_runner, build_dsh_operation_host_runner
 from .turn_rendering import build_turn_error_payload
@@ -73,53 +72,25 @@ def execute_turn_run_once(
     operator_environ: Mapping[str, str],
     operator_inbox_urgency_projector: Callable[..., dict[str, Any]],
     turn_start_hook_dispatch: Mapping[str, Any] | None = None,
+    native_host_runner: Callable[..., dict[str, Any]] | None = None,
+    native_session_binding_resolver: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
+    native_completion_lease_resolver: Callable[[], Mapping[str, Any]] | None = None,
+    native_task_validator: Callable[[Mapping[str, Any], Mapping[str, Any]], Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Adapt one prepared CLI Turn plan to the bounded Turn driver."""
     execution_started = False
     try:
-        project = Path(args.project).expanduser().resolve()
-        planned_host = (
-            payload.get("host") if isinstance(payload.get("host"), dict) else {}
-        )
-        if planned_host.get("kind") != args.host:
-            raise ValueError("--host must match the journaled LoopX Turn plan")
-        if args.host == "generic-cli":
-            if not args.host_command_json:
-                raise ValueError(
-                    "generic-cli requires --host-adapter-command-json "
-                    "(alias --host-command-json)"
-                )
-            raw_argv = json.loads(args.host_command_json)
-            if not isinstance(raw_argv, list) or not all(
-                isinstance(item, str) for item in raw_argv
-            ):
-                raise ValueError(
-                    "--host-adapter-command-json must be a JSON string array"
-                )
-        else:
-            if args.host_command_json:
-                raise ValueError(f"{args.host} does not accept --host-command-json")
-            raw_argv = None
-        if args.validation_command_json:
-            raw_validation_argv = json.loads(args.validation_command_json)
-            if not isinstance(raw_validation_argv, list) or not all(
-                isinstance(item, str) for item in raw_validation_argv
-            ):
-                raise ValueError(
-                    "--validation-command-json must be a JSON string array"
-                )
-            task_validator = build_loopx_turn_command_validator(
-                raw_validation_argv,
-                project=project,
-                timeout_seconds=args.validation_timeout_seconds,
-                failure_recovery_kind=args.validation_failure_kind,
+        if args.execute and goal_admission is None:
+            # Cached-result recovery still requires the current Goal lifetime.
+            goal_admission = FirstPartyHostGoalAdmission.for_plan(
+                registry_path=registry_path, goal_id=args.goal_id,
+                planned_goal_ref=goal_ref,
             )
-        else:
-            task_validator = None
-        envelope = (
-            payload.get("turn_envelope")
-            if isinstance(payload.get("turn_envelope"), dict)
-            else {}
+        project, raw_argv, task_validator, envelope = prepare_turn_host_request(
+            args, payload, native_host_runner=native_host_runner,
+            native_session_binding_resolver=native_session_binding_resolver,
+            native_task_validator=native_task_validator,
+            validator_builder=build_loopx_turn_command_validator,
         )
         selected_todo = selected_turn_todo(envelope)
         expected_todo_text_sha256 = captured_todo_text_sha256(
@@ -154,6 +125,7 @@ def execute_turn_run_once(
             ),
             replan_obligation_id=(raw_identity.get("replan_obligation_id")
                                   if isinstance(raw_identity, Mapping) else None),
+            request_subject=raw_identity.get("request_subject"),
         )
         persisted_effect_id = str(raw_identity.get("effect_id") or "")
         if (
@@ -235,7 +207,7 @@ def execute_turn_run_once(
             project
             if isinstance(
                 writeback_contract.get("delivery_workspace_causality"), dict
-            )
+            ) and not (settlement_identity.replan_obligation_id and not selected_todo)
             else None
         )
         completion_delivery_workspace = (
@@ -250,14 +222,13 @@ def execute_turn_run_once(
             else None
         )
 
-        def writeback(
+        def refresh_candidate(
             result: dict[str, object],
             *,
             completion_todo_id: str | None = None,
             completion_turn_key: str | None = None,
-            effect_ref: str,
+            dry_run: bool = False,
         ) -> dict[str, object]:
-            require_effect_ref(effect_ref, SettlementStepKind.DURABLE_WRITEBACK)
             # The host workspace is execution context, not state authority.
             state_project = None
             result_kind = str(result.get("result_kind") or "")
@@ -270,7 +241,7 @@ def execute_turn_run_once(
             # Diagnostics already live in the journal's typed host_result.
             # Do not overwrite task context before refresh can reject a result.
             progress_observation = result.get("progress_observation")
-            refresh = refresh_state_run(
+            return refresh_state_run(
                 registry_path=registry_path,
                 runtime_root_override=runtime_root_arg,
                 goal_id=args.goal_id,
@@ -305,10 +276,34 @@ def execute_turn_run_once(
                 ),
                 completion_todo_id=completion_todo_id,
                 completion_turn_key=completion_turn_key,
-                dry_run=False,
+                dry_run=dry_run,
                 sync_global=not bool(args.no_global_sync),
                 goal_ref=goal_ref,
             )
+
+        # A Todo-less native governance Turn has no business artifact/argv.
+        # Its independent validator is the canonical semantic writeback preview,
+        # with the same captured obligation and fresh authority as the commit.
+        # Never treat a model's progress/completion assertion as that validation.
+        if task_validator is None and settlement_identity.replan_obligation_id and not selected_todo:
+            def validate_replan(_plan: Mapping[str, Any], result: Mapping[str, Any]) -> dict[str, Any]:
+                passed = (result.get("result_kind") == "replan_required"
+                    and refresh_candidate(dict(result), dry_run=True).get("ok") is True)
+                return {"status": "passed" if passed else "failed", "validator_kind": "callback",
+                    "summary": "independent native semantic replan preview " + ("passed" if passed else "failed"),
+                    **({"recovery_kind": "repair_required"} if not passed else {})}
+            task_validator = validate_replan
+
+        def writeback(
+            result: dict[str, object],
+            *,
+            completion_todo_id: str | None = None,
+            completion_turn_key: str | None = None,
+            effect_ref: str,
+        ) -> dict[str, object]:
+            require_effect_ref(effect_ref, SettlementStepKind.DURABLE_WRITEBACK)
+            refresh = refresh_candidate(result, completion_todo_id=completion_todo_id,
+                completion_turn_key=completion_turn_key)
             if refresh.get("ok") and (
                 refresh.get("appended")
                 or refresh.get("idempotent_replay")
@@ -372,6 +367,7 @@ def execute_turn_run_once(
                 agent_id=args.agent_id,
                 completion_delivery_workspace=completion_delivery_workspace,
                 completion_validation_workspace_path=delivery_workspace_path,
+                **(dict(native_completion_lease_resolver()) if native_completion_lease_resolver else {}),
             )
             if completion.get("ok") is not True:
                 return completion
@@ -441,7 +437,27 @@ def execute_turn_run_once(
             *,
             effect_ref: str,
         ) -> dict[str, object]:
-            completion = todo_completion(result, effect_ref=effect_ref)
+            require_effect_ref(effect_ref, SettlementStepKind.DURABLE_WRITEBACK)
+            prior = completion_readback()
+            if prior is None:
+                completion = todo_completion(result, effect_ref=effect_ref)
+            else:
+                # Completion may have atomically retired the execution lease
+                # before refresh failed. Read its exact canonical Turn receipt;
+                # resubmitting completion with a different/missing old fence is
+                # neither a new execution grant nor an idempotent request.
+                retained = read_heartbeat_settlement(runtime_root,
+                    goal_id=settlement_identity.goal_id, agent_id=settlement_identity.agent_id,
+                    todo_id=settlement_identity.todo_id, turn_instance_id=settlement_identity.turn_instance_id,
+                    replan_obligation_id=settlement_identity.replan_obligation_id,
+                    registry_path=registry_path, goal_ref=goal_ref)
+                if retained is None:
+                    raise RuntimeError(EXACT_SETTLEMENT_READBACK_NOT_FOUND)
+                if retained.completion_event is None:
+                    append_settlement_event({"ok": True, "appended": True}, event_kind="todo_complete",
+                        status="terminal_no_followup" if prior["continuation"] == "no_followup" else "completed",
+                        details={"command": "turn recovery probe", "no_followup": prior["continuation"] == "no_followup"})
+                completion = {"ok": True, "appended": True, "completion": prior}
             if not completion.get("ok"):
                 return completion
             todo_id = str(selected_todo.get("todo_id") or "")
@@ -483,12 +499,12 @@ def execute_turn_run_once(
                 execute=True,
                 source=(quota_spend_source_for_execution_context(
                     payload.get("scheduler_execution_context"),
-                ) if settlement_identity.replan_obligation_id else "adapter"),
+                ) if settlement_identity.replan_obligation_id or settlement_identity.request_subject is not None else "adapter"),
                 agent_id=args.agent_id,
                 workspace_path=delivery_workspace_path,
                 replan_obligation_id=settlement_identity.replan_obligation_id,
                 turn_instance_id=(settlement_identity.turn_instance_id
-                                  if settlement_identity.replan_obligation_id else None),
+                                  if settlement_identity.replan_obligation_id or settlement_identity.request_subject is not None else None),
                 available_capabilities=args.available_capabilities,
                 scheduler_execution_context=(
                     payload.get("scheduler_execution_context")
@@ -539,12 +555,18 @@ def execute_turn_run_once(
                     project=None,
                     state_file=None,
                 )
-                durable_todo, existing_todo_ids = read_persisted_todo_record(
+                durable_todo, existing_todo_ids, projection_source = read_persisted_todo_record_with_source(
                     state_file,
                     todo_id=todo_id,
                     registry_path=registry_path,
                     goal_id=args.goal_id,
                     runtime_root=runtime_root,
+                )
+                evaluate_todo_completion_fence(
+                    todo=durable_todo,
+                    projection_source=projection_source,
+                    completion_turn_key=settlement_identity.turn_instance_id,
+                    no_followup=False,
                 )
                 return project_durable_completion_outcome(
                     todo=durable_todo,
@@ -777,7 +799,26 @@ def execute_turn_run_once(
 
         host_runner: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None
         session_binding_resolver = None
-        if args.host == "codex-cli":
+        if args.host == "codex-app-server":
+            def native_launch_decision(current_registry: Path) -> Mapping[str, Any]:
+                return current_turn_host_launch_decision(args, registry_path=current_registry,
+                    runtime_root=runtime_root, identity=settlement_identity,
+                    planned_effective_action=payload["turn_envelope"].get("effective_action"),
+                    scheduler_execution_context=payload.get("scheduler_execution_context") or {},
+                    operator_inbox_urgency_projector=operator_inbox_urgency_projector,
+                    turn_start_hook_dispatch=turn_start_hook_dispatch, goal_ref=goal_ref)
+
+            native_admission = (goal_admission or FirstPartyHostGoalAdmission.for_plan(
+                registry_path=registry_path, goal_id=args.goal_id, planned_goal_ref=goal_ref,
+            )).with_launch_decision(native_launch_decision)
+
+            def run_native_host(request: Mapping[str, Any]) -> dict[str, Any]:
+                return native_host_runner(request, lambda: native_admission.launch_lifetime(
+                    operation="native_conversation_turn_launch"))
+
+            host_runner = run_native_host
+            session_binding_resolver = native_session_binding_resolver
+        elif args.host == "codex-cli":
 
             def current_launch_decision(current_registry: Path) -> Mapping[str, Any]:
                 # Revalidate the already admitted identity through the same
@@ -785,7 +826,7 @@ def execute_turn_run_once(
                 # when its mirror still advertises old quota or health.
                 return current_turn_host_launch_decision(
                     args, registry_path=current_registry, runtime_root=runtime_root,
-                    identity=settlement_identity, replan_obligation_id=replan_obligation_id,
+                    identity=settlement_identity,
                     planned_effective_action=payload["turn_envelope"].get("effective_action"),
                     scheduler_execution_context=payload.get("scheduler_execution_context") or {},
                     operator_inbox_urgency_projector=operator_inbox_urgency_projector,
@@ -794,47 +835,13 @@ def execute_turn_run_once(
                     goal_ref=goal_ref,
                 )
 
-            def run_built_in_host(
-                request: Mapping[str, Any],
-            ) -> dict[str, Any]:
-                options = {
-                    "runtime_root": runtime_root,
-                    "project": project,
-                    "codex_bin": args.codex_bin,
-                    "sandbox": args.codex_sandbox,
-                    "model": args.codex_model,
-                    "reasoning_effort": args.codex_reasoning_effort,
-                    "mcp_server": args.codex_mcp_server_json,
-                    "timeout_seconds": None if args.timeout_seconds is None else max(1.0, args.timeout_seconds - 5.0),
-                }
-                options["goal_admission"] = (
-                    goal_admission or FirstPartyHostGoalAdmission.for_plan(
-                        registry_path=registry_path, goal_id=args.goal_id,
-                        planned_goal_ref=goal_ref,
-                    )
-                ).with_launch_decision(current_launch_decision)
-                if getattr(args, "codex_operation_tools", False):
-                    from ..control_plane.turn_driver.codex_operation_host import (
-                        run_codex_operation_host,
-                    )
-
-                    return run_codex_operation_host(
-                        request,
-                        registry_path=registry_path,
-                        confirmed_operation_id=getattr(
-                            args, "codex_confirmed_operation_id", None
-                        ),
-                        source_route=getattr(
-                            args, "codex_operation_source_route_json", None
-                        ),
-                        operation_request_file=(Path(args.operation_request_file)
-                            if getattr(args, "operation_request_file", None) else None),
-                        operation_request_sha256=getattr(args, "operation_request_sha256", None),
-                        **options,
-                    )
-                return run_codex_cli_host(request, registry_path=registry_path, **options)
-
-            host_runner = run_built_in_host
+            host_runner = build_codex_cli_host_runner(
+                args, runtime_root=runtime_root, project=project,
+                registry_path=registry_path, goal_ref=goal_ref,
+                goal_admission=goal_admission,
+                current_launch_decision=current_launch_decision,
+                run_codex_cli_host=run_codex_cli_host,
+            )
 
             def resolve_built_in_session_binding(
                 turn_envelope: Mapping[str, Any],
@@ -875,7 +882,22 @@ def execute_turn_run_once(
                     args, workspace=project, environ=operator_environ,
                 )
 
+        request_locator = payload.get("delegation_operation_locator")
+        settlement_admission = None
+        if settlement_identity.request_subject is not None:
+            if not isinstance(request_locator, dict):
+                raise ValueError("request Turn is missing its original delegation locator")
+            from ..control_plane.collaboration.delegation_context import (
+                require_current_request_operation, request_settlement_lifetime,
+            )
+            def settlement_admission():
+                return request_settlement_lifetime(request_locator, settlement_identity,
+                    registry_path=registry_path, runtime_root=runtime_root, workspace=project)
+
         def on_managed_start_admitted() -> None:
+            if settlement_identity.request_subject is not None:
+                require_current_request_operation(request_locator, settlement_identity,
+                    registry_path=registry_path, runtime_root=runtime_root, workspace=project)
             replan_packet = stable_envelope.get("replan_action_packet")
             capability_guard = (
                 replan_packet.get("capability_guard")
@@ -915,6 +937,7 @@ def execute_turn_run_once(
             execute=bool(args.execute),
             retry_failed=bool(args.retry_failed_turn),
             task_validator=task_validator,
+            settlement_admission=settlement_admission,
             writeback=writeback if args.execute else None,
             completion_writeback=completion_writeback if args.execute else None,
             completion_intent=completion_intent if args.execute else None,

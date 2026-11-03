@@ -11,14 +11,17 @@ import threading
 import time
 from pathlib import Path
 
+from loopx.control_plane.effect_runtime import EffectRuntimeRemoteError
+
 from .checkpoint_controller import _controller
-from .checkpoint_worker import _archive, capture_worker
+from .checkpoint_worker import _archive, capture_worker, qualify_export_storage
 
 
 class CheckpointSupervisor:
     def __init__(self, controller_file: Path, destination: Path, retention_policy: Path | None = None,
                  *, retention_enabled: bool = True):
         _controller(controller_file)  # Fail before native registration.
+        qualify_export_storage(destination)
         if not retention_enabled and retention_policy is not None:
             raise ValueError("A retention policy cannot be combined with disabled retention")
         self.controller_file, self.destination = controller_file, destination
@@ -168,6 +171,11 @@ class CheckpointSupervisor:
                         # Optional capture failure resumes the original source;
                         # credentials and raw provider errors never enter it.
                         response["error_kind"] = type(error).__name__
+                        if isinstance(error, EffectRuntimeRemoteError):
+                            response["runtime_failure"] = {
+                                "error_kind": error.error_kind,
+                                "diagnostic_code": error.diagnostic_code,
+                            }
                         diagnostic = self.destination / (nonce + ".error.txt")
                         diagnostic.write_text(str(error).replace(self.token, "[redacted]")[:2000])
                         diagnostic.chmod(0o600)

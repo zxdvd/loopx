@@ -438,6 +438,19 @@ encoded it as `supports` with `materialized_from=node_parent_id`; it is not
 scientific supporting evidence. Explicit source relationships retain their basis,
 without being promoted to independent verification.
 
+The history reader's recorded-evidence search filters the complete loaded
+snapshot before display pagination, including historical revisions, original
+text, source references and run/result identifiers. Literal terms and recorded
+status narrow the list without turning an older observation into the latest
+finding. Validated translations may be displayed, while matching still uses original
+text and each result retains full original text and provenance. Display-language
+toggles preserve the query. An
+interrupted load identifies partial coverage; failed refresh retains the previous
+snapshot with a stale-read warning and retry. This is a read-only S5/S11 discovery
+slice, not evidence of subsequent Agent adoption or scientific benefit. Packaged
+browser qualification uses the native paged history owner with synthetic records;
+installed native WebView and Lark search remain unqualified.
+
 **Layer 2 — requested Agent analysis.** This is the product consumer of the
 benchmark research owner's deep trajectory evaluation, not a second judge
 built into the frontend. Reuse its analysis method and versioned result
@@ -775,6 +788,25 @@ not complete M4: the full keyboard map, new action preparation, dark/live-motion
 qualification and installed/live-team evidence retain their existing owners.
 V6/V9 evidence is the focused command-entry test and packaged command-palette
 browser smoke, including a disposable real Todo/status owner and read recovery.
+
+**Checkpoint 2026-10-28 (integrated reading and task continuity, proposed).**
+The home brief distinguishes loaded native attention items, affected Goals,
+delivered confirmations and operations still awaiting delivery. Each native item
+opens its own request; linked-source requests retain their read-only boundary.
+On a narrow overview, blocking attention precedes the long objective in both
+visual and DOM order. Overview and Tasks share query, owner, state and view
+choices through the existing route, scoped to the exact source and Goal;
+refresh and Back preserve the native selected Todo and expose hidden selection.
+
+Files lists native result identities before reading a selected body. Managed,
+team and research readers retain their own version checks, paging and failures;
+returning restores the original row. Report headings and the table of contents
+share stable anchors, while return restores the exact original Session/Message.
+Only older stable long messages use complete-block excerpts; current output
+stays expanded. These presentation changes retain existing authority and do not
+complete M4, target authoring, provider/runtime qualification or installed-App
+acceptance. The PR records packaged synthetic browser evidence and isolated real
+Todo-owner write/recovery evidence separately from fixture settings/result reads.
 
 ## 12. Open decisions
 

@@ -70,9 +70,9 @@ const DECLARED_UNFOLDABLE: Record<string, { count: number; reason: string }> = {
     count: 2,
     reason: "store identity selector; 32 hex, not a 64 digest",
   },
-  "control_plane/coordination/todo_agents.ts": {
+  "control_plane/coordination/python_whitespace.ts": {
     count: 2,
-    reason: "whitespace class assembled from a shared character-class constant",
+    reason: "Python whitespace class assembled from a shared character-class constant, not digest matchers",
   },
   "control_plane/presentation/decision_notice.ts": {
     count: 1,
@@ -86,10 +86,15 @@ const DECLARED_UNFOLDABLE: Record<string, { count: number; reason: string }> = {
     count: 2,
     reason: "legacy patterns are carried by the contract record, not by this module",
   },
+  "control_plane/todos/read_codec.ts": {
+    count: 2,
+    reason: "Todo reference boundaries and legacy task classification, not digest matchers",
+  },
 };
 
 /** Every module that reads the owner, pinned so that dropping an import is loud. */
 const CANONICAL_CONSUMERS = [
+  "control_plane/effect_program.ts",
   "control_plane/agents/supervisor_event_append.ts",
   "control_plane/capabilities/change_quality_validation.ts",
   "control_plane/capabilities/content_media.ts",
@@ -100,7 +105,10 @@ const CANONICAL_CONSUMERS = [
   "control_plane/capabilities/external_evidence.ts",
   "control_plane/capabilities/goal_capability_organization.ts",
   "control_plane/capabilities/trajectory_assessment.ts",
+  "control_plane/capabilities/trajectory_input_usage.ts",
+  "control_plane/capabilities/trajectory_tool_context.ts",
   "control_plane/collaboration/chat_mode.ts",
+  "control_plane/collaboration/conversation_binding.ts",
   "control_plane/collaboration/delegation.ts",
   "control_plane/collaboration/delegation_result_use.ts",
   "control_plane/collaboration/goal_instance_lifecycle.ts",
@@ -110,6 +118,7 @@ const CANONICAL_CONSUMERS = [
   "control_plane/collaboration/result_publication.ts",
   "control_plane/collaboration/return_delivery.ts",
   "control_plane/collaboration/semantic_request.ts",
+  "control_plane/collaboration/steward_managed_mode.ts",
   "control_plane/collaboration/turn_context.ts",
   "control_plane/coordination/authority_archive_read.ts",
   "control_plane/coordination/authority_source.ts",
@@ -155,8 +164,10 @@ const CANONICAL_CONSUMERS = [
   "control_plane/state_recovery_contract.ts",
   "control_plane/todos/completion_transaction.ts",
   "control_plane/todos/completion_validation_revision.ts",
+  "control_plane/todos/read_transport.ts",
   "control_plane/turn_driver/chat_turn_acceptance.ts",
   "control_plane/work_items/operation_agent_handoff.ts",
+  "control_plane/work_items/goal_context_source.ts",
   "control_plane/work_items/interaction_contract.ts",
   "control_plane/work_items/pending_capability_intent.ts",
   "control_plane/work_items/progress_review_evidence.ts",

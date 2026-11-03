@@ -124,6 +124,13 @@ SQLite 跨 provider 恢复复用逻辑归档。这不晋升 provider／默认值
 
 ## 当前实现事实
 
+合格 NoKV SDK 契约在 `loopx/control_plane/coordination/nokv_qualification.py`
+中保留唯一的、无依赖的 Python 定义。SDK 准入和阶段验收 ladder 都导入这份
+定义；bridge 保留原有版本名导出。只读取资格数据时，不加载可选 SDK transport
+或它的 CLI 导入。这保留
+单一所有者约束，并使类型契约目标可以独立检查。版本值、SDK 能力和 incarnation
+fence 检查、按文件启动的 helper 行为、provider 启用及资格门槛保持既有合同。
+
 长历史 closeout 读取复用仅缓存可重新验证的解析前缀，不新增持久 authority 或放宽
 writer fence/D2。剩余三个实现边界不因该运行缺陷修复而机械减一。
 [证据与边界](ledger/shared-goal-authority-state-provider-v0/2026-09-24-default-cutover-reconciliation.zh-CN.md#长历史收尾检查本次修复与剩余边界)。
@@ -1155,6 +1162,11 @@ digest、provider revision、receipt、event 与 scan 页面字节均未改变�
 rehearsal 证据（1000 次提交／64 KiB）现为 16 个 checkpoint、63 次 replay 预算、
 单次历史读取最多重建一个 64 次提交窗口，保留 1,048,576 字节 projection 与
 126,714 字节 delta，而“每提交一份完整拷贝”为 65,536,000 字节。
+
+[游标覆盖索引](../../reference/sqlite-authority-store.md#cursor-covering-index)只是针对新建 V2
+数据库与既有显式 V1 迁移的有界物理优化。精确连续性计数与保留证明保持不变，普通打开
+不改已有 V2 的 schema，也不改变 provider 默认。该边界仍需同负载读写、页／WAL、CLI
+与恢复证据；它不改写冻结失败，也不代表 D2 完成。
 
 这仍不代表 lane L 完成。当前比较采用 File 的 checkpoint/delta journal 与有界的
 已验证读取视图，见[同负载 provider 比较](../../reference/sqlite-authority-store.md#short-term-default-decision-and-matched-experiment)。

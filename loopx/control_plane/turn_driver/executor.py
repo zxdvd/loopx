@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import AbstractContextManager, nullcontext
 from collections.abc import Callable, Mapping, Sequence
 from functools import partial
 from pathlib import Path
@@ -37,6 +38,7 @@ from .command_validation import (
     reward_memory_reflection_digest,
 )
 from .driver import selected_turn_todo
+from .decision_capture import stage_turn_decision_capture
 from .execution_readback import execution_payload
 from .host_process_transport import run_host_process
 from .host_binding import (
@@ -156,7 +158,7 @@ def build_loopx_turn_host_request(plan: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("LoopX Turn plan has no valid transaction turn_key")
     route = plan.get("route") if isinstance(plan.get("route"), dict) else {}
     if route.get("would_invoke_host") is not True:
-        raise ValueError("LoopX Turn route is not host executable")
+        raise ValueError(str(plan.get("error") or "LoopX Turn route is not host executable"))
     request = {
         "schema_version": LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION,
         "turn_key": turn_key,
@@ -1457,6 +1459,7 @@ def run_loopx_turn_once(
     terminal_closeout_resolver: TurnEffectResolver | None = None,
     scheduler: Scheduler | None = None,
     post_settlement: PostSettlement | None = None,
+    settlement_admission: Callable[[], AbstractContextManager] | None = None,
     admit_start: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
     confirm_start: Callable[[], None] | None = None,
     goal_admission: FirstPartyHostGoalAdmission | None = None,
@@ -1553,7 +1556,12 @@ def run_loopx_turn_once(
         recovery_decision: dict[str, Any] | None = None
         if journal is not None:
             if goal_admission is not None:
-                goal_admission.require_current()
+                # One lifetime owner checks source instances and legacy registrations;
+                # recovery does not reserve another quota interval.
+                with goal_admission.launch_lifetime(
+                    operation="turn_recovery_lifetime",
+                ):
+                    pass
             envelope = (
                 plan.get("turn_envelope")
                 if isinstance(plan.get("turn_envelope"), Mapping)
@@ -1609,17 +1617,10 @@ def run_loopx_turn_once(
         )
         if needs_host and goal_admission is not None:
             goal_admission.require_current()
-        if require_decision_capture and needs_host:
-            from .decision_capture import prepare_turn_decision_capture
-
-            original_plan = journal["plan"] if journal is not None else plan
-            plan = prepare_turn_decision_capture(
-                original_plan, journal_path=journal_path,
-                decision=decision_capture_payload, existing_journal=journal is not None,
-            )
-            # Preserve any session recovery adjustment; only the original
-            # observation replaces the fresh request's context.
-            request = {**request, "turn_envelope": plan["turn_envelope"]}
+        capture = stage_turn_decision_capture(
+            journal["plan"] if journal is not None else plan, journal_path=journal_path,
+            decision=decision_capture_payload, existing_journal=journal is not None,
+        ) if require_decision_capture and needs_host else None
         admission = None
         if needs_host and admit_start is not None:
             admission = admit_start(
@@ -1643,6 +1644,9 @@ def run_loopx_turn_once(
                 return execution_payload(
                     plan, waiting, execute=True, replayed=False, effects=empty_effects
                 )
+        if capture is not None:
+            plan = capture.publish()
+            request = {**request, "turn_envelope": plan["turn_envelope"]}
         if journal is not None and recovery_decision is not None:
             journal["recovery_audit"] = build_turn_recovery_audit(
                 recovery_decision,
@@ -1683,6 +1687,7 @@ def run_loopx_turn_once(
                 "status": "in_progress",
                 "host": host_projection,
                 "completed_phases": [],
+                "host_attempt_count": 0,
                 "plan": dict(plan),
             }
             persist_journal(journal)
@@ -1747,37 +1752,38 @@ def run_loopx_turn_once(
         if terminal is not None:
             return finish_recovery(terminal)
 
-        settled = _typed_settlement_stage(
-            plan,
-            result,
-            completed_phases=completed_phases,
-            journal=journal,
-            persist_journal=persist_journal,
-            effects=effects,
-            writeback=writeback,
-            completion_writeback=completion_writeback,
-            completion_intent=completion_intent,
-            terminal_closeout=terminal_closeout,
-            spend=spend,
-            effect_resolvers=turn_effect_resolvers(
-                writeback=writeback_resolver,
-                spend=spend_resolver,
-                terminal_closeout=terminal_closeout_resolver,
-            ),
-            scheduler=scheduler,
-            post_settlement=post_settlement,
-            source_effects=(
-                goal_admission.turn_effect_admission(
-                    turn_key=turn_key,
-                    journal_path=journal_path,
-                )
-                if goal_admission is not None
-                else None
-            ),
-            persist_source_journal=(
-                persist_source_journal
-                if goal_admission is not None and goal_admission.enabled
-                else None
-            ),
-        )
+        with settlement_admission() if settlement_admission is not None else nullcontext():
+            settled = _typed_settlement_stage(
+                plan,
+                result,
+                completed_phases=completed_phases,
+                journal=journal,
+                persist_journal=persist_journal,
+                effects=effects,
+                writeback=writeback,
+                completion_writeback=completion_writeback,
+                completion_intent=completion_intent,
+                terminal_closeout=terminal_closeout,
+                spend=spend,
+                effect_resolvers=turn_effect_resolvers(
+                    writeback=writeback_resolver,
+                    spend=spend_resolver,
+                    terminal_closeout=terminal_closeout_resolver,
+                ),
+                scheduler=scheduler,
+                post_settlement=post_settlement,
+                source_effects=(
+                    goal_admission.turn_effect_admission(
+                        turn_key=turn_key,
+                        journal_path=journal_path,
+                    )
+                    if goal_admission is not None
+                    else None
+                ),
+                persist_source_journal=(
+                    persist_source_journal
+                    if goal_admission is not None and goal_admission.enabled
+                    else None
+                ),
+            )
         return finish_recovery(settled)

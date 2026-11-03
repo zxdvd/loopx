@@ -54,6 +54,12 @@ fn maintenance_origin(url: &Url) -> String {
 // echo verbatim into the boot surface, where it names the recovery panel's
 // actionable diagnostics instead of a misleading fixed message.
 fn boot_failure_message(error: &str) -> String {
+    if error == "chat_work_pending" {
+        return "管家正在处理请求，完成后会自动连接工作区。".to_string();
+    }
+    if matches!(error, "chat_state_unverified" | "chat_service_unverified") {
+        return "正在等待安全连接管家服务；请展开「恢复与更新」查看诊断。".to_string();
+    }
     // The pairing decision is not a failure: the window is waiting for the
     // operator to choose between updating the App and aligning the CLI.
     if error == "runtime_pairing_required" {
@@ -125,7 +131,11 @@ pub fn run() {
     // Release builds load the versioned LoopX Chat workspace that ships inside
     // the installed `loopx` release, so `loopx update` refreshes the frontend
     // and backend together instead of reusing a separately built asset bundle.
-    let endpoints = service_endpoints::ServiceEndpoints::allocate(!cfg!(dev))
+    // App and browser are clients of the same machine services. Private
+    // endpoints are an explicit developer/QA choice, never a second default
+    // Chat store created merely by opening a release window.
+    let private_endpoints = std::env::var_os("LOOPX_DESKTOP_PRIVATE_ENDPOINTS");
+    let endpoints = service_endpoints::ServiceEndpoints::for_window(private_endpoints.as_deref())
         .expect("could not allocate LoopX loopback endpoints");
     #[cfg(dev)]
     let web_origin = "http://127.0.0.1:5173".to_string();

@@ -3,17 +3,22 @@
 - Status: Accepted
 - Supersedes / closes: none
 - Scope baseline: architecture audit at 2026-09-16, `0aa6179de`; RFC inventory
-  updated through 2026-10-11 against `5c62c5c03`; steward reproduction baseline is
-  preserved separately in Section 8.
+  updated through 2026-10-11 against `5c62c5c03`; controller/contract refinement
+  uses `08e290fb5` on 2026-10-27. Steward reproduction baseline is preserved
+  separately in Section 8.
 - Ownership: overall product outcomes, cross-domain dependencies, priorities and portfolio acceptance here; concrete rules in domain RFCs/stable protocols; execution state in canonical Todos.
 - Language: [中文版](loopx-overall-roadmap-v0.zh-CN.md) is the semantic mirror.
 
-**Local authority checkpoint (2026-10-16).** Contributor-led #6396 landed the
-2.0 normal-writer cutoff and absorbed recovery/native supplements. Continue
-[R5's post-merge sequence](#post-6396-delivery-plan): final-main installed
-qualification, complete-recovery/lifetime owner integration, and the separate
-D2/D3 evidence. Preserve source-pinned history and the compatible 1.4.2 route;
-no duplicate writer task, released-default claim or global RFC wait is implied.
+**Local authority checkpoint (2026-10-23).** Contributor-led #6396 completed
+the 2.0 normal-writer cutoff; [#7032](https://github.com/loopx-project/loopx/pull/7032)
+also ended ordinary unmigrated-Goal read fallback. Reuse canonical creation and
+explicit backup/migration/recovery; do not recreate the retired compatibility
+path or treat these completed changes as outstanding implementation. Continue
+[R5's post-merge sequence](#post-6396-delivery-plan) for applicable installed
+upgrade, complete recovery/lifetime integration and remaining D2/D3 evidence.
+Preserve source-pinned failures, contributor credit and the compatible 1.4.2
+route. An integrated source or one working installation does not qualify every
+platform, full CI, elapsed-storage evidence or long-horizon benefit.
 
 Conversational preparation from [PR #4376](https://github.com/loopx-project/loopx/pull/4376)
 is integrated under R1/GQ01 through the existing Chat draft and reviewed Goal
@@ -105,7 +110,7 @@ P0 blocks correctness or continuity in the current user journey. P1 enables repe
 | Stream | Outcome and existing foundation | Next complete slice, dependencies and exit evidence |
 | --- | --- | --- |
 | **S1 Product and persistent steward · P0** | Request, investigation, decomposition, acceptance and return; manager runtime, team intake and settings exist, continuous end-to-end work is unqualified | R1/R2 first: preserve commitments, run bound workers and continue after owner corrections; qualify CLI/packaged frontend/Lark separately. Close a minimum journey through two cycles of dependent artifacts and independent acceptance |
-| **S2 Typed kernel and durable authority · P0/P1** | Effect/Todo/quota/recovery owners, TS migration and store candidates exist; writer cutover/provider promotion remain incomplete | Migrate one real transaction/recovery lifecycle at a time, with semantic counterexamples before cutover/deletion. R1 correctness precedes migration volume. Require real backend, concurrency/fence, ambiguous commit, retention/export recovery, bridge costs and D1–D3 evidence |
+| **S2 Typed kernel and durable authority · P0/P1** | Effect/Todo/quota/recovery owners and canonical File/SQLite/PostgreSQL paths exist; the 2.0 normal-writer and unmigrated-read cutoffs are integrated, while complete recovery, applicable installed upgrade and D2/D3 evidence remain incomplete | Migrate one real transaction/recovery lifecycle at a time, with semantic counterexamples before cutover/deletion. R1 correctness precedes migration volume. Require real backend, concurrency/fence, ambiguous commit, retention/export recovery, bridge costs and D1–D3 evidence |
 | **S3 Goal planning and multi-Agent collaboration · P0/P1** | Vision/replan, peer frontiers, claim/lease, directory, manager_context and explicit continuation exist; general handoff/shared amendment remain incomplete | R2 proves peer dependency; R3 closes parallel joins, pipelines, help/review, continuation and automatic return; R4 delivers one intent-preserving amendment class. Cover cycles, invalidated inputs, rejection/deferral, lease transfer, competing bases and aggregate acceptance |
 | **S4 Runtime/host/daemon · P0/P1** | Attached/managed, Turn, broker, runtime connectors and Desktop repairs exist; registration does not establish executable capacity | Qualify multi-Turn supervision for one real supported combination; restart/cancel/drain/stop retain work and fence old executors. Then expand host parity, unique service-profile ownership, clean installation and upgrades; show unsupported adapter capabilities |
 | **S5 Frontend, Lark and human interaction · P0/P1** | Local chat, settings, proposals and partial Goal Channel verticals exist; Goal Overview, Tasks, the W1 work map, usage, acceptance readback and lifecycle stop ship as separate regions without one page owner; shared audience/session/work readback needs qualification | One journey spans settings, work graph, handoff, blockers, cost, corrections, artifacts and return. **Page:** the [Goal workspace](goal-workspace-surface-v0.md) composes that journey per Goal over shared typed projections: a persistent masthead with scoped Stop, vitals with one meaning per figure (named window and coverage, unknown is not zero), work grouped by owner, results and an all-work rail. M1–M2 come first, with concrete first-screen evidence in the PR description; authorized refinements need no repeated confirmation. **Cases:** reconnect/repeated-click/stale/original-route. **Realtime IM** reuses Chat/Turn: isolate independent conversations on one listener, then qualify ordinary DM onboarding, explicit role selection, busy-session admission, provisional progress, media and exact permission callbacks through [the shared operational contract](capable-manager-semantic-handoff-v0.md#10-operational-contract). **Team:** [Live team workspace](live-team-workspace-v0.md) makes exchange, revision and original-coordinator continuation visible. Its [Work-scale map track](live-team-workspace-v0.md#11-delivery-order-and-relationship-to-aggressive-r2-progress) draws each Goal's typed Todo relations first (W1, the Goal workspace's Map lens), then live state and outputs on the same nodes. Then intelligent review, keyboard accessibility and a launcher-only command palette, bilingual terminology, actionable errors and offline degradation; interrupt only for actual decisions |
@@ -113,8 +118,8 @@ P0 blocks correctness or continuity in the current user journey. P1 enables repe
 | **S7 Budget, scheduling and fleet scale · P0 observation/P1–P2 expansion** | Quota/scheduler and partial usage aggregates exist; full provider cost, distributed reservations and hundred-Agent concurrency need evidence | Separate configured budget, admission, consumption and estimates; unknown is not zero and replay cannot double-charge. R7 pagination/bounded summaries and [complete-history transport](typescript-control-plane-migration-v0.md), including refresh/replay/single-debit evidence beyond the RPC limit; provider/host limits, fairness, backpressure, event wake and isolation; report registration/activity/throughput and cost per accepted outcome separately. Receipt-backed semantic progress closes its original host Turn without completing an open/waiting Todo; File/SQLite guard replay preserves verified writeback when a later dependency wait changes the frontier and covers automatic quiet writeback during a receipt-owned retry, preserving independent work and monitor clocks. The typed full-source batch keeps receipt retry identity independently of the earliest wakeup, reconciles earlier retries with retained caches/hidden clocks, and keeps ordinary notices non-gating across earlier/equal/later monitors; File/SQLite replay and canonical readback qualify this source boundary. [Full quota and TurnEnvelope](../../reference/protocols/turn-envelope-v0.md) retain the original executable settlement command and single debit. Follow [the quota settlement contract](../../quota-allocation.md#receipt-backed-settlement-progress). External-wait authoring now derives successor readiness from the locked Todo snapshot through the existing resume owner, covering completed dependencies and monitor generation fences without trusting display flags. File/SQLite CLI coverage also rejects an original Turn’s step write into a newly selected Todo, preserves that Todo’s step/CAS and dependencies, and settles the original writeback once. Recommendation consumers reuse the v0/v1 settlement identity owner: Todo-less replan rejects Todo-step editing with actionable recovery, while derived or explicit guidance preserves its original once-only settlement and monitor state. Source-qualified continuation, installed adoption, live Host waiting-state cadence/readback and fleet scale remain separate acceptance; this bounded repair does not qualify fleet scale or host latency. The bounded current-streak repair composes one typed Monitor expiry rule across status and Goal-frontier callers. File/SQLite Codex CLI readback preserves counters and pending work: expired/equal-time Monitors no longer cause a current-streak replan; active future-due and independent history triggers remain. Source behavior, installed adoption and full Goal/CI qualification stay separate. |
 | **S8 Capabilities, extensions and domain integration · P1/P2** | Capability catalog, extension lifecycle, hooks, engineering/research/content/office capabilities and computer-use contracts exist | First exercise the shared control plane with existing issue-fix/PR-review and material/research callers. Every provider has readiness/version/permissions/default-off/uninstall/rollback/isolation and real-entry evidence. New domain effects start with one simulated operation, not a marketplace or workflow DSL |
 | **S9 Identity, authority, privacy and trust · continuous P0/P1–P2 remote** | Public/private scope, capability gates, fencing and confirmation contracts belong to existing owners | R1/R3 cover sender/audience/artifact scope and stale authority; R6 authenticates tenant/Goal/actor/host, rotation/revocation and least privilege. Qualify credential custody, untrusted tool/document inputs, dependency supply chain, audit retention/deletion and vulnerability response through real paths; roles/messages/memory mint no write authority |
-| **S10 Reliability, diagnostics and operations · P0/P1** | Recovery/canary, read-only diagnostics prototype and DSH event adapter exist; C0/C1, overhead and full operations qualification are open | Failure classification→observable state→recovery drill→regression prevention; process/storage/network/delivery failures and data growth. Accepted Chat requests must settle even when runtime preparation fails before dispatch; qualify missing runtime assets, stop races and recovery without replay under [the shared conversation operational contract](capable-manager-semantic-handoff-v0.md#10-operational-contract). A context/provider read returning after the stop wait must honor the persisted Turn and exact Session claim: no late provider dispatch or handoff, even when a fresh request has completed. This bounded GQ08 repair does not certify upstream interrupt fidelity or effects already admitted elsewhere. Use [bounded repair lookup and targeted diagnostics](../../../skills/loopx-self-repair/references/targeted-diagnostics.md) to reduce redundant reads above the provider boundary; measure backend-specific cold/warm reads, writes and lock waits separately. Freeze SLO/RPO/RTO/capacity/retention boundaries and measure before qualification. Lark transport backpressure and drain retain the App consumer lease; unpersisted buffered lines are not accepted work or completion receipts. Runbooks include upgrade, restore, stop and human takeover; test counts do not prove recovery |
-| **S11 Evaluation and scientific research · continuous P1/P2 research** | Benchmark toolkit, Explore, long-horizon portfolio and ten frontier-science tracks have designs/partial implementations | Pin native/passive/governed arms, model/harness/budget/task split and evaluator; report native scores, cost, failures, attention and uncertainty. Prioritize sequential evidence, continuation and stride; memory, formal kernel, curriculum/evolution, active experiments and multiscale state follow T01–T10 gates without automatic production treatment |
+| **S10 Reliability, diagnostics and operations · P0/P1** | Recovery/canary, read-only diagnostics prototype and DSH event adapter exist; C0/C1, overhead and full operations qualification are open | Failure classification→observable state→recovery drill→regression prevention; process/storage/network/delivery failures and data growth. Accepted Chat requests must settle even when runtime preparation fails before dispatch; qualify missing runtime assets, stop races and recovery without replay under [the shared conversation operational contract](capable-manager-semantic-handoff-v0.md#10-operational-contract). A context/provider read returning after the stop wait must honor the persisted Turn and exact Session claim: no late provider dispatch or handoff, even when a fresh request has completed. A delayed queue recovery may release only the Turn claim it observed; it must preserve a newer active Turn and keep a closed Session closed. This bounded GQ08 repair does not certify upstream interrupt fidelity or effects already admitted elsewhere. Use [bounded repair lookup and targeted diagnostics](../../../skills/loopx-self-repair/references/targeted-diagnostics.md) to reduce redundant reads above the provider boundary; measure backend-specific cold/warm reads, writes and lock waits separately. Freeze SLO/RPO/RTO/capacity/retention boundaries and measure before qualification. Lark transport backpressure and drain retain the App consumer lease; unpersisted buffered lines are not accepted work or completion receipts. Runbooks include upgrade, restore, stop and human takeover; test counts do not prove recovery |
+| **S11 Evaluation and scientific research · continuous P1/P2 research** | Benchmark toolkit, scoped Explore evidence and a dedicated Research reader are integrated; complete cost coverage, actual decision adoption and matched-study benefit remain separate gaps | Pin native/passive/governed arms, model/harness/budget/task split and evaluator; report native scores, cost, failures, attention and uncertainty. Prioritize sequential evidence, continuation and stride; memory, formal kernel, curriculum/evolution, active experiments and multiscale state follow T01–T10 gates without automatic production treatment |
 | **S12 Release, developer experience and community governance · P0 hygiene/P1** | Install/source validation, registration, DCO/PR, test layers, contributor routes and bilingual docs exist | Qualify first work and upgrade/rollback from clean machines/release artifacts; host/OS support follows the release contract. Reduce localization/test/review effort for useful changes; preserve exact-head evidence, fixtures, compatibility, maintainer routing and contributor credit; retire duplicate protocols/stale evidence |
 | **S13 Adoption, ecosystem and sustainability · P1 discovery/P2 pilots** | Public adoption loop, showcases, licensing/governance and observer-first product contract exist; paid PMF is unproven | Gather independent first/repeat usage and exit reasons; reproducible cases and pilots with fixed budgets/acceptance/rollback. Retain reusable adapters/delivery guides. Account for model/compute/storage/support and maintenance costs; only repeated demand justifies commercial hosting/support/distribution decisions, with no invented SLA or open-source-term change |
 
@@ -124,6 +129,35 @@ composition and real File/SQLite CLI replay cover a pre-existing wait lane,
 visibility limits, ordinary notices, current cadence floors and unchanged
 canonical waits/monitor clocks. Installed adoption and live host readback remain
 separate from this source repair.
+
+**S3/S7 administrative closeout checkpoint.** [#7117](https://github.com/loopx-project/loopx/pull/7117)
+also separates an accepted blocked replan from the preceding real outcome
+checkpoint. File/SQLite CLI readback and long/compacted history regressions retain
+the previous milestone or genuine gap without creating a new outcome obligation
+from administrative closure. Source coverage now includes notice/gate overlap,
+original-deadline recovery and fresh canonical unclaim/reassignment with each
+Agent's own Vision and clock. The complete affected CLI suite passes after
+canonical-fixture integration and original-Turn accounting checks; preserve the
+earlier failures and their base/head attribution. The follow-on refactor removes
+Python retry qualification and batches administrative/retry history facts through
+the existing TypeScript settlement owner for semantic retention and legacy status.
+It preserves independent outcomes, original clocks and historical microsecond
+expiry; malformed Turn identities no longer establish a positive retry proof.
+The periodic-history caller also respects the latest same-Agent accepted retry
+until its original deadline without resetting earned review counts. File/SQLite
+real CLI tests cover the threshold, independent work, real user gates and natural
+deadline recovery. Identical Explore guidance is referenced within the same CLI
+packet, preserving all clauses and standalone reads.
+Full-repository qualification, comparable full caller cost, installed adoption
+and measured long-horizon benefit remain distinct and incomplete.
+
+The follow-on timer repair retains readiness at positive CLI work admission.
+File/SQLite reentry distinguishes an unchanged timer already due at admission
+from a later-authored wait, including one already due when read. Both preserve
+the original binding and exactly-once result settlement. The shared TypeScript
+owner checks microseconds; missing legacy facts retain conservative recovery.
+This source qualification adds no scheduler, historical receipt rewrite or
+installed/live-host qualification.
 
 **S5/S11 long-horizon progress design.** The [research measurement refinement](long-horizon-harness-benchmark-research-program-v0.md#evidence-based-episode-evaluation-proposed-refinement)
 and [product reading journey](../../product/use-cases/auto-research/long-horizon-progress-design.md)
@@ -136,6 +170,109 @@ checks. Keep design, scientific qualification, installed behavior and causal
 benefit separate. This proposal changes no stream priority, experiment budget,
 frozen treatment or scoring rule and must not block otherwise valid experiment
 preparation or the existing L1/R2 journey.
+
+The author proposal [#7233](https://github.com/loopx-project/loopx/pull/7233)
+connects the existing typed assessment's evidence-bound researcher synthesis to
+results → report → research history, with deeper comparison of explanations and
+proposed experiments, and preserves observed cost when output is rejected.
+Its packaged source/recovery and comprehension checks qualify that reading
+slice; independent scientific calibration, installed adoption and 2.0 release
+acceptance remain open. Proposed experiments are advice, not execution authority.
+
+### Unified contract and controller/executor delivery
+
+The [controller/executor RFC](controller-executor-unified-contract-v0.md)
+refines S2/S4/S6/S7/S11: one governed work schema replaces quota/Turn packet
+format choices. Its [two-layer delivery design](controller-executor-unified-contract-v0.md#differential-context)
+targets cross-host Progressive by default, independent Delta auto only on
+qualified hosts, and unread-material discovery from the current complete capture;
+explicit off and versioned migration remain protected. The optional
+controller model alone talks to Core; the executor receives natural-language
+work and materials, while existing host/Core owners retain identity, permissions,
+recovery and settlement. Session roles, execution modes, wake sources and
+benchmark arms remain separate axes. This is design direction, not shipped
+behavior or evidence of lower cost.
+
+The controller session's [intelligent mediation](controller-executor-unified-contract-v0.md#controller-intelligence-and-semantic-compression)
+concentrates task choice, necessary material and result interpretation in that
+session. Deterministic composition and exact delta encoding retain their own
+owners. Qualify retained obligations and subsequent accepted work against the
+controller's added complete costs; query counts or text size cannot pass it.
+
+C6/C8 also own the [human interaction during execution](controller-executor-unified-contract-v0.md#human-interaction-during-execution)
+product target: a busy executor does not block the controller conversation;
+meaningful changes prompt evidence-based reports and task-appropriate rich
+views, while feedback remains traceable into subsequent work and artifacts.
+Qualify quiet/deduplicated reporting, audience limits, accessible fallback and
+revision/stop/recovery races through existing session/request/projection owners.
+These are proposed outcomes, not current runtime qualification or extra gates
+on independent C1 work. Preserve single-session comparison first and include
+all reporting, presentation and human-attention costs in the later opt-in arm.
+
+C1's [caller cutover map](controller-executor-unified-contract-v0.md#c1-caller-replacement-and-cutover-unit)
+includes quota emission, the direct Turn producer and the final native/structured
+host prompts. A common capture does not unify those consumers. Qualification
+checks source obligations through composition, reconstruction and actual final
+input; new-admission cutover stays separate from historical receipt replay.
+
+The [pinned packaged comparison](ledger/controller-executor-unified-contract-v0/2026-10-29-packaged-source-comparison.md)
+qualifies C1 source/recovery behavior on real File/SQLite fixtures but records
+larger cold/output bytes and an open standalone numeric hash boundary. Preserve
+that counterevidence and the original outcome/full-cost gate; a working saved-file
+delta or once-only receipt does not establish long-horizon benefit.
+
+The [context-delivery guide](../../guides/context-delivery.md) explains current
+behavior and a minimum two-model comparison. Deliver documentation first;
+within C1/C2/C9, qualify a declared DeepSeek model and a declared strong model
+against the original quota path under matched conditions and complete costs.
+Then qualify reversible adoption and release of a supported profile before a
+broader default recommendation. The reference's existing Codex-scoped default
+remains current behavior, not proof of model benefit. Mixed or regressed model results retain scoped opt-in
+or explicit limitations. Retire only named replaced producers/consumers after
+actual migration, historical-reader compatibility and rollback evidence; keep
+full snapshots, integrity, authority, identity, stops and recovery. A guide,
+Codex-only adapter or shorter output does not pass the model/default gate.
+This sequence neither blocks independent authorized work nor starts experiments.
+
+Use that RFC’s C1–C9 task/deletion map within the existing work streams: first
+qualify unified single-session inputs, then role binding and shared lifecycle,
+replan/result authoring, executor exchange, benchmark reuse, packaged App
+readback and retirement. Qualify both the App heartbeat journey and the actual
+benchmark consumer; managed Codex can carry an implementation but proves neither
+by itself. Reuse active context/recovery work. No new Goal, scheduler, parallel
+roadmap, benchmark launch or default promotion follows from these task entries.
+
+The RFC's [responsibility-convergence handoff](controller-executor-unified-contract-v0.md#responsibility-convergence-and-contributor-handoff)
+adds source-backed C3/C4/C7/C8/C9 packages for shared managed-operation flows,
+binding callers, continuation, worker/settlement adapters and conditional old-path
+retirement. Choose among contract delivery, simplification and other current work
+from the global outcome and evidenced bottlenecks, not package order or a fixed
+Agent lane; coordinate in-flight ownership without duplicating it. Reuse existing
+owners and delete replaced rules in real callers. The audit also
+records already-shared code and distinct lifecycles that must not be merged by
+appearance. Packages are claimable slices, not a fixed PR count or new controller
+prerequisites; runtime delivery and qualification remain open.
+
+### Current priorities after research and acceptance integration
+
+This checkpoint is pinned to main `5550e91bab` (2026-10-23). It reconciles
+public source delivery, not private experiment results or fleet qualification.
+Prioritize completing these existing paths over adding another controller or metric store:
+
+| Path | Integrated boundary | Next decisive outcome and existing owner |
+| --- | --- | --- |
+| Retained intent · S3/R4, S5 | Repeated reviews retain declaration origins; declaration/review capacity and recovery are separate; complete Goal narrative avoids generated Todo duplication. [#7035](https://github.com/loopx-project/loopx/pull/7035), [#7056](https://github.com/loopx-project/loopx/pull/7056), [#7057](https://github.com/loopx-project/loopx/pull/7057), [#7069](https://github.com/loopx-project/loopx/pull/7069) | Goal/acceptance and product owners qualify a correction reaching the responsible Agent, changing or justifying subsequent work, and satisfying the retained requirement. Review evidence is not a new declaration origin or independent acceptance. |
+| Evidence reaches the decision · S6/S11 | Task-focused ordering, version-aware comparisons and recovery of paged findings/full linked tasks are integrated. [#7053](https://github.com/loopx-project/loopx/pull/7053), [#7077](https://github.com/loopx-project/loopx/pull/7077), [#7084](https://github.com/loopx-project/loopx/pull/7084) | Explore/research and product owners qualify source → delivered evidence → actual next probe → attributable artifact/result. Start with shadow observation; preserve justified continuation, negative evidence and unknowns before considering opt-in enforcement. |
+| Interpretable results and cost · S7/S11 | Unfinished-turn usage requires explicit observation mode; partial native scores do not establish completion. [#7054](https://github.com/loopx-project/loopx/pull/7054), [#7072](https://github.com/loopx-project/loopx/pull/7072) | Benchmark/usage owners qualify request, compaction and retry coverage, then compare matched outcomes and full marginal cost through the existing measurement model. [#7087](https://github.com/loopx-project/loopx/pull/7087) is a proposal at this checkpoint, not integrated coverage or billing qualification. |
+| Trustworthy validation · S10/S12 | Ordinary reads require canonical authority; explicit import/recovery remains available. [#7032](https://github.com/loopx-project/loopx/pull/7032) | Repair stale synthetic consumers through existing real-provider fixtures, retaining behavioral assertions and unmigrated refusal. Attribute failures on the same base/head workload; required full-suite failures remain holds. Do not restore fallback, relax budgets or rerun healthy matrices to manufacture readiness. |
+
+First restore a failing validation path that blocks the selected delivery;
+advance the source-to-decision journey with its existing owner rather than
+waiting for unrelated RFCs. Then compare accepted outcomes and full costs.
+Late verified gains are a positive signal of remaining useful headroom: retain
+the best valid artifact and test continuation against a credible alternative.
+A flat interval alone is not a stop rule; this signal neither extends a budget
+nor establishes a causal advantage. The research RFC owns that comparison.
 
 ### Important Areas Outside RFCs and Their Owning Sources
 
@@ -402,6 +539,7 @@ subsystem was not performed. Section 8 records the focused audit.
 | [Complete State Recovery and Controlled Reactivation v0](complete-state-recovery-v0.md) | S2/S10 | Accepted design; backup create and configuration-only isolated recovery exist, complete-state verify/reactivation do not | M1: readable inert audit in Settings/Capability Center with owner/next action and no live authority; M3: recover one packaged local File/SQLite Goal, continue unfinished work, and record recovered/lost work, human cost, holds, owner reuse, and zero protected duplicate operations |
 | [Composable State Machines and Recovery Verification v0](composable-state-machines-recovery-verification-v0.md) | S2/S3/S10 | Design only; local conformance is reusable evidence | P1: one typed boundary, then ownership/writeback/settlement fault sequences and conditional progress; production entrypoint and real-backend evidence |
 | [Agent Loop Effect Interpreter](agent-loop-effect-interpreter-v0.md) | S2 | Accepted; core implemented, adoption continues | P0: reuse effect/recovery, cover R1 partial commits; retain domain-local replan ACK |
+| [Controller / Executor and Unified Work Contract](controller-executor-unified-contract-v0.md) | S2/S4/S6/S7/S11 | Design only; schema cutover and dual-session behavior unimplemented | P1: C1–C9 converge one contract, exact differential context, role binding, shared lifecycle and benchmark/App adoption; require independent outcomes and complete costs before default promotion |
 | [TypeScript Control-Plane Migration Direction v0](typescript-control-plane-migration-v0.md) | S2 | Accepted; whole-transaction migration active | P0/P1: R1–R4 hot transactions first; T0–T4 caller/deletion/cost evidence; no full rewrite prerequisite |
 | [Semantic Vocabulary Convergence and Commit-Time Drift Checks (v0)](semantic-vocabulary-convergence-v0.md) | S2 | Accepted; registry/inventory/drift and subsequent typed slices exist | P1: converge by semantic role and active producer/consumer; no name-based enum merging; review schema changes separately |
 | [LoopX Shared Control-Plane Authority and Pluggable State Providers (v0)](shared-goal-authority-state-provider-v0.md) | S2/S3/S7 | Accepted; stores, local transactions and service-admission foundations exist | P1→P2: R5 local D1–D3, R6 authenticated hosts; real backend/soak/recovery before promotion |
@@ -428,6 +566,7 @@ subsystem was not performed. Section 8 records the focused audit.
 | [Human-confirmed domain operations (v0)](human-confirmed-domain-operations-v0.md) | S8/S9 + R2/R3 | Accepted; canonical operation seam exists, managed native transport under owner review | Qualify source-context vs admitted-executor separation, exact human approval→one-shot consumption→domain evidence→original-route return; owned Turn/delegation need not await Desktop authentication. Live approval/effect/wakeup remain unqualified; finance provider stays separate |
 | [Provider-side authorization at effect acceptance (v0)](provider-effect-acceptance-v0.md) | S8/S9, supporting S2/S4 | Accepted design only; no runtime integration or qualified provider | M1: controlled provider and deterministic revoke/crash/replay conformance; strict production wiring remains gated by exact Goal lifetime, receipt retention and independent provider qualification |
 | [Research Exploration Control Plane v0](research-exploration-control-plane-v0.md) | S11/S3 | Accepted; partial M2 composition/successor; §11.5 result/adoption refinement proposed | P1: one real provider result -> scoped interpretation -> adopted step/successor, exact lineage/shared write gate and packaged readback; qualify shadow before opt-in, retain composition gaps; defer inference and M4 portfolio ranking |
+| [LoopX × LayerFS Engineering Exploration and Evaluation v0](layerfs-engineering-exploration-evaluation-v0.md) | S4/S8/S11 | Proposal; no integration or benefit claim | Bounded experiment: real environment fork/handoff/clean export, then matched warm-worktree and control-policy comparisons; preserve existing research-state/authority owners, count complete cost and negative results; no new priority or default |
 | [Hierarchical Agent Stride Control v0](hierarchical-agent-stride-control-v0.md) | S11/S7 | Accepted; M1 observation and source-level replan decision followthrough; adaptive policy/continuation unqualified | P2: §7.6 mechanism/evidence scope review -> actual probe/adoption/full cost; §7.7 same-state continuation and recovery before adaptive promotion. Preserve per-Turn settlement and authority; no forced-hour pivot or default cadence change |
 | [Goal-scoped Capability Portfolio v0](goal-scoped-capability-portfolio-v0.md) | S1/S3/S6/S8/S11 | Accepted; read-only settings/context inspection slice | P1: correction→fresh-session decision across existing owners, then demand-driven composition and measured method evolution; no universal memory database or second opt-in |
 | [Post-Outcome Memory Utility Attribution v0](post-outcome-memory-utility-attribution-v0.md) | S6/S11 | Accepted; Stage 1 verified-outcome binding | P1 read-only reducer→P2 pilot: distinguish recalled/applied/utility, no automatic ranking change |
@@ -848,6 +987,25 @@ under frozen rendering/attention budgets, separately from live R7 concurrency.
 Current status is design proposal; no G1 or default-screen promotion.
 
 ### R3: Semantic Requests and Automatic Return
+
+**Multi-recipient conversation boundary.** One Chat Turn can supply independent
+recipient-specific handoffs through the existing inbox/return owner. Single
+objects remain compatible; arrays retain per-Goal/Agent authorization, replay
+identity, failure and conclusion readback. Partial delivery or one returned
+result cannot certify completion of the whole request. This adds no team
+assignment or scheduler. Qualify cross-Goal partial revocation, restart/replay,
+out-of-order returns and packaged original-conversation cards; live semantic
+routing, installed App and Lark provider delivery remain distinct evidence.
+
+**Interactive lifetime checkpoint.** Ordinary Codex/ACP Chat turns have no
+implicit absolute cutoff while their existing idle/startup checks and Stop
+remain active. Accepted queued input has no default TTL; explicitly requested
+limits, queue capacity, source validation and bounded managed-host segments keep
+their owners. Synthetic long-activity, explicit-limit, idle, queue and service
+configuration tests qualify this slice. Existing installed settings and immutable
+old failures are retained; installed activation and effect-aware recovery of an
+original timed-out request remain separate acceptance, not inferred replay.
+
 
 **Bound-conversation status presentation.** The shared display renderer leads
 with canonical execution/recovery state, project and queue/permission facts;

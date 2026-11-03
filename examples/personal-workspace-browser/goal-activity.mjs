@@ -50,6 +50,23 @@ async function briefTile(page, kind) {
   };
 }
 
+/** Read the empty tile's explanation through the same help control an owner uses. */
+async function readEmptyBriefHelp(page, kind, explanation) {
+  const tile = page.getByTestId(`personal-brief-${kind}`);
+  const summary = await briefTile(page, kind);
+  assert.equal(summary.count, 0, "An unknown or unavailable execution never counts as running");
+  assert.equal(summary.rows, 0, "An empty execution tile contains no running Goal rows");
+  const help = tile.getByRole("button", {name: explanation, exact: true});
+  await help.click();
+  const bubble = tile.getByRole("tooltip");
+  await bubble.waitFor({state: "visible"});
+  assert.equal(await bubble.locator("p").innerText(), explanation);
+  await page.keyboard.press("Escape");
+  await bubble.waitFor({state: "hidden"});
+  assert.equal(await help.evaluate(element => element === document.activeElement), true,
+    "Closing execution help keeps focus on its originating control");
+}
+
 /** Home lane title, count and cards, mirroring the brief assertions. */
 async function lane(page, key) {
   const section = page.getByTestId(`personal-home-lane-${key}`);
@@ -147,17 +164,19 @@ export const goalActivityScenario = {
       assert.equal(claimedLane.title, "宿主已领取");
       assert.equal(claimedLane.count, 1);
       assert.match(claimedLane.text, /Product Release/);
-      assert.equal(
-        await page.getByTestId("personal-brief-needs").locator(".personal-brief-row").count(),
-        await page.getByTestId("personal-home-lane-needs_you").locator(".personal-home-goal-card").count(),
-        "The brief and the needs-you lane agree",
-      );
+      const needs = await briefTile(page, "needs");
+      assert.equal(needs.title, "已列待处理事项");
+      assert.equal(needs.count, needs.rows, "The compact fixture counts native attention items, not affected Goals");
+      assert.equal(await page.getByTestId("personal-brief-needs").locator("[data-operation-id]").count(), 0,
+        "Operation delivery has its own unit and never inflates the attention count");
       assert.deepEqual(
         await page.getByTestId("personal-brief-completed").locator(".personal-brief-row strong").allTextContents(),
         ["Newest cross-goal result", "Completed B", "Completed C"],
         "Recent work survives status parsing and is sorted across Goals before taking three rows",
       );
       await page.screenshot({ path: resolve(outputDir, "goal-activity-sidebar.png"), animations: "disabled" });
+      await page.locator(".personal-home-lanes").scrollIntoViewIfNeeded();
+      await page.screenshot({ path: resolve(outputDir, "goal-activity-home-ledger.png"), animations: "disabled" });
       await running.locator(".personal-goal-link").click();
       await page.getByTestId("goal-vitals").locator(".goal-vital-value", { hasText: "执行中" }).first().waitFor();
       await page.screenshot({ path: resolve(outputDir, "goal-activity-running-goal.png"), animations: "disabled" });
@@ -250,7 +269,7 @@ export const goalActivityScenario = {
       assert.equal(new URL(page.url()).searchParams.get("goalId"), selectedBeforeHelp, "Help never navigates or starts work");
       const unavailable = await goalRow(page, "Research Monitor");
       const unknownState = unavailable.locator("small");
-      assert.equal(await unknownState.innerText(), "状态不可读");
+      assert.equal(await unknownState.innerText(), "执行状态未知");
       assert.equal(await unavailable.locator(".personal-goal-window-badge").count(), 0, "An all-unknown status is stated once");
       assert.equal(await unknownState.evaluate(element => {
         const probe = document.createElement("span"); probe.style.color = "var(--pw-muted)"; element.append(probe);
@@ -265,7 +284,7 @@ export const goalActivityScenario = {
       assert.match(await unknownHelp.innerText(), /无法读取宿主的本机记录/);
       assert.match(await unknownHelp.innerText(), /无法识别宿主记录格式/);
       await page.keyboard.press("Escape");
-      assert.doesNotMatch(await (await goalRow(page, "Multi Agent Projection")).locator("small").innerText(), /执行中|观测缺口|状态不可读/,
+      assert.doesNotMatch(await (await goalRow(page, "Multi Agent Projection")).locator("small").innerText(), /执行中|观测缺口|执行状态未知/,
         "Another Goal's completed activity stays isolated");
       await page.screenshot({path: resolve(outputDir, "goal-activity-observation-desktop.png"), animations: "disabled"});
       await page.setViewportSize({width: 390, height: 844});
@@ -289,7 +308,7 @@ export const goalActivityScenario = {
       await page.reload({waitUntil: "networkidle"});
       const recovered = await goalRow(page, "Product Release");
       await recovered.locator(".personal-goal-window-badge").waitFor({state: "hidden"});
-      assert.doesNotMatch(await recovered.locator("small").innerText(), /Running|state unavailable|gaps/);
+      assert.doesNotMatch(await recovered.locator("small").innerText(), /Running|execution state unknown|gaps/);
       assert.equal(await recovered.locator(".personal-goal-window-badge, .personal-goal-mark.is-live").count(), 0,
         "A refreshed complete ended-turn observation clears the old gap without inventing execution");
     } finally {
@@ -310,7 +329,7 @@ export const goalActivityScenario = {
       try {
         const { api, page } = partial;
         const queued = await goalRow(page, "Multi Agent Projection");
-        await queued.locator("small", { hasText: "状态不可读" }).waitFor({ timeout: 15_000 });
+        await queued.locator("small", { hasText: "执行状态未知" }).waitFor({ timeout: 15_000 });
         assert.doesNotMatch(await queued.locator("small").innerText(), /线程空闲|执行中/, "A partial or legacy sample cannot prove every bound thread idle");
         assert.match(await (await goalRow(page, "Product Release")).locator("small").innerText(), /^执行中/, "A positive open-turn observation remains usable with partial coverage");
         assert.doesNotMatch(await (await goalRow(page, "Research Monitor")).locator("small").innerText(), /线程空闲|执行中/, "An unrecognized record never becomes idle or running");
@@ -434,7 +453,7 @@ export const goalActivityScenario = {
       assert.equal(await page.locator(".personal-goal-list .personal-goal-mark.is-live").count(), 0, "An unrecognized mode is never live");
       const runningTile = await briefTile(page, "running");
       assert.equal(runningTile.count, 0, "An unrecognized mode never counts as running");
-      assert.match(runningTile.text, /没有可确认的执行 · 2 个 Goal 执行方式未知/, "The empty running tile discloses the open turns");
+      await readEmptyBriefHelp(page, "running", "没有可确认的执行 · 2 个 Goal 执行方式未知");
       assert.equal(await page.getByTestId("personal-brief-claimed").count(), 0, "An unrecognized mode never counts as a host claim");
       assert.equal(await page.getByTestId("personal-home-lane-running").count(), 0, "An unrecognized mode never enters the running lane");
       await page.screenshot({ path: resolve(outputDir, "goal-activity-mode-unrecognized.png"), animations: "disabled" });
@@ -444,7 +463,7 @@ export const goalActivityScenario = {
       await englishRow.locator("small", { hasText: "Mode unknown" }).waitFor({ timeout: 15_000 });
       assert.match(await englishRow.locator("small").innerText(), /^Mode unknown · turn open/);
       assert.ok(await leadVisible(englishRow, "Mode unknown"), "The English unknown mode survives sidebar truncation");
-      assert.match(await page.getByTestId("personal-brief-running").innerText(), /No verified run · 2 Goal\(s\) with unknown execution mode/);
+      await readEmptyBriefHelp(page, "running", "No verified run · 2 Goal(s) with unknown execution mode");
       await page.screenshot({ path: resolve(outputDir, "goal-activity-mode-unrecognized-english.png"), animations: "disabled" });
       await page.setViewportSize({ width: 390, height: 844 });
       assert.equal(await briefTileOverflow(page), 0, "The disclosed empty state fits the 390px mobile width");
@@ -471,7 +490,7 @@ export const goalActivityScenario = {
       const queued = await goalRow(page, "Multi Agent Projection");
       await queued.locator("small", { hasText: "暂时读不到执行状态" }).waitFor({ timeout: 15_000 });
       assert.equal(await page.locator(".personal-goal-mark.is-live").count(), 0, "An unreadable session owner never produces a live Goal");
-      assert.match(await page.getByTestId("personal-brief-running").innerText(), /暂时读不到执行状态/, "The brief discloses unreadable run state");
+      await readEmptyBriefHelp(page, "running", "暂时读不到执行状态");
       await page.screenshot({ path: resolve(outputDir, "goal-activity-unavailable.png"), animations: "disabled" });
       coverageEntries.push(...await offline.close());
     } catch (error) {

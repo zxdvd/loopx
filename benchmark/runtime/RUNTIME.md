@@ -25,7 +25,7 @@ agents:
     kwargs:
       execution_mode: heartbeat
       task_entry: loopx-planned
-      iteration_context: fresh
+      iteration_context: resume
       reasoning_effort: max
       codex_sandbox: danger-full-access
       turn_timeout_sec: null
@@ -45,6 +45,108 @@ fail before execution. Set it back to `false` for the next run to roll back;
 do not change a running trial's treatment. Captures contain private Goal context.
 Transport tests do not establish lower token cost or better model decisions.
 
+New native heartbeat trials default to context delivery `on`. Add
+`context_delivery: "off"` to the same heartbeat agent `kwargs` to disable it.
+An explicit off is pinned into both native tools and worker preflight; it cannot
+inherit a machine-wide on. Plain, native-Goal and Turn execution remain off.
+Only the existing Codex heartbeat worker accepts `"on"`; booleans, other modes and
+scenario names are rejected. This is an experimental transport setting, separate
+from `turn_envelope`.
+The existing EdgeBench/SForge entry exposes the same selection through
+`--context-delivery off` to disable a heartbeat worker's on default. Existing
+running or frozen trials retain their recorded source and treatment; do not
+change them in place or infer a matched comparison from the new default.
+The worker preserves its existing `generic_cli` scheduler profile. Its execution
+owner requires `mode=heartbeat` and explicitly propagates `LOOPX_EXECUTION_MODE=heartbeat`
+and `LOOPX_CONTEXT_DELIVERY=on` into the native tool environment. Generic CLI
+without these worker declarations stays full. These are caller declarations,
+not host authentication or a new admission grant.
+It works with ordinary quota or the explicit TurnEnvelope view. The existing
+worker stages the product's generated lifecycle hooks (currently SessionStart,
+PreCompact, PostCompact, PostToolUse and Interrupt) in the trial's private Codex
+home and queries native `hooks/list` without invoking a model. Discovery must
+match every generated handler's event, command, matcher, timeout, async setting
+and enabled state, with unique native trust keys. Matching counts alone are
+insufficient; discovery order may differ. Only those exact native hashes receive
+per-process trust; workspace/plugin hooks are not trusted and no bypass flag or
+operator settings are used. Discovery-only plugin overrides do not reach the
+solver. Context delivery does not enable native input tracing. Install and wake receipts record the
+selection; `context_transport.available` records setup, **not** warm eligibility
+or delivery/benefit. Unsupported native setup continues ordinary full output.
+
+The product heartbeat renderer carries `--codex-context-dir` and the original
+capture root into guard/reentry commands. Normal complete reader delivery establishes
+an explicit native-hook continuity assumption, not proof of later model retention.
+Known loss, incomplete delivery, startup, fork and compaction invalidate the
+baseline. A same-session resume keeps only a candidate until the native replay
+verifies every baseline reader page. Missing, changed or unsupported history
+falls back to full. Ordinary tools and turn endings retain continuity. An independent new
+decision reads its current full capture when the baseline is unavailable; do not
+pre-read an older capture just to seed a delta. A dependent continuation after
+context loss must recover its exact original capture through the small recovery
+reference, with no replacement admission or debit. Native worker and app-server code-mode tests
+cover resumed warm reuse for both packet views. The opted-in worker also carries
+a compact native developer instruction that survives compaction independently
+of hook output. If context was lost while continuing a captured decision,
+`quota context-read --codex-context-dir DIR --goal-id GOAL --agent-id AGENT`
+checks the current native session/workspace and selects the original capture.
+Follow its digest-pinned next commands; this read never reruns admission or
+spends quota. Missing/foreign references refuse lookup. Native tests omit or
+kill all subsequent hooks and still recover every byte through this route.
+Installed App adoption remains separate; deterministic transport tests are not autonomous
+solver outcomes. Include this persistent instruction in subsequent cost comparisons;
+earlier input replays did not include it. Count complete input and replay, recovery
+reads, native discovery and hook IO in treatment cost, not just the delta bytes.
+
+Codex App setup uses the same product configuration renderer as the worker:
+`loopx --format json quota context-config --context-delivery on --codex-app --codex-context-root DIR --goal-id GOAL --agent-id AGENT`.
+It returns native hooks, persistent recovery instructions and native output
+`config_overrides`, without installing files or changing trust. The opted-in
+worker applies those same overrides automatically: 64000-byte continuation
+outputs, a 20000-token history limit and a shell-scoped reader declaration. Page
+zero remains within the ordinary 7900-byte guard limit. Persistent instructions
+request 22000 tokens per reader result and 24000 for code-mode emission, one
+directly forwarded stdout at a time. Unknown budgets retain small pages. These
+limits do not prove model retention or net cost savings. Fresh off trials install
+none of this configuration; rollback also removes generated output overrides.
+A shared root isolates journals by native session;
+the trial-local single-session `--codex-context-dir` remains supported.
+See [heartbeat setup](../../docs/heartbeat-automation-prompt.md#opt-in-native-context-delivery)
+for activation, readback and rollback. Generated setup and a native
+app-server test do not by themselves prove installed desktop adoption.
+
+A simultaneous `fresh_replan` checkpoint listener retains ownership of the same
+original capture. It validates and holds the original full decision before any
+context projection, then releases its exact digest. Only afterward may the
+native projector present full/delta for an uninterrupted tool. A refused/lost
+release remains the original typed transport failure, without publishing an
+optimized result or rerunning the guard. An interrupted guard continues with
+the original full packet; no delta is required for checkpoint recovery. Native
+cursor verification also binds the context-directory/root option. The existing
+Darwin native-checkpoint refusal remains in force.
+
+The host-side checkpoint preflight still captures the complete original decision.
+With context delivery enabled, its prompt now supplies `quota context-project`
+with that original path/hash, Goal/Agent/Turn and private cache location. The
+native tool presents the saved decision using the same native lifecycle projector;
+no guard, checkpoint, admission or debit is repeated. Cold delivery supplies the
+full body and its target; qualified warm delivery supplies the exact delta.
+The small response points to bounded reads and an original full-read fallback.
+Invalidated or unavailable baselines keep full input. If enabled native preparation cannot
+establish safe recovery, the command returns a typed transport failure with the
+original full-read reference and receipt; use that explicit reference without
+rerunning admission. An optional cache write after recovery is established can
+still fall back to the same full input. A bad source hash/scope is refused before
+publication. This does not renew decision
+freshness or establish autonomous solver benefit. Default-off preloading is
+unchanged. Include the projection command, descriptor, recovery and page reads
+in subsequent total-cost comparisons.
+Across distinct worker wakes, settle the prior Turn before selecting new work;
+reading an old prompt from resumed history cannot supply the next wake's guard.
+Do not modify an active/frozen trial. Set `context_delivery: "off"` for a new trial
+to roll back; default runs install no hooks, trust or trace settings. No scorer,
+budget, task semantics or launch authority changes with this option.
+
 Checkpoint capture is independent of this display experiment. A `fresh_replan`
 declaration may establish a private capture/handoff socket while
 `turn_envelope` remains false: the worker keeps the ordinary dispatcher and quota
@@ -60,12 +162,12 @@ receipts or trajectories as feature-off; qualify their actual input separately.
 | `turn` | Public Turn CLI, typed result, independent validation, settlement | Present |
 | `loopx-goal` | Product Goal body + installed native Goal transport | Present |
 
-`heartbeat` and `turn` accept `iteration_context: resume`. The first invocation
+New `heartbeat` and `turn` runs default to `iteration_context: resume`. The first invocation
 creates one Codex conversation; later planning checkpoints and execution wakes
 resume that exact native session ID for the trial's Goal and Agent, including
 when the selected Todo changes. Both drivers share the product's agent-scoped
-Codex session store. `fresh` remains the runner default and starts a new session
-on each invocation. The former context name is rejected, with no alias.
+Codex session store. Explicit `fresh` starts a new session on each invocation. Other execution modes
+retain `fresh`; this default change does not rewrite existing trial configurations. The former context name is rejected, with no alias.
 
 Resume never falls back to a new conversation when a binding is corrupt, the
 trial home/workspace/model/settings change, or Codex returns a different ID.
@@ -94,15 +196,27 @@ text is not parsed into a category or copied into the receipt. The existing
 that repeats an error does not increment it. A later native continuation clears
 the terminal-error fields and may complete normally.
 
+The EdgeBench collector also reads a bounded tail of retained Codex session
+JSONL after cleanup. An allowlisted structured terminal provider failure is
+reduced to its kind and HTTP status under `provider_failure` in
+`runtime-receipt.json`. This covers ordinary official workers whose terminal
+process exit otherwise loses the provider cause. Free text, provider messages,
+session paths and unknown error variants are excluded; their absence remains
+unknown rather than a guessed success or failure classification.
+
 The EdgeBench adapter carries this outcome through artifact collection into
 `runtime-receipt.json`. If a native Goal fails after execution starts, its
 `partial_result.json` retains the complete native scoring result, with explicit
 `runtime_status` and `native_goal_outcome`. Failed, cancelled, usage-limited and
 unknown native outcomes do not publish `final_result.json`: existing SForge
 consumers use that file as a completion marker without interpreting the outcome
-labels. Handled terminal stops retain the existing final-result behavior;
-neither artifact grants result qualification. Ordinary non-native profile
-handling is unchanged. Adopt this behavior only for newly pinned attempts;
+labels. A handled terminal stop completes execution; explicit native grading
+must also be `complete` to publish a final result. Pending or unknown grading
+retains its scores and reason in a partial result, including for ordinary
+non-native profiles. Sources that omit `grading_status` retain the legacy
+publication behavior. Neither artifact grants result qualification; see the
+[EdgeBench result publication rules](../edgebench/README.md) for export behavior.
+Adopt this behavior only for newly pinned attempts;
 frozen histories retain their original receipts and require explicit post-run
 classification. Roll back by pinning the previous source for another new attempt,
 not by renaming artifacts in a frozen run.
@@ -260,7 +374,7 @@ effort, tools, feedback and total budget fixed, and use separate trials:
 kwargs:
   execution_mode: heartbeat
   task_entry: loopx-planned
-  iteration_context: fresh
+  iteration_context: resume
   turn_timeout_sec: null
   scheduler_timeout_sec: 5080
 ```
@@ -307,7 +421,77 @@ approval in its envelope; publishing and production actions keep their gates.
 Staging uses Harbor upload/exec methods, without Docker-label container discovery.
 Backend-specific networking stays in the benchmark's native launcher.
 
+### Opt-in provider request admission
+
+Set `provider_request_admission: true` in the Harbor heartbeat agent's `kwargs`,
+or pass `--provider-request-admission` to an EdgeBench heartbeat worker, to check
+the existing canonical admission before each model-provider request. This is a
+separate boolean opt-in from context delivery and turn envelopes. It requires a
+custom `OPENAI_BASE_URL`, `OPENAI_API_KEY` and the `responses` wire API; login-file
+routes and other execution modes reject activation before execution. The worker
+receives `LOOPX_PROVIDER_REQUEST_ADMISSION=on`, and enabled run/profile receipts
+record `provider_request_admission: "on"`. Omission keeps the existing environment
+and receipt shape. Disable it by omitting the option on a new trial.
+
+Each native invocation gets its own listener and random request path, bound once
+to that invocation. A successor never rebinds the earlier listener to a new
+process or admission identity. The request check reuses the existing Stop, quota
+and canonical admission owners; it does not grant additional work or invent a
+second quota counter. Inbound parsing, upstream connection setup and waiting for
+the response do not hold the Goal/registry lock. The admitted POST dispatch has
+an absolute two-second deadline, shortened by a smaller remaining phase budget.
+An uncertain or partially sent request remains unknown and is not retried by
+this transport.
+
+Per-invocation receipts distinguish requests started, bytes fully sent, pending
+responses and unknown partial sends. `sent` does not certify provider acceptance
+or completion; a response still pending when the worker exits remains visible
+as pending. Request observations contain identities and transport outcomes,
+without request/response bodies, query strings or credentials. Their file writes
+run outside the invocation state lock and the canonical admission scope.
+
+The isolated Codex home and checkpoint configuration retain the existing
+provider route. Only the native process command receives a temporary route
+override for its invocation. SForge may already have selected a host credential
+gateway, including an HTTP route; admission forwards to that same effective
+route read back from the trial, with its existing credential contract. A loopback
+listener alone is not a credential or OS isolation boundary. The caller still
+owns provider access, credential isolation and the worker's process/filesystem
+boundary. This option changes request admission, not provider identity, scoring
+or benchmark qualification.
+For HTTPS upstreams, an explicit proxy uses HTTP CONNECT; unsupported proxy
+layouts refuse activation before launch. A slow upload can reach the bounded
+send deadline and remain unknown even when the upstream has received some bytes.
+
 ## Results, timeout and recovery
+
+### Live session observation
+
+Frequent capacity and liveness polls may use
+`benchmark.runtime.session_observation.observe_codex_session_tail`. It reads at
+most the final 16 MiB of a live rollout by default, keeps only complete JSONL
+records, and returns content-free event counts, the latest cumulative token
+snapshot, timestamps, and framing diagnostics. Structured terminal provider
+failures reuse the same record framing through `provider_failure.py`; free-text
+errors are not classified as rate limits. The observation does not return prompts,
+assistant messages, tool output, error text, session ids, model ids, or local
+paths.
+
+An external controller can call the same path without importing benchmark code:
+
+```sh
+python -m benchmark.runtime.session_observation /explicit/session/rollout.jsonl
+```
+
+The rollout path is selected by the isolated runner/controller and is never
+echoed into the observation. The module is not loaded or invoked by ordinary
+workers unless a controller explicitly runs this command.
+
+This bounded tail is an operational signal, not an accounting or integrity
+source. Exact usage booking continues to stream the complete explicitly bound
+rollout through `read_codex_session_usage`; trajectory conversion and benchmark
+integrity continue to use their existing complete artifacts. A missing usage
+event in the bounded tail remains unknown rather than becoming zero.
 
 Private per-wake receipts distinguish process success, Turn settlement and
 native benchmark results. Sessions are collected once per native filename;
@@ -325,6 +509,38 @@ Pending controlled Turns retain their identity across worker restarts. Core
 `--resume-turn-key --retry-failed-turn` decides recovery eligibility and retry limits. The runner
 does not delete homes or session bindings, edit registries directly, or
 monkeypatch CLI internals.
+
+### Native Goal process observations
+
+New `native-goal` and `loopx-goal` worker executions also write
+`native-process.json` in the wake directory and include the same observation in
+`receipt.json.native_process`. No additional setting is required. The existing
+worker owns launch and cleanup; the benchmark capability observes its shared
+stdio transport without restarting the process or replaying requests.
+
+The snapshot retains PID, observation time and Linux process-start ticks when
+available; the first transport API failure (operation, exception type and message
+digest); process return code/signal before cleanup; requested cleanup signals;
+and the status observed after cleanup. Startup and failure observations are
+written immediately, with atomic owner-only snapshot replacement. Earlier
+edges stay in the snapshot. Task text, messages, command arguments, environment
+and stderr are not copied into it. A write failure is disclosed separately and
+does not replace the original runtime exception or prevent process cleanup.
+
+| Observation | Supported interpretation |
+| --- | --- |
+| Exit code or signal observed before cleanup | The child was already terminal; the code does not by itself establish root cause. |
+| Stream failure while return code is null | The exchange failed while child termination was unobserved; EOF alone is not proof of process death. |
+| Signal observed only after cleanup started | Cleanup may have contributed. Do not count this signal alone as a native crash. |
+| Exit code 0 with an unfinished transaction | Process exit is not proof of Goal completion. Preserve the protocol failure. |
+| Missing start ticks or missing final observation | Identity/terminal evidence remains incomplete; do not infer the missing fact from timestamps. |
+
+These records do not assert OOM, scorer validity, score countability or fault
+ownership. An abrupt worker kill may leave only the last successfully written
+snapshot. Final error accounting still needs the native transaction and run
+evidence. Historical attempts remain frozen and gain no retrospective proof;
+new experiment adoption requires the reviewed runner/source profile. Other
+worker modes retain their existing receipts and process behavior.
 
 ## Migration and qualification
 

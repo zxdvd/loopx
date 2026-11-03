@@ -12,6 +12,36 @@ function observation(key: string, receipt: JsonObject): JsonObject {
 }
 const input = { request, phase: "conclusion", text: "Review finished.", decision: "adopt", update_id: "review-finished", results: [observation("conclusion", initial)] };
 
+test("legacy original revision is an optional result selector, not request control", () => {
+  const legacy = {...request, schema_version: "loopx_manager_context_entry_v1"};
+  for (const phase of ["decision", "conclusion"]) {
+    const source = {...input, request: legacy, phase, update_id: null, results: []};
+    const expected = planCollaborationResult(source);
+    const explicit = planCollaborationResult({...source, request_revision: 1});
+    assert.deepEqual(explicit, expected);
+    const value = explicit.value as JsonObject;
+    assert.equal(Object.hasOwn(value, "request_revision"), false);
+    assert.equal(Object.hasOwn(value, "request_revision_digest"), false);
+    assert.equal(planCollaborationResult({...source, request_revision: 1,
+      results: [observation(phase, value)]}).replay, true);
+    assert.equal(planCollaborationResult({...source,
+      results: [observation(phase, value)]}).replay, true);
+  }
+});
+
+test("legacy revision selection cannot create corrections or bypass immutable results", () => {
+  const source = {...input, request: {...request, schema_version: "loopx_manager_context_entry_v1"},
+    request_revision: 1};
+  for (const request_revision of [0, 2, -1, 1.5, "1", true, {}]) {
+    assert.throws(() => planCollaborationResult({...source, request_revision}), /original result revision 1/);
+  }
+  assert.equal(planCollaborationResult(source).result_key, "conclusion-00000001");
+  assert.throws(() => planCollaborationResult({...source, update_id: null}), /conflicting/);
+  assert.throws(() => planCollaborationResult({...source, results: []}), /initial conclusion/);
+  assert.throws(() => planCollaborationResult({...source,
+    request: {...source.request, request_control: {}}}), /exact-instance/);
+});
+
 test("a later result appends without replacing the initial conclusion", () => {
   const plan = planCollaborationResult(input);
   assert.equal(plan.result_key, "conclusion-00000001");
@@ -75,4 +105,26 @@ test("explicit result files participate in immutable retry identity", () => {
   for (const patch of [{size: 0}, {size: 30 * 1024 * 1024 + 1}, {name: "another.pdf"}, {sha256: "A".repeat(64)}]) {
     assert.throws(() => planCollaborationResult({...source, attachments: [{...attachment, ...patch}]}), /attachment/);
   }
+});
+
+test("a reported remainder is bounded immutable result scope, not a completion switch", () => {
+  const remaining_work = {summary: "Qualify the installed repair", resume_when: "The isolated package is available"};
+  const source = {...input, update_id: null, results: [], remaining_work};
+  const plan = planCollaborationResult(source);
+  const replay = {...source, results: [observation("conclusion", plan.value as JsonObject)]};
+  assert.equal(planCollaborationResult(replay).replay, true);
+  assert.deepEqual((plan.value as JsonObject).remaining_work, remaining_work);
+  for (const change of [null, {...remaining_work, summary: "Everything done"}, {...remaining_work, resume_when: "Now"}]) {
+    assert.throws(() => planCollaborationResult({...replay, remaining_work: change}), /conflicting/);
+  }
+  for (const invalid of [{summary: "Only a summary"}, {...remaining_work, owner: "another-agent"},
+    {...remaining_work, summary: " "}, {...remaining_work, resume_when: "😀".repeat(601)},
+    {...remaining_work, summary: "\ud800"}]) {
+    assert.throws(() => planCollaborationResult({...source, remaining_work: invalid}), /remaining work/);
+  }
+  assert.throws(() => planCollaborationResult({...source, phase: "decision"}), /conclusion/);
+  assert.throws(() => planCollaborationResult({...source, text: "x".repeat(20000)}), /result budget/);
+  const final = planCollaborationResult({...input, results: replay.results});
+  assert.equal(Object.hasOwn(final.value as JsonObject, "remaining_work"), false);
+  assert.deepEqual((replay.results[0].value as JsonObject).remaining_work, remaining_work);
 });

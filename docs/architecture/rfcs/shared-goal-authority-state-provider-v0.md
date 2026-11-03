@@ -147,6 +147,15 @@ shadow lineage, still default-off and subject to explicit bootstrap.
 
 ## Current implementation facts
 
+The qualified NoKV SDK contract has one dependency-free Python definition in
+`loopx/control_plane/coordination/nokv_qualification.py`. SDK admission and the
+stage ladder import that definition; the bridge keeps its existing exported
+version names. A qualification-data read does not load the optional SDK transport or its CLI
+imports. This preserves the single-owner constraint while allowing the typed
+contract targets to be checked independently. Version values, SDK capability
+and incarnation-fence checks, file-launched helper behavior, provider activation
+and qualification gates retain their existing contracts.
+
 Long-history closeout reuse retains only re-verifiable parsed prefixes; it adds
 no durable authority and relaxes no writer fence or D2 gate. This runtime repair
 does not mechanically subtract one of the three remaining implementation packages.
@@ -1454,6 +1463,13 @@ unchanged, and the shipped version-1 databases migrate through the reviewed
 evidence at 1,000 commits/64 KiB now reports 16 checkpoints, a 63-commit replay
 budget, one checkpoint history read and 1,048,576 retained projection bytes plus
 126,714 delta bytes against 65,536,000 bytes for one copy per commit.
+
+The [cursor covering index](../../reference/sqlite-authority-store.md#cursor-covering-index)
+is a bounded physical optimization for newly constructed V2 databases and the
+existing explicit V1 migration. It keeps the exact continuity count and retained
+proofs, leaves existing V2 schemas untouched on ordinary open, and changes no
+provider default. Matched read/write, page/WAL, CLI and recovery evidence must
+qualify this boundary; it neither rewrites frozen failures nor completes D2.
 
 This is still not completion of lane L. The current comparison uses File's
 checkpoint/delta journal and bounded verified read views, as described in the

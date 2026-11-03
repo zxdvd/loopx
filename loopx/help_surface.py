@@ -83,6 +83,13 @@ COMMAND_GROUPS: list[dict[str, object]] = [
                 "purpose": "Start the local dashboard, status service, and Agent Chat service with one command.",
             },
             {
+                "command": "loopx dsh-launch [dsh args...]",
+                "purpose": (
+                    "Launch DeepSeek Harness with this machine's stored provider "
+                    "credential and no secret in argv or output."
+                ),
+            },
+            {
                 "command": "loopx chat --goal-id <goal-id>",
                 "purpose": "Open Goal Studio, ask the read-only Agent for a bounded Todo, and approve its preview before writeback.",
             },
@@ -127,10 +134,6 @@ COMMAND_GROUPS: list[dict[str, object]] = [
                 "purpose": "Preview an explicit local-state path migration or receipt-bound rollback; stop writers before execution.",
             },
             {"command": "loopx todo --help", "purpose": "Show todo lifecycle commands."},
-            {
-                "command": "loopx task-lease --help",
-                "purpose": "Acquire, renew, transfer, release, or inspect a hard per-todo lease.",
-            },
             {
                 "command": "loopx coordination-shadow --help",
                 "purpose": "Inspect, bootstrap, or revision-fenced rollback the default-off Stage 2C file shadow.",
@@ -256,6 +259,10 @@ COMMAND_GROUPS: list[dict[str, object]] = [
     {
         "title": "Maintainer and adapter commands",
         "commands": [
+            {
+                "command": "loopx task-lease --help",
+                "purpose": "Host/adapter execution ownership protocol; ordinary task work uses todo claim and update.",
+            },
             {"command": "loopx check", "purpose": "Run contract and public/private boundary checks."},
             {
                 "command": "loopx change-quality --help",
@@ -497,7 +504,6 @@ def render_concise_help(program: str = "loopx") -> str:
             "  loopx status                   Show current goals, gates, and next action.",
             "  loopx diagnose --goal-id ID    Build a compact evidence packet.",
             "  loopx todo --help              Add, claim, complete, update, or archive todos.",
-            "  loopx task-lease --help        Manage a hard per-todo lease.",
             "  loopx coordination-shadow --help",
             "                                  Inspect, bootstrap, or roll back the default-off file shadow.",
             "  loopx quota should-run         Decide whether the next agent turn should run.",
@@ -510,7 +516,7 @@ def render_concise_help(program: str = "loopx") -> str:
             "  KunlunCode     run loopx-kunluncode connect, then loopx-kunluncode run.",
             "  Other agents   need a CLI/task/automation/loop hook, or run LoopX manually.",
             "",
-            "Global options: --registry PATH   --runtime-root PATH   --format markdown|json",
+            "Global options: --registry PATH   --runtime-root PATH   --format markdown|json   --cli-bin PROGRAM",
             "More:",
             "  loopx commands                 Show grouped command reference.",
             "  loopx <command> --help         Show flags for one command.",

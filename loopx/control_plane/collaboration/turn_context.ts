@@ -3,6 +3,7 @@ import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject, requireStringLiteral} from "../runtime_decode.ts";
 import {BARE_SHA256_PATTERN} from "../content_digest.ts";
+import {normalizeOriginalConversationRecipient} from "./semantic_request.ts";
 
 export function projectDelegationTurnItem(value: unknown): JsonObject | null {
   const row = requireJsonObject(value, "delegation observation");
@@ -28,10 +29,10 @@ export function projectDelegationTurnItem(value: unknown): JsonObject | null {
   let step: string;
   if (kind === "receipt_unavailable" || row.evidence_unavailable === true) step = "recover_evidence";
   else if (cancelled) step = "reconcile_reservation";
+  else if (direction === "outgoing" && unconsumed.length) step = "consume_peer_result";
   else if (kind !== "settled") step = direction === "outgoing" ? "await_peer_result"
     : receipt.recorded_decision == null ? "assess_request"
     : receipt.recorded_decision === "adopt" ? "review_request_work" : "return_answer";
-  else if (direction === "outgoing" && unconsumed.length) step = "consume_peer_result";
   else if (incomplete.length) step = "await_return_delivery";
   else if (request.source_kind === "peer" && unconsumed.length) step = "await_peer_consumption";
   else return null;
@@ -44,9 +45,11 @@ export function projectDelegationTurnItem(value: unknown): JsonObject | null {
     request_revision: control?.revision ?? 1,
     ...(control ? {request_digest: control.revision_digest} : {}),
     ...(request.source_agent_id ? {source_agent_id: request.source_agent_id} : {}),
+    ...(request.recipient ? {recipient: normalizeOriginalConversationRecipient(request.recipient)} : {}),
     agent_id: request.agent_id,
     purpose: [...purpose].slice(0, 120).join(""), purpose_truncated: [...purpose].length > 120,
     receipt_state: kind, decision: receipt.recorded_decision ?? null, step,
+    ...(receipt.remaining_work ? {remaining_work: receipt.remaining_work} : {}),
     ...(todos.length ? {todo_ids: todos.slice(0, 4), additional_todo_count: Math.max(0, todos.length - 4)} : {}),
     ...(results.length ? {pending_return_count: incomplete.length, unconsumed_return_count: unconsumed.length,
       returns: results.slice(-3).map(result => ({result_key: result.result_key,

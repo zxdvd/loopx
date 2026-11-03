@@ -1,3 +1,4 @@
+import {ContextHelp} from "./context-help";
 import { ZCodeGoalControl } from "./zcode-goal-control";
 import { GoalAcceptanceObservationCard } from "./goal-acceptance-observation-card";
 import { AttentionActions } from "./attention-actions";
@@ -42,13 +43,14 @@ import type {
 } from "./personal-workspace-model";
 import type { LarkGoalConnection } from "../../data/chat";
 import { localizedGoalState, localizedSessionStatus, useWorkspaceI18n } from "./i18n";
-import { formatCostUsd, formatDurationMs, formatTokenCount, formatUsageValue } from "./personal-workspace-model";
+import { formatCostUsd, formatDurationMs, formatTokenCount, formatUsageValue, hasGoalUsage } from "./personal-workspace-model";
 import { TeamPlanResult } from "./team-plan-result";
 import { TaskRequest } from "./task-request";
 import { parseTodoResumeCondition } from "./todo-resume-condition";
 import { MarkdownText } from "./markdown";
 import { formatMonitorDate } from "./monitor-readback";
 import { parseTodoCompletionProof } from "./todo-completion-feedback";
+import { useDrawerOverlay } from "./workspace-shell";
 
 function subagentModelRequest(include: boolean, model: string, effort: string) {
   if (!include) return {};
@@ -167,10 +169,12 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
   const drawerRef = useRef<HTMLDivElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
+  const taskInspectorOverlay = useDrawerOverlay(drawerRef, selection.kind === "todo");
+  const taskInspectorModal = selection.kind === "todo" && taskInspectorOverlay;
   const selectionIdentity = selection.kind === "run" ? `run:${selection.item.runId}`
     : selection.kind === "proposal" ? `proposal:${selection.item.previewId}`
       : selection.kind === "todo" ? `todo:${selection.item.goalId}:${selection.item.todoId}`
-        : selection.kind === "attention" ? `attention:${selection.item.goalId}:${selection.item.todoId}`
+        : selection.kind === "attention" ? JSON.stringify(["attention", selection.item.sourceId ?? "", selection.item.goalId, selection.item.todoId])
           : selection.kind === "output" ? `output:${selection.item.outputId}`
             : selection.kind === "schedule" ? `schedule:${selection.item.scheduleId}`
                 : `goal:${selection.item.goalId}`;
@@ -269,29 +273,60 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
     return () => window.cancelAnimationFrame(frame);
   }, [selectionIdentity]);
 
+  useEffect(() => {
+    if (!taskInspectorModal || drawerRef.current?.contains(document.activeElement)) return;
+    titleRef.current?.focus();
+  }, [taskInspectorModal]);
+
   const closeDrawer = useCallback(() => {
     const returnFocus = returnFocusRef.current;
     onClose();
-    window.requestAnimationFrame(() => returnFocus?.focus());
+    window.requestAnimationFrame(() => {
+      const activeElement = document.activeElement;
+      if (activeElement instanceof HTMLElement && activeElement !== document.body
+        && !drawerRef.current?.contains(activeElement)) return;
+      if (returnFocus && returnFocus !== document.body) {
+        returnFocus.focus();
+        if (document.activeElement === returnFocus) return;
+      }
+      const fallback = document.querySelector<HTMLElement>('[data-goal-panel="tasks"]:not([hidden]) .personal-task-board')
+        ?? document.querySelector<HTMLElement>('.personal-goal-tabs button[aria-current="page"]');
+      fallback?.focus();
+    });
   }, [onClose]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      if (event.defaultPrevented) return;
       if (event.key === "Escape") {
+        if (document.querySelector("dialog[open]:modal")) return;
+        const openMenu = Array.from(drawerRef.current?.querySelectorAll<HTMLDetailsElement>(
+          ".personal-task-management[open], .personal-compact-menu[open]",
+        ) ?? []).at(-1);
+        if (openMenu) {
+          event.preventDefault();
+          openMenu.open = false;
+          openMenu.querySelector<HTMLElement>(":scope > summary")?.focus();
+          return;
+        }
         event.preventDefault();
         closeDrawer();
         return;
       }
-      if (event.key === "Tab" && selection.kind !== "todo") {
+      if (event.key === "Tab" && (selection.kind !== "todo" || taskInspectorModal)) {
         const focusable = Array.from(drawerRef.current?.querySelectorAll<HTMLElement>(focusableSelector) ?? [])
           .filter((element) => !element.hasAttribute("disabled") && element.getAttribute("aria-hidden") !== "true" && element.checkVisibility({ visibilityProperty: true }));
         if (focusable.length === 0) return;
         const first = focusable[0];
         const last = focusable[focusable.length - 1];
-        if (event.shiftKey && document.activeElement === first) {
+        const activeIndex = focusable.indexOf(document.activeElement as HTMLElement);
+        if (activeIndex === -1) {
+          event.preventDefault();
+          (event.shiftKey ? last : first).focus();
+        } else if (event.shiftKey && activeIndex === 0) {
           event.preventDefault();
           last.focus();
-        } else if (!event.shiftKey && document.activeElement === last) {
+        } else if (!event.shiftKey && activeIndex === focusable.length - 1) {
           event.preventDefault();
           first.focus();
         }
@@ -301,7 +336,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
     return () => {
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [closeDrawer, selection.kind]);
+  }, [closeDrawer, selection.kind, taskInspectorModal]);
 
   const operationUnknown = selection.kind === "proposal"
     && selection.item.reviewPlan?.operationFrame?.kind === "result"
@@ -609,14 +644,14 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
   return (
     <div
       aria-labelledby="personal-drawer-title"
-      aria-modal={selection.kind === "todo" ? undefined : "true"}
+      aria-modal={selection.kind === "todo" ? taskInspectorModal || undefined : true}
       className="personal-context-drawer"
       data-context-kind={selection.kind}
       ref={drawerRef}
       role="dialog"
     >
       <header className={`personal-drawer-header${selection.kind === "todo" ? " is-task-inspector" : ""}`}>
-        <div><h2 id="personal-drawer-title" ref={titleRef} tabIndex={-1}>{title}</h2><p>{contextLabel}</p></div>
+        <div><h2 id="personal-drawer-title" ref={titleRef} tabIndex={-1}>{title}</h2>{selection.kind !== "goal" ? <p>{contextLabel}</p> : null}</div>
         <div className="personal-drawer-header-actions">
           {selection.kind === "todo" && onToggleInspectorSize ? <button aria-label={inspectorExpanded ? t("drawer.inspectorHalf") : t("drawer.inspectorFull")} className="personal-icon-button personal-inspector-size" onClick={onToggleInspectorSize} title={inspectorExpanded ? t("drawer.inspectorHalfView") : t("drawer.inspectorFullView")} type="button">
             {inspectorExpanded ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
@@ -629,6 +664,11 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
       </header>
 
       <div className="personal-drawer-body">
+        {selection.kind === "proposal" && onSelectAttention && proposalRequests.length === 1
+          && (selection.item.actionKind === "gate.resolve" || selection.item.actionKind === "todo.update") ? <button
+            className="personal-secondary-action" type="button" onClick={() => onSelectAttention(proposalRequests[0])}>
+            <ArrowLeft aria-hidden size={16}/>{locale === "zh-CN" ? "返回原待处理事项" : "Back to the original request"}
+          </button> : null}
         {previewFailure?.identity === selectionIdentity ? <p className="personal-proposal-explainer" role="alert">{previewFailure.message}</p> : null}
         {selection.kind === "attention" ? (
           <>
@@ -762,17 +802,23 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
 
         {selection.kind === "goal" ? (
           <>
-            <section className="personal-detail-card">
+            <section className="personal-detail-card personal-goal-detail-summary">
               <small>{localizedGoalState(selection.item.state, locale)}</small>
               <h3>{selection.item.title}</h3>
               <p>{selection.item.agentSentence}</p>
-              <dl>
-                <div><dt>{t("drawer.tokens")}</dt><dd>{formatUsageValue(selection.item.usage?.tokens24h, t("drawer.usageNotMeasured"), formatTokenCount)} / {formatUsageValue(selection.item.usage?.tokens7d, t("drawer.usageNotMeasured"), formatTokenCount)}</dd></div>
-                <div><dt>{t("drawer.cost")}</dt><dd>{formatUsageValue(selection.item.usage?.costUsd24h, t("drawer.usageNotMeasured"), formatCostUsd)} / {formatUsageValue(selection.item.usage?.costUsd7d, t("drawer.usageNotMeasured"), formatCostUsd)}</dd></div>
-                <div><dt>{t("drawer.duration")}</dt><dd>{formatUsageValue(selection.item.usage?.durationMs24h, t("drawer.usageNotMeasured"), formatDurationMs)} / {formatUsageValue(selection.item.usage?.durationMs7d, t("drawer.usageNotMeasured"), formatDurationMs)}</dd></div>
-              </dl>
             </section>
             <GoalAcceptanceObservationCard goal={selection.item} />
+            <section className="personal-detail-card personal-goal-detail-usage">
+              <h3>{t("drawer.goalUsage")}</h3>
+              {hasGoalUsage(selection.item.usage) ? <table>
+                <thead><tr><td /><th scope="col">{t("drawer.period24h")}</th><th scope="col">{t("drawer.period7d")}</th></tr></thead>
+                <tbody>
+                  <tr><th scope="row">{t("drawer.tokensShort")}</th><td>{formatUsageValue(selection.item.usage.tokens24h, t("drawer.usageNotMeasured"), formatTokenCount)}</td><td>{formatUsageValue(selection.item.usage.tokens7d, t("drawer.usageNotMeasured"), formatTokenCount)}</td></tr>
+                  <tr><th scope="row">{t("drawer.costShort")}</th><td>{formatUsageValue(selection.item.usage.costUsd24h, t("drawer.usageNotMeasured"), formatCostUsd)}</td><td>{formatUsageValue(selection.item.usage.costUsd7d, t("drawer.usageNotMeasured"), formatCostUsd)}</td></tr>
+                  <tr><th scope="row">{t("drawer.durationShort")}</th><td>{formatUsageValue(selection.item.usage.durationMs24h, t("drawer.usageNotMeasured"), formatDurationMs)}</td><td>{formatUsageValue(selection.item.usage.durationMs7d, t("drawer.usageNotMeasured"), formatDurationMs)}</td></tr>
+                </tbody>
+              </table> : <p>{t("drawer.usageNotMeasured")}</p>}
+            </section>
             {(() => {
               const notification = goalNotifications.find((row) => row.goalId === selection.item.goalId);
               const connection = larkConnections.find((row) => row.goal_id === selection.item.goalId);
@@ -816,11 +862,11 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                   ) : (
                     <>
                       <h3>{t("drawer.larkNotConfigured")}</h3>
-                      <p>{t("drawer.larkNotConfiguredDescription")}</p>
+                      <ContextHelp label={t("drawer.larkNotConfigured")}><p>{t("drawer.larkNotConfiguredDescription")}</p></ContextHelp>
                     </>
                   )}
                   <button className="personal-secondary-action" onClick={() => callbacks.onOpenNotificationSettings?.(selection.item.goalId)} type="button"><Bell size={16} />{connection ? t("drawer.larkConfigure") : t("drawer.larkConnect")}</button>
-                  </section> : <section className="personal-detail-card personal-goal-notification"><small>{t("drawer.larkConnection")}</small><h3>{t("drawer.remoteDetailsUnavailable")}</h3><p>{t("drawer.remoteDetailsDescription")}</p></section>}
+                  </section> : <section className="personal-detail-card personal-goal-notification"><small>{t("drawer.larkConnection")}</small><h3>{t("drawer.remoteDetailsUnavailable")}</h3><ContextHelp label={t("drawer.remoteDetailsUnavailable")}><p>{t("drawer.remoteDetailsDescription")}</p></ContextHelp></section>}
                 </>
               );
             })()}
@@ -835,7 +881,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
               ) : (
                 <>
                   <h3>{t("drawer.noRun")}</h3>
-                  <p>{t("drawer.noRunDescription")}</p>
+                  <ContextHelp label={t("drawer.noRun")}><p>{t("drawer.noRunDescription")}</p></ContextHelp>
                 </>
               )}
             </section>
@@ -969,7 +1015,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                   </label>
                   <button className="personal-secondary-action" disabled={subagentBusy} type="button" onClick={() => { setSubagentModel("gpt-5.6-luna"); setSubagentEffort("max"); setSubagentPreview(null); setSubagentMutationState("idle"); setSubagentFeedback(null); }}>{t("drawer.subagentLunaPreset")}</button>
                   <button className="personal-secondary-action" disabled={subagentBusy} type="button" onClick={() => { setSubagentModel(""); setSubagentEffort(""); setSubagentPreview(null); setSubagentMutationState("idle"); setSubagentFeedback(null); }}>{t("drawer.subagentClearModel")}</button>
-                  <p>{t("drawer.subagentModelHint")}</p>
+                  <ContextHelp label={t("drawer.subagentModel")}><p>{t("drawer.subagentModelHint")}</p></ContextHelp>
                   <label>
                     <span>{t("drawer.subagentExecutionConfig")}</span>
                     <input

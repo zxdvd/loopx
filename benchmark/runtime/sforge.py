@@ -20,7 +20,7 @@ from loopx.control_plane.goals.goal_vision_policy import DEFAULT_PLANNING_HORIZO
 from benchmark.edgebench.feedback import FEEDBACK_MODES
 from benchmark.edgebench.feedback_hook import FEEDBACK_PAYLOAD
 
-from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, prepare_codex_home
+from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, codex_settings, prepare_codex_home
 from .codex_offline import CodexOffline, MODEL_CATALOG_REMOTE, stage_portable_python
 from .harbor import (
     BenchmarkCodex, _CONTROL, _CODEX_HOME, _PYTHON, _SCHEDULER_STATE, _SRC,
@@ -32,6 +32,7 @@ from .worker import PHASE_WORK_RESERVE_SECONDS
 # Experiment profiles, local to the research runner; not new LoopX modes.
 PROFILES = ("official", "single", "native-goal", "heartbeat-resume", "heartbeat-explore")
 DEFAULT_TIMEOUT_SECONDS = 18 * 60 * 60
+_RUNTIME_CREDENTIAL_PLACEHOLDER = "runtime-managed-credential"
 
 
 class SForgeEnvironment:
@@ -92,6 +93,8 @@ class SForgeWorker(CodexAgent):
                  task_objective: str | None = None,
                  task_entry: str | None = None,
                  turn_envelope: bool = False,
+                 context_delivery: str | None = None,
+                 provider_request_admission: bool = False,
                  native_goal_continue: bool = False,
                  replan_after_turns: int | None = None,
                  replan_after_todos: int | None = None,
@@ -108,6 +111,20 @@ class SForgeWorker(CodexAgent):
         ):
             raise ValueError("turn_envelope requires a heartbeat worker")
         self.turn_envelope = turn_envelope
+        self.context_delivery = Execution(
+            mode="heartbeat" if profile.startswith("heartbeat-") else "plain",
+            context_delivery=context_delivery,
+        ).context_delivery
+        if type(provider_request_admission) is not bool:
+            raise ValueError("provider_request_admission must be a boolean opt-in")
+        if provider_request_admission and not profile.startswith("heartbeat-"):
+            raise ValueError("provider_request_admission requires a heartbeat profile")
+        if provider_request_admission:
+            if not (config.agent_api_base_url or "").strip() or not (config.agent_api_key or "").strip():
+                raise ValueError("provider_request_admission requires a custom provider URL and API key")
+            if (os.environ.get("CODEX_WIRE_API") or "responses") != "responses":
+                raise ValueError("provider_request_admission requires the Responses wire API")
+        self.provider_request_admission = provider_request_admission
         if timeout_seconds <= PHASE_WORK_RESERVE_SECONDS:
             raise ValueError("Worker budget must exceed the 160s startup/settlement reserve")
         if not config.agent_model or not config.agent_effort:
@@ -210,6 +227,10 @@ class SForgeWorker(CodexAgent):
         # workers already run a scheduler: restarting it after terminal/quiescent
         # exit duplicates that owner and can exhaust the native resume limit.
         self.resume_cmd = CodexAgent.resume_cmd if profile == "official" else None
+        # SForge signs this declaration into the runtime protocol.  The setup
+        # callback below is shared by every profile, but only the official
+        # profile installs the Codex stop hook inside that callback.
+        self.stop_hook = CodexAgent.stop_hook if profile == "official" else None
 
     def install_stop_hook(self, backend, handle, log_dir, logger):
         self.environment = SForgeEnvironment(
@@ -228,10 +249,27 @@ class SForgeWorker(CodexAgent):
         effort = self._config.agent_effort
         common = dict(logs_dir=log_dir / "worker", model_name=self._config.agent_model,
                       reasoning_effort=effort)
+        runtime_base_url = self._config.agent_api_base_url
+        runtime_api_key = self._config.agent_api_key
         if self._config.agent_api_base_url:
+            route = backend.exec_run(
+                handle,
+                ["/bin/bash", "-c", 'printf "%s" "${OPENAI_BASE_URL:-}"'],
+                user="agent",
+            )
+            runtime_base_url = (getattr(route, "output", "") or "").strip()
+            if route.exit_code or not runtime_base_url:
+                raise RuntimeError("Could not read the effective model route from the trial")
+            if runtime_base_url != self._config.agent_api_base_url:
+                # SForge may replace a provider route with a host credential
+                # gateway after constructing this Agent. Keep the provider
+                # credential on the host and give child runtimes a non-secret
+                # value; SForge supplies the same effective route to the outer
+                # solver process.
+                runtime_api_key = _RUNTIME_CREDENTIAL_PLACEHOLDER
             common["extra_env"] = {
-                "OPENAI_BASE_URL": self._config.agent_api_base_url,
-                "OPENAI_API_KEY": self._config.agent_api_key,
+                "OPENAI_BASE_URL": runtime_base_url,
+                "OPENAI_API_KEY": runtime_api_key,
                 "CODEX_AUTH_JSON_PATH": "",
             }
         if self.profile in {"official", "single"}:
@@ -248,8 +286,8 @@ class SForgeWorker(CodexAgent):
                 prepare_codex_home(
                     home, execution=Execution(mode="plain"), workspace=Path(self.cwd),
                     model=self._config.agent_model, effort=effort,
-                    base_url=self._config.agent_api_base_url or "",
-                    api_key=self._config.agent_api_key or "", wire_api="responses", skills=None,
+                    base_url=runtime_base_url or "",
+                    api_key=runtime_api_key or "", wire_api="responses", skills=None,
                     model_catalog=offline._model_catalog_source,
                     model_catalog_destination=(Path(MODEL_CATALOG_REMOTE)
                                                if offline._model_catalog_staged else None),
@@ -276,6 +314,8 @@ class SForgeWorker(CodexAgent):
                 scheduler_timeout_sec=self.timeout_seconds,
                 task_entry=self.task_entry,
                 turn_envelope=self.turn_envelope,
+                context_delivery=self.context_delivery,
+                **({"provider_request_admission": True} if self.provider_request_admission else {}),
                 native_goal_continue=self.native_goal_continue,
                 replan_after_turns=self.replan_after_turns,
                 replan_after_todos=self.replan_after_todos,
@@ -289,7 +329,24 @@ class SForgeWorker(CodexAgent):
             )
             asyncio.run(self.runtime.install(self.environment))
             if self.warm_start is not None:
-                research_paths = asyncio.run(self.warm_start.stage(self.environment, self.cwd))
+                route_settings = {}
+                if runtime_base_url:
+                    worker_env = self.runtime._worker_env(cwd=self.cwd)
+                    route_settings = {
+                        "provider_base_url": runtime_base_url,
+                        "effective_config": codex_settings(
+                            execution=self.runtime.execution, workspace=Path(self.cwd),
+                            model=worker_env["MODEL_NAME"], effort=worker_env["REASONING_EFFORT"],
+                            base_url=runtime_base_url,
+                            wire_api=worker_env["CODEX_WIRE_API"],
+                            web_search=worker_env["LOOPX_WEB_SEARCH"],
+                            model_catalog=self.runtime._model_catalog_source,
+                            model_catalog_destination=(Path(MODEL_CATALOG_REMOTE)
+                                if self.runtime._model_catalog_staged else None),
+                        ).encode("utf-8"),
+                    }
+                research_paths = asyncio.run(self.warm_start.stage(
+                    self.environment, self.cwd, **route_settings))
                 self._warm_command("workspace", user="root")
                 result = backend.exec_run(handle,
                     ["chown", "-R", "-P", "agent:agent", self.cwd, *research_paths], user="root")
@@ -347,6 +404,7 @@ class SForgeWorker(CodexAgent):
                if self.task_entry == "loopx-planned" else {}),
             "stop_hook": self.profile == "official",
             **(self.runtime._turn_envelope_receipt() if self.runtime is not None else {}),
+            **({"provider_request_admission": "on"} if self.provider_request_admission else {}),
             **({"native_goal_continue": True} if self.native_goal_continue else {}),
             "outer_resume": self.resume_cmd is not None,
             "explore_graph": self.profile == "heartbeat-explore",

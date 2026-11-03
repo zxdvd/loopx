@@ -21,6 +21,7 @@ from loopx.control_plane.testing.cli_output_differential import (  # noqa: E402
     compare_cli_output_receipts,
     select_cli_output_base_ref,
 )
+from loopx.control_plane.testing.cli_output_budget import CLI_OUTPUT_BUDGET_BY_ID  # noqa: E402
 from tests.control_plane.cli_output_fixture import budget_fixture_path  # noqa: E402
 
 
@@ -106,6 +107,33 @@ def _load_receipt(path: Path) -> dict:
     return payload
 
 
+def _base_ceiling_observation(receipt: dict) -> dict:
+    """Keep bounded base metrics when candidate enforcement stops the probe."""
+    failures = []
+    for row in receipt["rows"]:
+        if row.get("variant_id") is not None:
+            continue
+        spec = CLI_OUTPUT_BUDGET_BY_ID.get(row["surface_id"])
+        if spec is None or row["scenario"] not in spec.max_chars:
+            continue
+        limits = {
+            "chars": spec.max_chars[row["scenario"]][row["format"]],
+            "lines": spec.max_lines[row["scenario"]][row["format"]],
+        }
+        if any(row[key] > limit for key, limit in limits.items()):
+            failures.append({
+                "row_id": row["row_id"],
+                "base": {key: row[key] for key in limits},
+                "current_ceiling": limits,
+            })
+    return {
+        "scope": "default_surface_baselines",
+        "failure_count": len(failures),
+        "rows": failures[:4],
+        "omitted_count": max(0, len(failures) - 4),
+    }
+
+
 def _is_ancestor(ancestor: str, descendant: str) -> bool:
     completed = subprocess.run(
         ["git", "merge-base", "--is-ancestor", ancestor, descendant],
@@ -127,11 +155,33 @@ def _is_ancestor(ancestor: str, descendant: str) -> bool:
     )
 
 
+def _pin_probe_base_ref(base_ref: str, *, main_ref: str) -> str:
+    # CI may fetch a newer main after its candidate merge commit was created.
+    # Compare that candidate's ancestry, not unrelated later output changes.
+    command = (
+        ["git", "merge-base", "--all", "--", base_ref, "HEAD"]
+        if base_ref == main_ref else
+        ["git", "rev-parse", "--verify", "--end-of-options", f"{base_ref}^{{commit}}"]
+    )
+    completed = subprocess.run(
+        command, cwd=REPO_ROOT, check=False, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
+    )
+    revisions = completed.stdout.splitlines()
+    if completed.returncode != 0 or len(revisions) != 1:
+        raise RuntimeError(
+            f"cannot resolve one CLI output base for {base_ref}; "
+            f"select an explicit --base-ref commit: {completed.stderr.strip()}"
+        )
+    return revisions[0]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--base-ref",
         default=os.environ.get("LOOPX_CLI_OUTPUT_BASE_REF", "origin/main"),
+        help="Comparison base; the selected main branch uses its common ancestor with HEAD.",
     )
     parser.add_argument(
         "--main-ref",
@@ -143,6 +193,7 @@ def main() -> int:
         main_ref=args.main_ref,
         is_ancestor=_is_ancestor,
     )
+    base_ref = _pin_probe_base_ref(base_ref, main_ref=args.main_ref)
     if not PROBE_TEST.is_file():
         raise RuntimeError(f"missing probe source: {PROBE_TEST.relative_to(REPO_ROOT)}")
     if not PROBE_RUNNER.is_file():
@@ -196,6 +247,18 @@ def main() -> int:
                 cwd=temp_root,
                 enforce_budget=False,
             )
+            base_observation = _base_ceiling_observation(_load_receipt(base_receipt))
+            if base_observation["failure_count"]:
+                # Candidate assertions still run unchanged. These metrics are
+                # attribution evidence, not a waiver for an over-budget base.
+                print(
+                    "cli-output-base-current-ceilings "
+                    + json.dumps(
+                        {"base_ref": base_ref, **base_observation},
+                        sort_keys=True, separators=(",", ":"),
+                    ),
+                    flush=True,
+                )
             _run_probe(
                 source_root=REPO_ROOT,
                 probe_runner=probe_runner,
@@ -231,7 +294,7 @@ def main() -> int:
                 if row["status"] == "failed"
             ]
             raise AssertionError(
-                "agent-facing CLI base/head differential failed\n"
+                f"agent-facing CLI base/head differential failed (base_ref={base_ref})\n"
                 + json.dumps(failed, ensure_ascii=False, indent=2, sort_keys=True)
             )
         if comparison["review_required"]:

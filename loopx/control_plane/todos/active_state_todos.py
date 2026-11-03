@@ -6,7 +6,6 @@ from typing import Any
 
 from ..coordination.local_authority import (
     CanonicalTodoSnapshot,
-    canonical_todo_summary_fields,
     read_canonical_todos_if_promoted,
 )
 from ..goals.active_state_metadata import parse_state_frontmatter
@@ -15,6 +14,7 @@ from ..runtime.public_safety import public_safe_compact_text
 from .succession_warning import public_todo_summary
 from .resume_condition import TodoResumeRolloutEvents
 from ...agent_registry import registered_agent_ids_for_goal
+from ...materials import extract_review_materials
 from ..work_items.recommendation_source_io import (
     load_recommendation_source_goal, recommendation_source_context,
     project_agent_next_actions, recommendation_runs,
@@ -42,6 +42,10 @@ def _redacted_status_todo_fields(fields: dict[str, Any]) -> dict[str, Any]:
                         continue
                     material_copy = dict(material)
                     material_copy.pop("resolved_path", None)
+                    if any(isinstance(value, str) and value
+                           and public_safe_compact_text(value, limit=len(value)) is None
+                           for value in material_copy.values()):
+                        continue
                     redacted_materials.append(material_copy)
                 item_copy["review_materials"] = redacted_materials
             items.append(item_copy)
@@ -90,10 +94,12 @@ def active_state_todo_fields(
                 goal = {**goal, **source_goal}
     # Inspect authority before the display file. A missing/stale projection is
     # not an empty Todo collection, and an unavailable provider must fail closed.
-    canonical_reader = todo_snapshot.read if todo_snapshot is not None else read_canonical_todos_if_promoted
     if runtime_root is None or not goal_id:
         raise ValueError("canonical Todo status requires a runtime root and Goal identity")
-    canonical = canonical_reader(runtime_root=runtime_root, goal_id=goal_id)
+    canonical = (todo_snapshot.read(runtime_root=runtime_root, goal_id=goal_id) if todo_snapshot is not None else
+        read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=goal_id,
+            include_summary=True, rollout_events=TodoResumeRolloutEvents(
+                rollout_events or [], runtime_root=runtime_root, goal_id=goal_id)))
     state_path = resolve_goal_local_path(goal.get("state_file"), goal, fallback_base=Path.cwd())
     try:
         state_text = state_path.read_text(encoding="utf-8") if state_path is not None else ""
@@ -102,29 +108,29 @@ def active_state_todo_fields(
     except UnicodeError:
         state_text = ""
     next_action_entries = active_state_next_action_entries(state_text, limit=3)
-    events = (
-        [dict(event) for event in rollout_events]
-        if rollout_events is not None
-        else []
-    )
-    if rollout_events is None and runtime_root is not None and goal_id:
-        events = load_rollout_events(
-            rollout_event_log_path(runtime_root, goal_id),
-            limit=max_todo_index_rollout_events_per_goal,
-        )
-    if runtime_root is not None and goal_id:
-        events = TodoResumeRolloutEvents(events, runtime_root=runtime_root, goal_id=goal_id)
-    from ..goals.acceptance import observe_canonical_goal_acceptance
-    acceptance = observe_canonical_goal_acceptance(canonical,
+    from .goal_todo_projection import observe_todo_acceptance
+    fields = observe_todo_acceptance(canonical["_todo_fields"], canonical,
         registry_path=source_registry, goal_id=goal_id)
-    fields = canonical_todo_summary_fields(
-        canonical["todos"], rollout_events=events,
-        goal_acceptance_contract=acceptance,
-        goal_acceptance_work_guards=canonical.get("goal_acceptance_work_guards"),
-    )
+    # Execution guidance must use the same canonical policy as the Todo read,
+    # never the historical Markdown frontmatter or a registry default.
+    fields["handoff_mode"] = canonical.get("handoff_mode")
+    # Material existence is a local read projection, not persisted Todo state.
+    # Derive it from the canonical text so stale display links cannot take over.
+    for key in ("user_todos", "agent_todos"):
+        summary = fields.get(key)
+        if not isinstance(summary, dict):
+            continue
+        for todo in summary.get("items") or []:
+            if not isinstance(todo, dict):
+                continue
+            materials = extract_review_materials(str(todo.get("text") or ""),
+                goal=goal, state_path=state_path)
+            if materials:
+                todo["review_materials"] = materials
     # An explicit canonical objective revision owns current intent. A scoped
     # check objective still cannot substitute for Goal intent. Keep this status
     # field as display content; admission uses the native revision and guard.
+    acceptance = (fields.get("agent_todos") or {}).get("goal_acceptance_contract")
     revised_objective = ((acceptance or {}).get("goal_objective") or {}).get("objective")
     fields["goal_objective"] = public_safe_compact_text(
         revised_objective or parse_state_frontmatter(state_text).get("objective"), limit=1000,

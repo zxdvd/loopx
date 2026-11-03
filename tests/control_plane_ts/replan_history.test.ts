@@ -35,6 +35,27 @@ function trigger(runs: JsonObject[], patch: JsonObject = {}): JsonObject | null 
 }
 const many = (count: number, build = run): JsonObject[] => Array.from({ length: count }, (_, i) => build(count - i));
 
+test("work-shape decisions never silently change the configured review count", () => {
+  for (const strategy of ["off", "evidence_conditioned_v1"]) {
+    for (const action of ["grow", "verify", "switch"]) {
+      for (const threshold of [1, 3, 6]) {
+        const ack = run(0, {accepted_ack: true, agent_vision: {stride_decision: {
+          action, basis: "supported_progress", previous_review: {goal_gain: "improved"},
+        }}});
+        const project = (count: number) => {
+          const rows = [...many(count), ack];
+          return projectReplanHistory(request(rows, {operation: "periodic",
+            periodic_threshold: threshold, stride_strategy: strategy}),
+          new Set(rows.map(row => JSON.stringify([row.agent_id, row.turn_id])))).trigger as JsonObject | null;
+        };
+        assert.equal(project(threshold - 1), null);
+        assert.equal(project(threshold)?.threshold, threshold);
+        assert.equal(project(threshold + 2)?.threshold, threshold);
+      }
+    }
+  }
+});
+
 test("effective cadence uses qualified lane identities, independent of Todo completion", () => {
   const qualified = new Set([1, 2].map(n => JSON.stringify(["worker-a", `turn-${n}`])));
   const project = (runs: JsonObject[]) => projectReplanHistory(request(runs, {
@@ -58,6 +79,31 @@ test("periodic work counts distinct logical turns and keeps the existing public 
     agent_id: "worker-a",
   });
   assert.equal(trigger(many(19)), null);
+});
+
+test("periodic count respects the latest lane retry without erasing the earned review", () => {
+  const due = "2026-01-01T00:05:00.123456Z";
+  const retry = run(21, {todo_id: "todo_feedback", delivery_outcome: "outcome_gap",
+    progress: {...observation, result_class: "blocked"}, blocked_retry: {
+      schema_version: "quota_blocked_retry_v0", source: "turn_settlement",
+      todo_id: "todo_feedback", observed_at: "2026-01-01T00:00:00.123456Z",
+      due_at: due, resume_when: `resume_at:${due}`,
+    }});
+  const rows = [retry, ...many(20)];
+  const before = {retry_observed_at: "2026-01-01T00:05:00.123455Z"};
+  const original = structuredClone(rows);
+  assert.equal(trigger(rows, before), null);
+  assert.equal(trigger(rows, {...before, operation: "periodic"}), null);
+  assert.equal(trigger(rows, {retry_observed_at: due})?.kind, "periodic_review_due");
+  assert.equal(trigger(rows)?.kind, "periodic_review_due", "legacy requests have no current clock proof");
+  assert.equal(trigger([{...retry, agent_id: "peer"}, ...many(20)], before)?.kind, "periodic_review_due");
+  assert.equal(trigger([run(22), ...rows], before)?.kind, "periodic_review_due", "new work supersedes the wait");
+  assert.equal(trigger([{...retry, delivery_outcome: "outcome_progress"}, ...many(20)], before)?.kind,
+    "periodic_review_due", "a bare retry field is not accepted blocked work");
+  assert.equal(trigger([retry, {...retry, turn_id: "previous"}, ...many(20)], before)?.kind,
+    "typed_progress_repeat", "a concrete repeated stall is independent evidence");
+  assert.equal(trigger([poll(22), ...rows], before), null, "quiet polls do not manufacture new evidence");
+  assert.deepEqual(rows, original);
 });
 
 test("periodic review counts material work, not quiet monitor receipts", () => {

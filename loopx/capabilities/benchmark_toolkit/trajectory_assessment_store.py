@@ -16,7 +16,8 @@ from ...control_plane.effect_runtime import EffectRuntimeRejected, effect_runtim
 from ...file_lock import exclusive_file_lock
 from .trajectory_assessment import _digest, _write, execute, read_job, request_cancel
 
-DEFAULT_CONFIG = {"model": "gpt-6.1-sol", "effort": "max", "service_tier": "fast"}
+DEFAULT_CONFIG = {"model": "gpt-6.1-sol", "effort": "max", "service_tier": "fast", "output_schema_revision": 2, "research_synthesis": True,
+                  "research_synthesis_revision": 2}
 
 
 class PackUnavailable(ValueError):
@@ -68,16 +69,25 @@ def _prepared(record: dict, output_language: str | None = None) -> dict:
 
 
 def _verify_sources(record: dict) -> None:
+    # One byte observation per declared artifact in this verification only.
+    # Check every digest/excerpt; later calls still read and verify fresh bytes.
+    artifacts: dict[str, list[dict]] = {}
     for source in record["input"]["sources"]:
-        path = _source_path(Path(record["source_root"]), source["artifact"])
+        artifacts.setdefault(source["artifact"], []).append(source)
+    for artifact, sources in artifacts.items():
+        path = _source_path(Path(record["source_root"]), artifact)
         data = path.read_bytes()
-        if hashlib.sha256(data).hexdigest() != source["artifact_sha256"]:
-            raise PackUnavailable("source_changed")
-        lines = data.decode("utf-8").split("\n")
-        start = source["first_line"] - 1
-        count = len(source["text"].split("\n"))
-        if "\n".join(lines[start : start + count]) != source["text"]:
-            raise PackUnavailable("excerpt_mismatch")
+        digest = hashlib.sha256(data).hexdigest()
+        lines = None
+        for source in sources:
+            if digest != source["artifact_sha256"]:
+                raise PackUnavailable("source_changed")
+            if lines is None:
+                lines = data.decode("utf-8").split("\n")
+            start = source["first_line"] - 1
+            count = len(source["text"].split("\n"))
+            if "\n".join(lines[start : start + count]) != source["text"]:
+                raise PackUnavailable("excerpt_mismatch")
 
 
 def _source_path(source_root: Path, artifact: str) -> Path:
@@ -91,65 +101,163 @@ def _source_path(source_root: Path, artifact: str) -> Path:
     return path
 
 
+def _request_usage_record(value: object) -> object:
+    """Transport the provider's typed usage only; TS owns reconciliation."""
+    if not isinstance(value, dict):
+        return None
+    result: dict[str, object] = {
+        key: value[key] if isinstance(value[key], str) else None
+        for key in ("thread_id", "session_id", "turn_id", "root_turn_id", "response_id")
+        if key in value
+    }
+    for key in ("usage", "turn_token_usage", "thread_token_usage"):
+        counters = value.get(key)
+        result[key] = (
+            {
+                name: counters[name] if type(counters[name]) is int else None
+                for name in (
+                    "input_tokens",
+                    "cached_input_tokens",
+                    "cache_write_input_tokens",
+                    "output_tokens",
+                    "reasoning_output_tokens",
+                    "total_tokens",
+                )
+                if name in counters
+            }
+            if isinstance(counters, dict)
+            else None
+        )
+    return result
+
+
+def _usage_rows(path: Path, digest):
+    """Hash the exact captured bytes while parsing one JSONL record at a time."""
+    with path.open("rb") as stream:
+        for line_number, line in enumerate(stream, 1):
+            digest.update(line)
+            yield line_number, json.loads(line.decode("utf-8"))
+
+
+def _source_digest(path: Path) -> str:
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def _usage_event(line_number: int, event: dict) -> dict | None:
+    payload = event.get("payload") or {}
+    if not isinstance(payload, dict):
+        raise ValueError("Usage capture contains a non-object payload")
+    if event.get("type") == "session_meta":
+        payload = {k: payload[k] for k in ("id", "forked_from_id") if k in payload}
+    elif event.get("type") == "token_usage_record":
+        payload = _request_usage_record(payload)
+    elif event.get("type") == "loopx_input_token_attribution":
+        # Optional host measurement, not a tokenizer or prose classifier.
+        # Preserve only binding/counts; raw prompts and packet text stay private.
+        payload = {
+            key: payload[key] if isinstance(payload[key], str) else None
+            for key in (
+                "method", "thread_id", "session_id", "turn_id",
+                "root_turn_id", "response_id",
+            ) if key in payload
+        } | {
+            key: payload[key] if type(payload[key]) is int else None
+            for key in (
+                "input_tokens", "loopx_input_tokens", "loopx_cached_input_tokens",
+            ) if key in payload
+        }
+    elif event.get("type") == "compacted":
+        payload = {
+            "compaction_response_id": payload.get("compaction_response_id")
+            if isinstance(payload.get("compaction_response_id"), str)
+            else None,
+            "latest_token_usage_record": _request_usage_record(
+                payload.get("latest_token_usage_record")
+            ),
+        }
+    elif event.get("type") == "event_msg" and payload.get("type") in {
+        "task_started",
+        "task_complete",
+        "token_count",
+    }:
+        payload = {
+            k: payload[k] for k in ("type", "turn_id", "info") if k in payload
+        }
+        if isinstance(payload.get("info"), dict):
+            payload["info"] = {
+                name: {
+                    key: value[key]
+                    for key in (
+                        "input_tokens",
+                        "cached_input_tokens",
+                        "output_tokens",
+                    )
+                    if key in value
+                }
+                if isinstance(value, dict)
+                else value
+                for name in ("total_token_usage", "last_token_usage")
+                if (value := payload["info"].get(name)) is not None
+            }
+    else:
+        return None
+    return {"line": line_number, "type": event["type"], "timestamp": event.get("timestamp"), "payload": payload}
+
+
 def _usage_capture(
-    source_root: Path, artifact: str, session_id: str, *, include_incomplete: bool = False
+    source_root: Path,
+    artifact: str,
+    session_id: str,
+    *,
+    include_incomplete: bool = False,
+    include_tool_context: bool = False,
+    loopx_input_json: str | None = None,
+    input_goal_id: str | None = None,
 ) -> dict:
-    data = _source_path(source_root, artifact).read_bytes()
+    path = _source_path(source_root, artifact)
+    digest = hashlib.sha256()
     events = []
+    tool_context = []
     # Transport only the provider's counter/lifecycle fields, not model text,
     # account metadata or tool outputs. TS owns all accounting decisions.
-    for line_number, line in enumerate(data.decode("utf-8").splitlines(), 1):
-        event = json.loads(line)
+    for line_number, event in _usage_rows(path, digest):
         if not isinstance(event, dict):
             raise ValueError("Usage capture contains a non-object event")
-        payload = event.get("payload") or {}
-        if not isinstance(payload, dict):
-            raise ValueError("Usage capture contains a non-object payload")
-        if event.get("type") == "session_meta":
-            payload = {k: payload[k] for k in ("id", "forked_from_id") if k in payload}
-        elif event.get("type") == "event_msg" and payload.get("type") in {
-            "task_started",
-            "task_complete",
-            "token_count",
-        }:
-            payload = {
-                k: payload[k] for k in ("type", "turn_id", "info") if k in payload
-            }
-            if isinstance(payload.get("info"), dict):
-                payload["info"] = {
-                    name: {
-                        key: value[key]
-                        for key in (
-                            "input_tokens",
-                            "cached_input_tokens",
-                            "output_tokens",
-                        )
-                        if key in value
-                    }
-                    if isinstance(value, dict)
-                    else value
-                    for name in ("total_token_usage", "last_token_usage")
-                    if (value := payload["info"].get(name)) is not None
-                }
-        else:
-            continue
-        events.append(
-            {
-                "line": line_number,
-                "type": event["type"],
-                "timestamp": event.get("timestamp"),
-                "payload": payload,
-            }
-        )
+        if include_tool_context:
+            from .trajectory_tool_context import project_tool_context
+            tool_context.extend(project_tool_context([event], first_line=line_number))
+        observed = _usage_event(line_number, event)
+        if observed is not None:
+            events.append(observed)
+    observation = None
+    input_artifacts = []
+    if loopx_input_json is not None:
+        from .trajectory_input_capture import load_codex_input_observation
+        try:
+            observation = load_codex_input_observation(source_root, loopx_input_json)
+            input_artifacts = observation.pop("artifacts")
+        except (ImportError, OSError, ValueError, KeyError, TypeError):
+            # A supplementary observation cannot erase independently valid
+            # native counters. The typed owner withholds only input attribution.
+            observation = {"error": "Input observation or tokenizer is unavailable"}
     projection = effect_runtime_result(
         "benchmark.trajectory.codex-usage",
-        {"events": events, "session_id": session_id, "include_incomplete": include_incomplete},
+        {
+            "events": events,
+            "session_id": session_id,
+            "include_incomplete": include_incomplete,
+            **({"tool_context": tool_context} if include_tool_context else {}),
+            **({"loopx_input_trace": observation, "input_goal_id": input_goal_id}
+               if loopx_input_json is not None else {}),
+        },
         large_local_snapshot=True,
     )
     return {
         "artifact": artifact,
-        "artifact_sha256": hashlib.sha256(data).hexdigest(),
+        "artifact_sha256": digest.hexdigest(),
         "projection": projection,
+        **({"input_artifacts": input_artifacts} if input_artifacts else {}),
     }
 
 
@@ -159,11 +267,15 @@ def _captured_view(record: dict, field: str) -> dict | None:
         return None
     reason = None
     try:
-        data = _source_path(
+        path = _source_path(
             Path(record["source_root"]), captured["artifact"]
-        ).read_bytes()
-        if hashlib.sha256(data).hexdigest() != captured["artifact_sha256"]:
+        )
+        if _source_digest(path) != captured["artifact_sha256"]:
             reason = "source_changed"
+        for artifact in captured.get("input_artifacts", []):
+            path = _source_path(Path(record["source_root"]), artifact["artifact"])
+            if _source_digest(path) != artifact["artifact_sha256"]:
+                reason = "source_changed"
     except (OSError, ValueError):
         reason = "source_unavailable"
     return {
@@ -246,6 +358,8 @@ def register_pack(
     usage_jsonl: str | None = None,
     usage_session_id: str | None = None,
     include_incomplete_usage: bool = False,
+    include_tool_context: bool = False,
+    loopx_input_json: str | None = None,
     native_outcomes_json: str | None = None,
     base_pack_id: str | None = None,
 ) -> dict:
@@ -257,6 +371,7 @@ def register_pack(
         {
             "input": json.loads(input_path.read_text(encoding="utf-8")),
             "config": config or DEFAULT_CONFIG,
+            "generation_defaults": not config,
         },
     )
     record = {
@@ -279,6 +394,10 @@ def register_pack(
         record["base_pack_id"] = _opaque(base_pack_id)
     if include_incomplete_usage and usage_jsonl is None:
         raise ValueError("include-incomplete-usage requires a usage capture")
+    if include_tool_context and usage_jsonl is None:
+        raise ValueError("include-tool-context requires a usage capture")
+    if loopx_input_json is not None and usage_jsonl is None:
+        raise ValueError("LoopX input observation requires a usage capture")
     if (usage_jsonl is None) != (usage_session_id is None):
         raise ValueError(
             "Usage capture and expected session identity must be supplied together"
@@ -287,6 +406,9 @@ def register_pack(
         record["solver_usage"] = _usage_capture(
             source_root, usage_jsonl, usage_session_id,
             include_incomplete=include_incomplete_usage,
+            include_tool_context=include_tool_context,
+            loopx_input_json=loopx_input_json,
+            input_goal_id=record["input"]["scope"]["goal_id"],
         )
     if native_outcomes_json is not None:
         data = _source_path(source_root, native_outcomes_json).read_bytes()
@@ -391,6 +513,16 @@ def inspect_pack(
     identity = prepared if output_language is not None else record
     directory = _job(owner, identity, identity["analysis_key"])
     job = read_job(directory) if (directory / "receipt.json").exists() else None
+    result_job, result_directory = job, directory
+    if job and job["status"] != "succeeded" and prepared.get("display_request"):
+        # An explicit translation retry does not erase its saved partial
+        # result. Read only an exact-key, successful prior attempt; current job
+        # state and cost remain separate and visible to the reader.
+        for archived in sorted(directory.glob("attempt-*/receipt.json"), key=lambda path: int(path.parent.name.split("-")[1]), reverse=True):
+            prior = read_job(archived.parent)
+            if prior["status"] == "succeeded":
+                result_job, result_directory = prior, archived.parent
+                break
     result = None
     if job is not None:
         if (
@@ -399,14 +531,17 @@ def inspect_pack(
             or job["config"] != prepared["config"]
         ):
             raise PackUnavailable("receipt_mismatch")
-        if job["status"] == "succeeded":
+        if result_job and result_job["status"] == "succeeded":
+            if (result_job["analysis_key"] != identity["analysis_key"] or result_job["scope"] != record["input"]["scope"]
+                    or result_job["config"] != prepared["config"]):
+                raise PackUnavailable("receipt_mismatch")
             if reason == "method_changed":
                 # Read a previously qualified artifact without applying today's
                 # rubric. The old receipt must bind its frozen input and bytes.
-                payload = (directory / "assessment.json").read_bytes()
+                payload = (result_directory / "assessment.json").read_bytes()
                 if (
-                    job.get("input_sha256") != _digest(record["input"])
-                    or job.get("assessment_sha256")
+                    result_job.get("input_sha256") != _digest(record["input"])
+                    or result_job.get("assessment_sha256")
                     != hashlib.sha256(payload).hexdigest()
                 ):
                     raise PackUnavailable("historical_result_unverified")
@@ -416,7 +551,7 @@ def inspect_pack(
                     or result.get("analysis_key") != identity["analysis_key"]
                     or result.get("scope") != record["input"]["scope"]
                     or result.get("method_version") != record["method_version"]
-                    or job.get("method_version") != record["method_version"]
+                    or result_job.get("method_version") != record["method_version"]
                 ):
                     raise PackUnavailable("historical_result_unverified")
             else:
@@ -425,7 +560,7 @@ def inspect_pack(
                     {
                         **prepared,
                         "output": json.loads(
-                            (directory / "model-output.json").read_text(
+                            (result_directory / "model-output.json").read_text(
                                 encoding="utf-8"
                             )
                         ),
@@ -438,6 +573,9 @@ def inspect_pack(
         "episodes": record["input"]["episodes"],
         "job": _public_job(job) if job else None,
         "result": result,
+        **({"display_request": prepared["display_request"]} if "display_request" in prepared else {}),
+        **({"result_attempt": result_job["attempt"]} if prepared.get("display_request") and result is not None else {}),
+        **({"result_job": _public_job(result_job)} if result is not None and result_job is not job else {}),
         "applicability": "historical" if reason else "current",
     }
     if include_continuation and record.get("base_pack_id"):
@@ -457,7 +595,7 @@ def _continuation(runtime_root, owner_goal_id, record, prepared, result, languag
     if base_id is None:
         return None, None
     try:
-        _, previous = _resolve(runtime_root, owner_goal_id, base_id)
+        owner, previous = _resolve(runtime_root, owner_goal_id, base_id)
         base = inspect_pack(runtime_root=runtime_root, owner_goal_id=owner_goal_id,
                             pack_id=base_id, output_language=language, include_continuation=False)
         old = _prepared(previous, language) if language is not None else _prepared(previous)
@@ -475,9 +613,24 @@ def _continuation(runtime_root, owner_goal_id, record, prepared, result, languag
     except (OSError, ValueError):
         readable = False
     usable = readable and base["result"] is not None and base["reason_code"] != "method_changed"
-    prior = {**old, **({"output": base["result"]} if usable else {})}
+    # Readback has restored display literals. Requalify the exact successful
+    # attempt's provider response, including when a later retry failed.
+    output = None
+    if usable:
+        directory = _job(owner, old, old["analysis_key"])
+        if base.get("result_job"):
+            directory = directory / f"attempt-{base['result_job']['attempt']}"
+        try:
+            output = json.loads((directory / "model-output.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            usable = False
+    prior = {**old, **({"output": output} if usable else {})}
+    # Compare analytical rows without resending the restored display sidecar;
+    # the raw response above supplies the versioned display data for reuse.
+    comparison_output = {key: result[key] for key in ("assessments", "limitations", "episode_questions", "synthesis")
+                         if key in result} if result is not None else None
     projection = effect_runtime_result("benchmark.trajectory.continuation", {
-        **prepared, "previous": prior, **({"output": result} if result is not None else {}),
+        **prepared, "previous": prior, **({"output": comparison_output} if result is not None else {}),
     })
     return {
         **projection,
@@ -506,6 +659,8 @@ def execute_pack(
     if reason:
         raise PackUnavailable(reason)
     _, reuse = _continuation(runtime_root, owner_goal_id, record, prepared, None, output_language)
+    if retry and prepared.get("display_request"):
+        reuse = None  # Explicitly completing a partial translation needs a new attempt.
     return _public_job(
         execute(
             prepared,
@@ -547,6 +702,12 @@ def read_citation(
     )
     result = view["result"]
     citations = [c for a in (result or {}).get("assessments", []) for c in a["citations"]]
+    citations.extend(c for field in ((result or {}).get("display") or {}).get("fields", [])
+                     for c in field.get("context_citations", []))
+    synthesis = (result or {}).get("synthesis")
+    if synthesis:
+        citations.extend(c for item in [synthesis["summary"], *synthesis["findings"], *synthesis["next_experiments"]]
+                         for c in item["citations"])
     native = (view.get("native_outcomes") or {}).get("projection") or {}
     native_citations = [native[key]["citation"] for key in ("initial", "best_valid", "retained", "final_valid") if native.get(key)]
     improvement = native.get("retained_improvement") or {}
@@ -577,3 +738,60 @@ def read_citation(
         "applicability": "historical" if requested in native_citations
         and view["native_outcomes"]["applicability"] == "historical" else view["applicability"],
     }
+
+
+def read_usage_turn(*, runtime_root: Path, owner_goal_id: str, pack_id: str,
+                    analysis_key: str, turn_id: str, output_language: str | None = None) -> dict:
+    """Read bounded counter evidence for an existing captured Turn, never raw model/tool text."""
+    _, record = _resolve(runtime_root, owner_goal_id, pack_id)
+    identity = _prepared(record, output_language) if output_language is not None else record
+    if analysis_key != identity["analysis_key"]:
+        raise PackUnavailable("analysis_key_mismatch")
+    captured = record.get("solver_usage")
+    if not captured:
+        raise PackUnavailable("usage_not_captured")
+    projection = captured["projection"]
+    turns = [*projection["turns"]]
+    if projection.get("incomplete_turn"):
+        turns.append(projection["incomplete_turn"])
+    matches = [turn for turn in turns if turn["turn_id"] == turn_id]
+    if len(matches) != 1:
+        raise PackUnavailable("usage_turn_not_captured")
+    turn = matches[0]
+    first, last = turn["first_line"], turn["last_line"]
+    digest = hashlib.sha256()
+    baseline = start = counter = end = None
+    try:
+        path = _source_path(Path(record["source_root"]), captured["artifact"])
+        for line, event in _usage_rows(path, digest):
+            if not isinstance(event, dict):
+                raise ValueError("invalid usage event")
+            if line > last:
+                continue  # Still hash the entire source before disclosing any evidence.
+            observed = _usage_event(line, event)
+            if not observed or observed["type"] != "event_msg":
+                continue
+            kind = observed["payload"].get("type")
+            if line < first:
+                if kind == "token_count" and observed["payload"].get("info"):
+                    baseline = observed
+            elif kind == "task_started":
+                start = observed
+            elif kind == "token_count" and observed["payload"].get("info"):
+                counter = observed
+            elif kind == "task_complete":
+                end = observed
+        if digest.hexdigest() != captured["artifact_sha256"]:
+            raise PackUnavailable("source_changed")
+    except PackUnavailable:
+        raise
+    except (OSError, ValueError, TypeError, KeyError):
+        raise PackUnavailable("source_unavailable") from None
+    events = [event for event in (baseline, start, counter, end) if event is not None]
+    if not events:
+        raise PackUnavailable("usage_evidence_unavailable")
+    return {"source_id": "solver_usage", "artifact": captured["artifact"],
+            "first_line": events[0]["line"], "last_line": events[-1]["line"],
+            "applicability": "current", "evidence_kind": "usage_counters",
+            "text": json.dumps({"turn_id": turn_id, "artifact_sha256": captured["artifact_sha256"],
+                                "events": events}, ensure_ascii=False, indent=2)}

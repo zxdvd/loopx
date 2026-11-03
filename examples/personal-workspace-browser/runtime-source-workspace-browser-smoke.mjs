@@ -60,7 +60,8 @@ try {
   const errors = [];
   page.on("pageerror", error => errors.push(String(error)));
   const url = new URL("/chat/", catalog[0].status_url);
-  url.search = new URLSearchParams({ goalId: "same-goal", view: "overview", statusUrl: process.env.LOOPX_RUNTIME_READER_BEFORE === "1" ? catalog[0].status_url : "/status.json" });
+  url.search = new URLSearchParams({ goalId: "same-goal", view: "overview", statusUrl: process.env.LOOPX_RUNTIME_READER_BEFORE === "1" ? catalog[0].status_url : "/status.json",
+    messageSession: "saved-session", message: "saved-answer" });
   let holdAnalysis = true, failAnalysis = false, releaseAnalysis, readStarted;
   let analysisWrites = 0;
   await page.route("**/api/chat/research-analysis?*", async route => {
@@ -74,6 +75,17 @@ try {
   if (process.env.LOOPX_RUNTIME_READER_BEFORE === "1") {
     await page.screenshot({path:resolve(output,"before-desktop.png")});
   } else {
+    await page.waitForFunction(() => new URL(location.href).searchParams.get("statusUrl")?.includes("source_namespace"));
+    assert.equal(new URL(page.url()).searchParams.get("messageSession"), "saved-session", "initial alias binding preserves the original answer's Session");
+    assert.equal(new URL(page.url()).searchParams.get("message"), "saved-answer", "initial alias binding preserves the original answer bookmark");
+    const readOnlyNotice = page.locator(".personal-read-only-notice");
+    await readOnlyNotice.locator(":scope > strong").filter({hasText:"只读来源"}).waitFor();
+    assert.doesNotMatch(await readOnlyNotice.innerText(), /你可以查看/, "The permission state stays visible without a default explanation paragraph");
+    await readOnlyNotice.getByRole("button", {name:"只读来源",exact:true}).focus();
+    const explanation = page.locator(".context-help-popover:popover-open").filter({hasText:"写入、纠偏和 Agent 会话仍留在来源主机"});
+    await explanation.waitFor();
+    await page.keyboard.press("Escape");
+    await explanation.waitFor({state:"hidden"});
     const initialRead = new Promise(resolve => {readStarted = resolve;});
     await page.locator(".personal-goal-tabs").getByRole("button", {name:"研究", exact:true}).click();
     await initialRead;
@@ -112,10 +124,18 @@ try {
     assert.equal(await page.locator(".research-history-edges > g > path").count(),2);
     await page.locator(".research-history-node").filter({hasText:"Retained route 0"}).click();
     assert.equal(new URL(page.url()).searchParams.get("research_node"),"route0");
+    // Even an unavailable finding in a bookmarked URL belongs to this source.
+    const findingLink = new URL(page.url()); findingLink.searchParams.set("research_finding", "source-local-finding");
+    findingLink.searchParams.set("messageSession", "saved-session"); findingLink.searchParams.set("message", "saved-answer");
+    await page.goto(findingLink.href);
+    await page.locator(".research-history-detail").waitFor();
     await page.getByLabel("选择控制面来源", {exact:true}).click();
     await page.getByRole("option", {name:"Fresh",exact:true}).click();
     await page.getByRole("heading",{name:"Fresh research",exact:true}).waitFor();
     assert.equal(new URL(page.url()).searchParams.get("research_node"),null,"a source switch must not rebind the same node id in another physical source");
+    assert.equal(new URL(page.url()).searchParams.get("research_finding"),null,"a source switch clears finding focus alongside node focus");
+    assert.equal(new URL(page.url()).searchParams.get("messageSession"), null, "a source switch clears the original answer's Session focus");
+    assert.equal(new URL(page.url()).searchParams.get("message"), null, "a source switch never rebinds an answer id in another physical source");
     await page.locator(".research-history-coverage").filter({hasText:"92 / 92"}).waitFor();
     await page.getByLabel("研究历程", {exact:true}).getByRole("button", {name:"关系图",exact:true}).click();
     await page.locator(".research-history-node").filter({hasText:"Fresh route 0"}).waitFor();
@@ -125,6 +145,9 @@ try {
     await page.goBack();
     await page.getByRole("heading",{name:"Retained research",exact:true}).waitFor();
     assert.equal(new URL(page.url()).searchParams.get("research_node"),"route0","Back restores the original source-local selection");
+    assert.equal(new URL(page.url()).searchParams.get("research_finding"),"source-local-finding");
+    assert.equal(new URL(page.url()).searchParams.get("messageSession"), "saved-session", "Back restores the original source's Session focus");
+    assert.equal(new URL(page.url()).searchParams.get("message"), "saved-answer", "Back restores the original source's answer bookmark");
     await page.goForward();
     await page.getByRole("heading",{name:"Fresh research",exact:true}).waitFor();
     await page.reload();

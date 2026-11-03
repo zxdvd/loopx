@@ -1,0 +1,1382 @@
+# RFC: Controller / Executor Sessions and One Governed Work Contract (v0)
+
+- **RFC status:** Accepted (design acceptance takes effect on merge)
+- **Supersedes / closes:** none
+- **Delivery maturity:** Proposal; no new runtime, schema or default is shipped by this document.
+- **Authors / owners:** LoopX maintainers; control-plane and runtime owners
+- **Created:** 2026-10-27
+- **Last normative revision:** 2026-11-02
+- **Implementation baseline:** `fe2b8dcbcb998647edb4bafb51932988bd7fdaa6`
+- **Related contracts:** [Effect interpreter](agent-loop-effect-interpreter-v0.md), [Session execution modes](agent-session-execution-modes-v0.md), [Semantic handoff](capable-manager-semantic-handoff-v0.md), [Overall roadmap](loopx-overall-roadmap-v0.md)
+- **Language mirror:** [中文版](controller-executor-unified-contract-v0.zh-CN.md)
+
+## Document map and maintenance contract
+
+The English and Chinese documents are semantic mirrors; a difference is a defect.
+
+Section 4 records source facts at the named baseline. Sections 1–3 and 5–11
+define the proposed decision and acceptance; section 12 records unresolved
+choices. Before merge this is a review proposal. Merge accepts the design,
+not implementation, installation, experiments or default promotion. Historical
+evidence belongs in a dated ledger when an implementation first produces it.
+
+## 1. Decision summary
+
+1. Converge quota execution packets and TurnEnvelope into **one versioned
+   governed work contract**: one schema, one semantic producer, one capture,
+   one delivery/recovery mechanism and one settlement identity. Different hosts
+   carry that same contract; permanent quota/Turn compatibility views are not
+   the target. Combine quota packet's decision-necessary information with
+   TurnEnvelope's delivery efficiency; replace both and qualify the net change
+   against the original quota-packet path. Existing domain owners still decide
+   their own facts.
+2. In the optional two-session profile, the **controller model session is the
+   sole model-facing Core client and an intelligent mediator of control work**.
+   It reads the contract, reasons about work,
+   talks to the executor and submits explicit typed Core operations. Core owns
+   legal transitions and receipts; the controller is not a second authority.
+3. The executor receives a natural-language task conversation, original source
+   material and ordinary host tools. It returns findings, artifacts, evidence
+   and questions. It neither consumes a second Core packet view nor authors
+   quota, Vision, lease or settlement fields. A small machine carrier records
+   routing and causality outside the task prose.
+4. Save complete context, then compose two independent delivery layers:
+   **Progressive by default across hosts**, and **Delta automatically only on
+   qualified hosts**. Keep unread material discoverable from the current capture.
+   Controller and executor have separate continuity evidence and cannot borrow
+   each other's baseline. Full recovery remains available.
+5. Unification first qualifies the existing single-session path. Two-session
+   execution remains opt-in until matched outcome and complete-cost evidence
+   justifies adoption. This RFC launches no benchmark or privileged operation.
+6. While the executor works, the controller remains available to the user:
+   answer questions, proactively explain meaningful changes, present useful
+   artifacts and incorporate feedback into subsequent work. Qualify that
+   journey through C6/C8; session separation alone does not deliver it.
+
+## 2. Problem and motivation
+
+A task can enter through App heartbeat, an external worker or `loopx turn`, yet
+its context and result obligations are presented differently. Shared decision
+facts already exist, but callers still choose packet formats, reconstruct
+prompts and adapt model-authored bookkeeping. Adding another controller-specific
+packet would multiply these paths.
+
+For example, an executor asked to repair a failing export needs the original
+requirements, the failure, permitted workspace and independent acceptance. It
+does not need to learn how to encode a Vision delta or debit a LoopX Turn.
+Separating that work may reduce distraction and repeated protocol input, but
+an extra controller can also lose constraints, add latency or over-coordinate.
+These are hypotheses to test, not benefits established by session separation.
+
+Long work also needs a continuing human conversation. The user should be able
+to understand progress, inspect results and correct direction while execution
+continues, without repeatedly asking for status. A controller that only forwards
+a final answer misses this product goal. Its reports and presentations must
+help the user judge the work, and feedback must reach actual later decisions
+and artifacts. Availability, a received message or an attractive preview alone
+does not establish that loop.
+
+### Invariants
+
+- Preserve complete accepted requirements, revisions, authority, unresolved
+  reads and evidence provenance; a shorter prompt is not permission to omit them.
+- Exactly one current control owner and one admitted executor attempt for the
+  selected work. Dialogue, routing ACKs and model completion are not receipts.
+- Notifications do not govern execution. A quiet notification result cannot
+  cancel admitted work; a message cannot override a genuine stop or budget gate.
+- A governed Turn is a bounded work/settlement unit, not a wake, model response
+  or controller/executor exchange. Do not charge a new Turn for each message.
+- Preserve original identity through retry, source correction and closeout;
+  never settle an old result against a newly selected Todo.
+
+## 3. Scope and non-goals
+
+In scope: contract convergence, context delivery, role-specific session binding,
+controller/executor communication, shared lifecycle reuse, host adapters,
+benchmark adoption, retirement and observable product acceptance.
+
+Non-goals: a new Goal store, workflow DSL, generic effect executor, permission
+engine, scheduler, mandatory two-Agent team, automatic host switching or changes
+to benchmark scoring. Peer teams retain existing delegation/acceptance contracts.
+This proposal does not move business reasoning into deterministic Core rules.
+
+## 4. Current-system contract
+
+| Existing concept | Actual role / source | Consequence for the target |
+| --- | --- | --- |
+| Quota packet / TurnEnvelope | [`quota.py`](../../../loopx/cli_commands/quota.py) projects a decided payload through separate ordinary/envelope branches; [`turn_envelope.ts`](../../../loopx/control_plane/quota/turn_envelope.ts) supplies bounded sections and action binding | Migrate both sets of obligations into one schema, then retire both old output paths |
+| Work context | [`interaction_contract.ts`](../../../loopx/control_plane/work_items/interaction_contract.ts) carries typed execution/context requirements | Extend the existing owner; do not create a controller decision engine |
+| Thin heartbeat | [`task_body.py`](../../../loopx/control_plane/heartbeat/task_body.py) renders product entry instructions with format-dependent branches | Keep the bootstrap/host entry; converge its consumed contract |
+| `loopx turn` | [`turn.py`](../../../loopx/cli_commands/turn.py), [`executor.py`](../../../loopx/control_plane/turn_driver/executor.py), [`settlement.py`](../../../loopx/control_plane/turn_driver/settlement.py) implement governed invocation and receipt-bound closeout | Reuse the lifecycle; a CLI entry is not another product runtime |
+| Managed Codex | [`codex_agent_session.py`](../../../loopx/control_plane/turn_driver/codex_agent_session.py) and [`codex_sessions.py`](../../../loopx/control_plane/turn_driver/codex_sessions.py) implement native session execution/resume | Runtime adapter, not a competing control plane; current Agent-scoped storage lacks the proposed role distinction |
+| Executor result | [`codex_cli.py`](../../../loopx/control_plane/turn_driver/codex_cli.py) asks for a schema-constrained result including delivery and Vision/progress fields | Move Core authoring responsibility to the controller in the two-session profile; preserve validation |
+| External worker | [`external_scheduler_worker.py`](../../../scripts/external_scheduler_worker.py) owns outer wake/command transport | Preserve that ownership; remove duplicate semantic orchestration where demonstrated |
+| Benchmark runner | [`worker.py`](../../../benchmark/runtime/worker.py) uses the product thin body for heartbeat and public Turn CLI for Turn mode; [`sessions.py`](../../../benchmark/runtime/sessions.py) reuses the native session adapter | Evaluation harness around product profiles, not a separate implementation target |
+| Turn Loop Controller | [Stable protocol](../../reference/protocols/turn-loop-controller-v0.md) defines a pure disposition function | Keep it deterministic; it is not the proposed controller model session |
+
+Execution mode (`managed_runtime` / `attached_host`), runtime provider, wake
+source, single/two-session organization and evaluation arm are independent
+axes. Not every combination is supported. Native/plain benchmark controls may
+intentionally have no LoopX Core and must remain uncontaminated controls.
+
+### C1 source audit: shared owners and the remaining split
+
+The source already shares more than the output names suggest. `_emit_quota_result`
+captures the complete decision **before** `_project_quota_cli_payload` chooses
+ordinary CLI compaction or `buildTurnEnvelope`. The latter delegates to the
+TypeScript owner; its Python module is a transport adapter. Both quota capture
+and Turn journal capture call `write_decision_capture` in
+[`decision_capture.py`](../../../loopx/control_plane/turn_driver/decision_capture.py).
+Native context delivery and explicit host handoff also reuse that module and
+the existing context-delivery owner. C1 must converge the remaining composition
+and consumer assumptions, rather than introduce another capture service or
+rewrite already shared delta/native-resume logic.
+
+Optional host polling is part of that original observation. The source-fidelity
+slice records `--record-host-poll` once before capture and reuses its receipt in
+ordinary CLI, envelope and native-context delivery. Recovery reads do not poll
+again. A later capture/handoff failure retains the already-recorded observation
+in its error response; it does not imply missing admission or authorize replay.
+Default-off behavior and unreadable receipt diagnostics remain unchanged. This
+repairs capture completeness, not the unified writer/consumer cutover or a
+long-horizon cost-benefit result.
+
+A separate native-presentation slice reuses the committed full recovery as its
+reader target, avoiding an unused second wire publication. Delta and unwrapped
+inputs retain their own immutable files and the same reader/lifecycle owners.
+On a matched 107,289-byte synthetic source, capture writes fall from 216,754 to
+107,289 bytes; full reader bytes and the 3,937-byte warm delta are unchanged.
+This qualifies only duplicate capture IO removal, not model-input reduction,
+complete cost, accepted outcomes or C1 writer/consumer cutover.
+For a small explicit output ceiling, native presentation can also omit repeated
+directory/selection commands while retaining the complete recovery command:
+append `--list` or `--select` to discover/read current facts without a baseline.
+The original 4,000-byte cold/warm/compaction cases retain their requirements,
+Stop, original identity and full recovery; this is transport qualification.
+
+Journal persistence is an independent source-fidelity prerequisite. The proposed
+Python adapter reuses context delivery's sparse number-token collector; both
+TypeScript consumers reuse one source-number validator. Journals remain JSON
+objects, with metadata only for integral floats, signed zero and unsafe integers.
+The journal owner restores these numbers before atomic publication and retains
+their distinctions in replay and immutable-plan comparisons. Ordinary native
+objects retain their encoding; historical receipts are not rewritten.
+
+The interim whole-JSON-string carrier failed the existing 2 MiB request boundary
+for a synthetic 1.55-million-character quoted body accepted by the object path.
+Keep that negative result: qualify the sparse replacement against the same
+workload and limit, including number-dense overhead. Neither this prerequisite
+nor a component byte saving qualifies the unified writer/consumer cutover or
+long-horizon net benefit.
+
+| Current source / obligation | Present envelope treatment | Required C1 disposition |
+| --- | --- | --- |
+| `interaction_contract.agent_channel.work_context` and pending required reads | `work_context` plus `required_reads`; identical inline material can be referenced | One complete requirement/evidence source with resolvable references; preserve pending reads and their completion conditions |
+| Selected Todo, recommended action, action portfolio and planning horizon | `action`; reference relocation and text compaction occur in `turnActionProjection` | One selected work/action identity; preserve complete actionable clauses and distinguish summaries from executable instructions |
+| `interaction_contract.cli_channel.settlement_plan` | Copied into `writeback.settlement_plan`, including original effect identity and conditional steps | Reuse the settlement owner unchanged; neither controller dialogue nor a new capture creates another debit identity |
+| User/agent interaction channels, execution policy and task orchestration | Separate `user`, `execution_policy`, `boundary` and orchestration sections | Preserve notification versus execution obligations, authority and stop gates; do not derive them from prose |
+| Replan packet, required reads and staged writeback | Dedicated replan projection and deferred writeback | Preserve fact/source access, policy-specific triggers and ordered mutations; no blanket activation of stride behavior |
+| Scheduler context and execution ownership | Scheduler projection with caller execution context | Carry the actual host owner and ACK obligations; a common schema does not transfer scheduler authority |
+| Complete saved decision, action signature and journal binding | Source hash, projected action hash and captured-decision reference are distinct | Preserve the distinction between semantic integrity, exact transport bytes and receipt identity; no hash substitution |
+
+This is an owner-and-obligation map, **not an exhaustive field inventory or a
+parity result**. Current projections have bounded text, allowlists and relocated
+references. Matching their action signatures alone cannot prove preservation of
+all source clauses or unknown fields. C1 implementation must enumerate those
+fields and callers against its exact base/head; anything unclassified holds
+cutover, rather than disappearing into an assumed compatibility view.
+
+A synthetic probe of the named baseline demonstrates the limit: two long
+`recommended_action` strings with identical prefixes but different tails produce
+the same action-signature document and both report `matches=true`, while their
+`source_decision_hash` values differ. An unregistered top-level source field has
+the same distinction. Conversely, a complete registered settlement plan survives
+projection, and changing its Turn identity changes the action signature. These
+observations reject promoting the existing bounded envelope unchanged into the
+complete contract. They do **not** establish a current authority-loss bug: the
+recommendation is diagnostic, the unknown field is synthetic, and the complete
+source commitment still distinguishes both inputs. No model benefit is measured.
+
+## 5. Proposed architecture
+
+### Ownership and one contract
+
+```text
+Core owners <-> unified governed work contract <-> controller session
+                                                       |
+                                      task / findings / artifacts
+                                                       |
+                                                 executor session
+                                                       |
+                                              scoped host tools
+
+Host adapters enforce dispatch, session fences, interruption and transport.
+Core owners validate operations and commit existing effect/settlement receipts.
+```
+
+Use the existing TypeScript interaction/work-context and effect owners. The
+composition owner captures their current facts once; it does not reimplement
+quota, replan, Todo or lease decisions. Python may collect sources and adapt
+native transport. Host-specific execution ownership remains explicit in the
+same contract, including delegated scheduler effects and their ACK obligations.
+
+The schema name and exact field migration require the task C1 inventory below.
+The following are required semantic groups, **not additional nested protocols**:
+
+| Group | Preserved capabilities |
+| --- | --- |
+| Identity and current decision | Contract version, capture/revision, Goal/Agent/work/Turn binding, selected action, admission, claim/lease, scope, approvals, cancellation and stop conditions |
+| Complete work context | Original intent and requirements, unresolved obligations, accepted evidence, current sources/revisions, required-read completion and authorized detail access |
+| Context delivery | Full/delta encoding, exact base/target digests, consumer session/role/epoch and immutable capture recovery |
+| Operations and closeout | Available typed operations, action binding/integrity, conditional ordering, validation and writeback/debit identity, scheduler and notification ownership |
+
+There is one semantic instance and one schema across CLI, heartbeat, managed
+Turn and evaluation. Full versus delta is an encoding choice for that instance;
+pagination is a transport limit. Neither creates a quota schema and a Turn
+schema. Native tool wrappers may carry provider-required envelopes without
+renaming, omitting or independently deciding contract fields. Human UI read
+models remain presentation sinks, not alternate executable contracts.
+
+The composition boundary is **after current domain decisions and host-operation
+binding, before immutable capture and context encoding**. All live writers use
+that boundary. They must not first compact a quota packet into an envelope and
+then label the result the complete unified contract. Required source material
+may use authorized detail references, but those references, revisions and read
+obligations must be complete and recoverable from that same semantic capture.
+
+“One capture” means one immutable semantic observation for an invocation, not
+one file for every purpose. Keep the complete canonical instance, encoded
+full/delta/page artifacts and the Turn journal's binding distinguishable. Exact
+file-byte digests protect transport; canonical hashes protect semantic content;
+the existing effect identity protects once-only settlement. None substitutes
+for another or grants current authority. Reserve an identity/location before
+serialization when recovery references need it; do not require a document to
+contain the digest of its own final bytes. Encoding, pagination, native resume
+and recovery derive from the saved instance without another guard. A legitimate
+new selection or authority check may produce a new capture; it must not rewrite
+an earlier observation or silently rebind an outstanding result.
+
+### Controller intelligence and semantic compression
+
+The controller session itself supplies intelligence. Its architectural role is
+to turn the control plane's complete facts and obligations into useful work for
+the executor, and interpret the executor's findings back into justified Core
+operations. “Intelligent compressor” describes this mediation of control work;
+fewer queries or shorter text alone do not implement it. The existing summary
+already assigns reading, reasoning and typed operations to the controller. The
+additional design choice here is **where decisions and attention are spent**:
+
+| Decision | Controller responsibility | Retained boundary |
+| --- | --- | --- |
+| What to do next | Compare the current Goal gap, evidence, viable work and complete costs; continue a useful route or change it when warranted | Core still decides legal admission, claims, leases, budgets and transitions; controller judgment grants no authority |
+| What to delegate together | Choose a coherent, verifiable task and decide which control concerns to absorb itself | The executor keeps local tool/step choice within scope; it does not request approval for each tool call or author Core bookkeeping |
+| What the executor must know | Deliver the task's full constraints, relevant contrary evidence, original materials and unresolved reads; explain the decision in task language | A summary is not an alternate contract or proof of source reading. Unknown relevance requires more material before dependent work |
+| What a result changes | Distinguish a finding, verified artifact, blocked attempt and accepted outcome; decide whether to continue, investigate or replan | Independent validation and current Core receipts, rather than either session's narrative, determine acceptance and settlement |
+
+Keep three operations separate. The deterministic composition owner combines
+domain facts without inventing policy; the existing codec encodes an exactly
+recoverable full/delta input; the controller performs task-dependent semantic
+selection and reasoning. A natural-language task can omit irrelevant control
+syntax and cannot promise bit-for-bit equivalence. Its adequacy is tested by
+preserved constraints, actual executor decisions and accepted outcomes, with
+the original authorized material reachable. Do not replace these operations
+with a second schema, model-authored state store or keyword-based relevance
+classifier. Controller notes are working context, not a new durable authority.
+
+For example, after an export repair produces a valid artifact but a packaging
+check fails, the controller can keep the useful repair, delegate the evidenced
+packaging correction and retain the original unsettled identity. It must not
+reduce the result to “done”, discard the failed check or ask the executor to
+learn writeback syntax. If the same evidence shows that the repair violates a
+shared requirement, it must revise the task and deliver that requirement before
+dependent work. This is a decision consequence, not a target compression ratio.
+
+Amortization is a hypothesis. A controller can absorb several control-heavy
+interactions while an executor continues ordinary authorized work, but every
+new selection, permission change, cancellation and closeout still follows its
+existing owner and freshness rules. Do not add a Core round trip or a new Turn
+for each local tool step; do not cache an old permission to avoid a required
+check. Small tasks, rapidly changing shared constraints and frequent controller
+recovery can make the extra session cost more than it saves.
+
+Controller failure must not make the executor a fallback Core client. Pause
+dependent dispatch, recover the original capture and session/attempt records,
+read current authority where required, and reconcile any already admitted
+result through the original identity. An executor summary cannot reconstruct
+missing control obligations. Conflicting or inaccessible required material
+holds dependent work; independent authorized work keeps its existing route.
+
+### Human interaction during execution
+
+In a supported two-session profile, executor activity must not block the
+controller's user conversation. Reuse the existing role-bound ordered queues,
+versioned requests, host observations and original-audience return path. A
+question or report does not start another business executor, interrupt an
+authorized attempt without cause, or create another Turn debit.
+
+| User result | Required behavior and evidence |
+| --- | --- |
+| Converse while work runs | Answer questions and expose already saved artifacts while the executor is busy. Distinguish the latest observed state, its source/version and unknown activity; do not invent percentage progress or infer acceptance from a model's completion claim. |
+| Receive useful changes proactively | Report important progress, new artifacts, risks, evidenced stalls and changes requiring a user decision, with their basis, impact and useful feedback request. Reuse configured event/delivery owners; coalesce duplicates and remain quiet without meaningful change. Do not add a polling model loop or a fixed reporting interval. |
+| Understand and compare the work | Select task-appropriate charts, relationship diagrams, timelines, option comparisons, screenshots or artifact previews. Keep a concise overview with reachable original evidence/version, uncertainty, accessible text and a readable fallback when media is unavailable. No requirement to generate every format for every update. |
+| See feedback affect execution | Preserve the original feedback and ordered revision through the existing request owner. Read back receipt, queued or clarification-needed handling, rejection with reasons, and actual adoption separately. Link adopted changes to the subsequent decision, work and artifact; an ACK or a revised brief is not proof of adoption. |
+
+The controller distinguishes a correction within admitted scope from a scope
+change needing fresh admission or missing authority. Apply revisions through
+the current owner before dependent dispatch or acceptance, retaining prior
+requirements and unresolved conflicting feedback. Do not silently treat the
+latest message as cancellation of earlier commitments. Where the current
+attempt cannot safely consume a correction, expose the pending revision and
+its actual consumption boundary; preserve the host's stop/fencing contract
+before any replacement attempt. Late results retain their original revision
+and evidence but cannot overwrite current requirements or settle different work.
+
+Use only the authorized conversation and audience. Presentation does not grant
+new channels, recipients or public disclosure. Reconnect/restart recovers
+pending feedback, attempt and delivery receipts before retry; neither lost
+report delivery nor a user question causes redispatch. Stop acknowledgement,
+host interruption and actual termination remain separately observable. Existing
+host/Core stops remain effective if the controller is unavailable.
+
+This is a C6/C8 product target, not a claim that current session or progress
+primitives qualify the journey. It adds no prerequisite to independent C1
+slices. In the later opt-in two-session evaluation, include reporting,
+presentation generation/delivery, both sessions' calls and cached/uncached
+input, material reads, recovery, latency and human attention in complete cost.
+No responsiveness SLA or efficiency benefit is presumed.
+
+### Review freshness and recovery
+
+A complete capture proves what was observed; it does not freeze write-time
+validity. Keep semantic content identity, review relevance and settlement
+identity distinct. A supporting outcome owned by another agent may still
+constrain the shared Goal: owner labels alone cannot remove its acceptance or
+requirement-status changes from the review basis. Narrow invalidation requires
+an explicit dependency-scoping rule and tests for shared constraints, not a
+role-name filter or an allowlist inferred from prose.
+
+When the same admitted obligation rejects a stale review, its current typed
+owner should return the complete current review basis and applicable control
+instructions. The consumer reads and reassesses that basis, then retries the
+original writeback with its original identities. Do not send it an unbound
+write command or require another guard merely to retrieve facts already used
+by the writer. A changed basis still rejects; returning context does not accept
+a decision or authorize spending. This recovery belongs to the existing
+composition/writeback boundary and must survive the C1 writer transition.
+It is not a claim that cross-agent invalidation has been narrowed or that the
+complete unified contract is delivered.
+
+### Executor input and output
+
+Choose **natural-language work exchange with runtime-owned metadata**, rather
+than an executor-facing Core view or an untracked chat. The controller explains
+the objective, relevant facts, boundaries and acceptance in task-appropriate
+prose; it can steer, answer questions and revise a request. The host carries
+opaque request/revision, attempt, session/generation, causal sequence and
+artifact references using existing request/dispatch records. The model need
+not reproduce those identifiers in prose. No new independent message ledger
+is introduced.
+
+Original requirements and authorized evidence are attached or accessible through
+host material readers. Core capture and access checks are performed by the
+controller/runtime; the executor does not call Core to retrieve them. Preserve
+mandatory source reading through the actual material delivery/read mechanism;
+controller paraphrase or a routing ACK is insufficient. Required material that
+cannot be delivered blocks dependent execution; independent work may continue.
+Untrusted source text never acquires instruction or tool authority.
+
+The executor chooses its local tools and steps within the delegated scope. It
+does not ask the controller before every tool use. Tool permission enforcement
+belongs to the host/provider, including scoped filesystem/process access:
+omitting a Core tool name from the prompt is not isolation. An unrestricted shell
+with Core credentials would violate this profile. Unsupported isolation is
+reported as unsupported, without silently claiming a qualified two-session mode.
+
+Outputs preserve the requested deliverable, artifact references, observed
+validation, failures and uncertainty. The controller interprets these results,
+performs or requests independent verification and submits explicit typed Core
+commands. Core never infers completion, permission or replan from substrings in
+the executor prose. Host termination is not business completion. A failed
+validation can lead to feedback and further work within the same admitted scope;
+a material scope/revision change needs a newly qualified dispatch.
+
+**Length is language-neutral and task-dependent.** Preserve independently
+executable meaning before minimizing size. Initial experimental targets are
+200–800 model tokens for an ordinary brief, 800–2000 for a complex handoff and
+150–600 for a result summary. These are unvalidated starting points, not schema
+limits, defaults, pass criteria or truncation rules. Count with the actual model
+tokenizer; record language/content mix. Code, mathematics, tables, source material
+and full requested deliverables retain their natural format. Measure summaries,
+attachments, rereads and all exchanges together; moving text behind a reference
+does not remove its cost. Small same-session corrections carry only the change
+when continuity is proven, with no minimum length requirement.
+
+For example, the controller can ask: “Repair the export failure shown in the
+attached reproduction; preserve the original ordering requirement and stay in
+the assigned workspace. Validate the regression and report remaining gaps.”
+The response can explain the change and link the patch and independent test
+result. Neither sentence is a substitute for original requirements, a permission
+grant or a canonical completion receipt.
+
+### Sessions, lifecycle and recovery
+
+Start with one logical work Agent and two explicitly bound native session
+roles. Do not create a second Goal/Todo/quota identity merely to split cognition.
+Extend the existing session binding owner with role and generation, separate
+ordered queues and separate context baselines; do not write two native IDs into
+the current single Agent-scoped slot. One controller owns control dialogue;
+at most one executor attempt owns the selected work. The controller role is not
+another simultaneous business executor. Peer or parallel execution still needs
+its existing independent claim/lease/handoff contract.
+
+1. The existing entrypoint obtains fresh admission or resumes an owed receipt.
+   It supplies the captured unified contract to the controller.
+2. The controller reasons from the Goal, unmet requirements, results and feasible
+   work; Core validates its chosen operation. Replan policy still controls when
+   review is required. Fact-first reasoning does not turn a stride-only trigger
+   into the default policy or require a gratuitous route change.
+3. Before dispatch, the host binds work/request revision, attempt, session role,
+   generation, scope and budget. Record intent before invoking the executor.
+4. The executor works and returns observations/artifacts. Readback distinguishes
+   delivery, execution, result availability, independent validation and accepted
+   writeback. Dialogue can span several exchanges without multiple quota debits.
+5. The controller proposes acceptance or revision; the existing effect owner
+   validates and settles the original Turn exactly once. A fresh decision then
+   continues runnable work, waits on the recorded event/time or stops.
+
+| Failure | Required handling |
+| --- | --- |
+| Controller crashes after dispatch | Recover the persisted attempt and executor state/result before deciding to resend; do not start a duplicate executor |
+| Result/settlement response is lost | Read existing receipts by original idempotency identity; retry only the unresolved effect |
+| Executor restarts or context is compacted | Fence the old generation, requalify continuity and deliver complete current material if unknown |
+| Cancellation, changed requirements, expired lease or late result | Revalidate current authority/revision before every owned dispatch/write; retain evidence, reject stale acceptance and reconcile admitted effects |
+| Stop while a tool is running | Host interrupts within its supported contract; report acknowledgement and actual termination separately. Preserve unknown/in-flight effects; never claim physical rollback from a stop receipt |
+| Controller is unavailable | Existing host/Core stop and budget mechanisms remain effective; hold dependent work and recover, without asking the executor to become Core owner |
+
+### Differential context
+
+Reuse the existing context-delivery owner and immutable capture mechanism.
+The target has two orthogonal layers; neither creates another semantic producer:
+
+- **Layer 1 — Progressive:** default model-facing delivery across LoopX hosts,
+  including ordinary CLI, MCP/HTTP and external workers without Session Hooks.
+  Keep the current Goal, applicable cumulative acceptance, failures/unknowns,
+  authority, stop conditions and outstanding read/settlement obligations inline.
+  Fold heavy history, source bodies and review evidence only through the existing
+  typed composition owner, with exact current-capture read routes and explicit
+  before-dependent-work obligations. Unknown relevance/schema keeps the complete
+  necessary material. This is a delivery default, not permission to collect or
+  persist additional data. A caller without an authorized, usable reader receives
+  complete inline context; a local file path is not a working remote read route.
+  If hard Host limits prevent both routes, expose unavailable context and hold
+  dependent work.
+- **Layer 2 — Delta:** an exact encoding of the composed instance, automatically
+  selected only with qualified consumer/session, role, epoch, schema and source
+  binding. Progressive can use full encoding; a complete inline instance can use
+  Delta. Qualify both combinations as well as Progressive plus Delta and neither.
+  A host without qualified continuity uses current full encoding of Layer 1,
+  without losing Progressive or requiring a native session to be invented.
+
+Distinguish two existing reuse claims. **`captured_file`** compares verified,
+compatible immutable saved artifacts; exact reconstruction does not require the
+model to have read the old file, reached EOF or retained its contents. **Retained
+model-input reuse** may omit previously delivered text only with trusted complete
+delivery and retention evidence for that exact consumer binding. A saved file,
+tool-output receipt or model self-acknowledgement cannot establish that evidence.
+Session Hooks observe their supported boundary; they grant no new authority.
+Preserve deletion, array order, null, empty values, original numeric values and
+complete strings. Unknown fields stay complete until reuse semantics are
+registered. Publish the current complete recovery source before an optional view
+or delta, verify reconstruction, and choose full when Delta plus its metadata is
+not smaller. Layer 1 likewise compares its final serialized UTF-8 view, read
+guidance and index with the same capture's complete alternative; use the smaller
+valid delivery, never trim mandatory meaning to meet a size budget.
+
+Current authority, admission, cancellation, unresolved-read, settlement and
+scheduler facts stay fresh and inline even if unchanged. A warm transport never
+relaxes the underlying instructions. Missing/out-of-order deltas, corrupt or
+unknown baselines select current full encoding/recovery. Truncated or missing
+reads recover the necessary range from the same capture. Compaction invalidates
+retention for the next work Turn's new baseline epoch; it neither invalidates the
+existing Turn nor forces an old-packet prefetch or immediate full reread. Preserve
+the original admission, recovery reference and once-only settlement/debit.
+Execution still checks current source validity and authority; recovering an old
+capture cannot revive cancelled work. The executor's task conversation consumes
+semantic material separately, not a relabeled controller Core-packet delta.
+
+#### Unread material across Turns
+
+Current immutable captures already support exact selected reads. The missing
+design is explicit discovery of unread material across deliveries, not a second
+reader or a requirement to consume an entire baseline. Extend the existing
+context/readback owner and native `session.json` projection; use its equivalent
+consumer binding on other hosts. Distinguish publication, model-visible delivery
+coverage, retention and semantic adoption/accepted outcomes.
+
+`confirmed_read_sections` is a proposed coverage projection;
+`consumed_pointers`, if retained as a name, must derive from that same owner,
+not become a second ledger or imply comprehension. Bind evidence to the exact
+source/capture digest, revision, consumer/session role, epoch, schema and selected
+pointer/range. Confirm coverage only from trusted Host observation of the actual
+model-visible result. Calling `--select`, file existence, reader EOF, a successful
+tool log or a self-ACK alone is insufficient. Partial/truncated/missing output
+stays unconfirmed; selecting a parent/index cannot confirm hidden descendants.
+Without such an observer, coverage is unknown and discovery stays conservative.
+This coverage never becomes a new full-read gate for `captured_file` Delta.
+
+Every warm delivery carries an **`unread_context_index`** (proposed name) for
+eligible non-inline material whose current content is unconfirmed or changed,
+including unchanged text omitted by Delta. Include exact current pointers,
+source revisions/digests and required-read status, rather than inferred relevance
+from a summary. A confirmed range applies only to its observed version; changed
+content, reordered arrays or ambiguous mappings require current rebinding and
+conservative discovery. Confirmed delivery never proves retained input or adoption.
+
+Each item resolves independently through existing `quota context-read --select`
+against the **current complete immutable `projection.json`**, with its exact
+capture SHA, without the previous packet, baseline file, model memory or patch
+chain. A derived `required-context.json` or wire view retains the existing owner's
+explicit mapping to the canonical source; roots and digests are not interchangeable.
+Historical exact-version lookup remains a separate, version-pinned artifact/read
+contract, not an invented path alias or a reason to silently use stale facts.
+If still-required earlier material is absent from the new projection, its owner
+must carry it forward or expose its current authorized source/read obligation.
+Legitimate expiry, revocation or removal must remain explicit, with unavailable
+required material holding dependent work; never silently mark it read or retain
+forbidden raw data. External materials keep their own source-consumption contract.
+
+#### Configuration and migration
+
+The following is proposed behavior, not a change to today's Codex-scoped
+`context_delivery` on/off interface. Evolve the existing typed configuration owner
+to express the two layer decisions; C1 maps exact names and versions before
+implementation. Do not add a parallel settings store or packet-format toggle.
+
+| Configuration / caller | Migration and effective behavior |
+| --- | --- |
+| No saved preference, model-facing caller | Target Layer 1 default applies after that caller's reader/fallback and cost qualification; Layer 2 is auto only for a qualified continuity host, otherwise full encoding. Today's ordinary CLI/other-host full behavior remains until that rollout qualifies. |
+| Explicit invocation/environment off | Preserve current precedence and full/raw delivery for that invocation, with no optional codec/coverage-ledger dependency; do not rewrite the saved preference. |
+| Existing persisted off | Preserve the complete off path and its original read/recovery obligations; never convert it to Progressive or Delta through an absent-preference migration. |
+| Existing on, supported host | Preserve the qualified native file/recovery semantics while mapping to Layer 1 plus qualified Layer 2 auto; no full-model-read prerequisite is introduced. |
+| Existing explicit on, unsupported host | Preserve the current validation error during compatibility. A versioned caller rollout may expose supported Layer 1 after qualification; do not silently reinterpret an unsupported request. |
+| New independently configured layers | Honor each layer independently, including Progressive off with qualified Delta auto. Explicit Delta off preserves Progressive; unsupported auto falls back to current full encoding. |
+| Internal raw machine consumers | Preserve their explicit `--context-delivery off` contracts; do not replace machine JSON with a model-facing file reference or mutate preferences. |
+
+Freeze recorded versions, experimental configurations and historical receipts.
+Qualify default expansion as a behavior change on real callers, including explicit
+off isolation and failure/recovery; a merged design alone changes no defaults.
+
+#### Delivery acceptance
+
+Reuse C1/C2's real-entry and §9 comparisons, including these decisive cases:
+
+| Case | Required observation |
+| --- | --- |
+| Ordinary no-hook CLI and supported MCP/HTTP/worker routes | Layer 1 works through the actual authorized reader or complete inline fallback; no dangling local-only references or invented native epoch. |
+| Unchanged unread tail becomes decisive next Turn | Warm Delta may omit its bytes, but the current index exposes its full source and actual subsequent selection/work obeys the recovered constraint. Index visibility alone is not success. |
+| Changed/unread bodies, reordered arrays, unknown fields or scope | Rebind to the current source; preserve applicable cross-Agent obligations and unknown-scope complete fallback. |
+| Partial pages, lost/truncated tool output, EOF without a Host witness | Do not confirm unseen bytes or hidden descendants; recover missing ranges, conservatively index unknown coverage, and keep file Delta usable. |
+| Compaction, role/session/schema/epoch change | Invalidate incompatible retention/reuse; recover current facts without replaying the original admission, effects or debit, and without old-packet prefetch. |
+| Revoked source, missing reader or legitimately removed material | Respect the current permission/source owner; expose the loss and hold dependent work or use authorized complete fallback, without stale-data disclosure. |
+| Full is cheaper; off and legacy configuration | Choose valid full delivery, preserve explicit off and frozen versions, and observe both source identity and raw machine-consumer parity. |
+
+The primary stored-body reduction is **`1 - V/F`**: `F` is the complete capture's
+actual UTF-8 file bytes and `V` the selected view body file's actual bytes from
+that same capture; saved bytes are `F - V`. Bind both artifacts and their digests,
+and report wire/index overhead separately rather than changing that denominator.
+The delivery size guards above still include their actual presentation overhead.
+A net-benefit claim also counts all later reads/recovery, host/controller/executor calls and latency,
+actual tokenizer/cached/output usage, human attention and accepted outcomes.
+Preserve unfavorable cases and frozen budgets. A smaller packet alone proves
+neither lower token cost nor better outcomes; §9's original quota single-session
+comparison stays primary, and two-session costs remain a separate comparison.
+
+### Candidate context by decision stage
+
+Preserve complete candidate context in the canonical capture; deliver it according
+to the decision the consumer must make through the same C1/C2 owners. This is a
+proposed replacement contract, not permission to skip existing required reads.
+The current capability gate assigns selection to the Agent. A `selected_todo`
+projection or list order alone does not prove that comparison is finished. Keep
+the complete-context repair in [#7557](https://github.com/loopx-project/loopx/pull/7557)
+until consumers and recovery obligations are replaced together.
+
+| Decision stage | Required input before the dependent decision |
+| --- | --- |
+| Select or reconsider work | Complete discoverable candidate index: identity/revision, original objective, declared Goal contribution, priority, eligibility, ownership, dependencies/blockers, current evidence/uncertainty and exact captured detail reference. Missing facts remain unknown. Read full detail for compared alternatives; if the index cannot establish whether an alternative matters, expand it before choosing. Do not silently keep only a top-K set. |
+| Continue admitted work | Full selected task, original and cumulative requirements, applicable global/shared constraints, dependencies, contrary evidence, current authority and stops. A registered continuation contract may defer independent alternatives while exposing new/changed eligibility and evidence that can require reconsideration. An Agent still instructed to select over all runnable candidates remains in the selection stage. |
+| Replan or accept the Goal | Expand all affected work and acceptance, including cross-Agent dependencies and contradictory evidence. Unknown scope expands to the complete captured basis. Ownership and earlier local completion do not prove irrelevance. |
+
+These are consumer obligations, not three packet schemas or new scheduler modes.
+The typed owner determines which reads can be deferred under an explicit contract;
+the Agent/controller makes the semantic choice. Author-provided purpose or risk
+summaries help discovery but cannot prove omitted prose irrelevant. Do not infer
+relevance from keywords, claim labels or a model-authored score. Without sufficient
+typed facts, comparison can still require all bodies: cold selection has no
+promised compression ratio. Default expansion of the current Agent's outcomes is
+useful for ordinary work, with other outcomes discoverable; shared requirements,
+dependencies, conflicting evidence and unknown relationships override that default.
+Outcome scope and candidate selection remain distinct owners.
+
+Extend the existing immutable reader to batch selected details from the **same
+capture**, retaining each requested item's revision, lineage, integrity, coverage
+and cursor. Distinct revisions of one Todo stay distinct. Missing, truncated,
+unsupported or changed detail holds dependent work and uses that capture's full
+recovery; a fresh guard is not a detail reader. One read can deliver several bodies;
+verified bodies need not be repeated within a supported retained session. Reading
+an index never acknowledges hidden bodies. Retained-model reuse covers only text
+actually delivered and retained for that consumer; saved-file Delta has its
+separate artifact proof above. Newly required detail must supply its text even
+if the machine already holds it. Context loss recovers the required model
+artifact, widening to the full source when its scope is unknown. Historical captures
+keep their original obligations. Read receipts prove coverage, not comprehension,
+retention, fresh authority or acceptance.
+
+The single-session Agent consumes this same pipeline. In the controller/executor
+profile, the controller compares alternatives and absorbs Core bookkeeping;
+the executor receives the complete selected work and authorized materials through
+the existing host channel. It does not become a Core client or receive every
+alternative to compensate for an incomplete brief. Reuse capability eligibility,
+work-context/read fulfillment, capture/detail and delta owners; add no parallel
+candidate store, Python relevance policy or per-item approval round trip.
+
+Qualify against original quota single-session delivery and the corrected complete
+context on matched inputs. Include a decisive constraint at the end of an initially
+unexpanded candidate, a useful alternative beyond any display limit, changed peer
+evidence, a now-runnable blocker, identical titles with different requirements,
+missing metadata, context loss and failed batch reads. Actual choice and subsequent
+verified work must honor the constraint; reconstructable JSON or an unchanged
+selected ID is insufficient. Count initial input, all detail reads, paging, retries,
+recovery, both sessions' calls, latency and human intervention through accepted
+outcomes. Keep small-task and cold-selection counterexamples where staging costs
+more. Report bytes separately from tokens measured with the actual model tokenizer.
+
+Delivery stays within C1/C2: qualify the shared same-capture reader and required-read
+recovery through an actual caller; replace that caller's stage-specific delivery
+and obligations together; then qualify retained delta and matched outcomes/full
+cost. Reuse [#7560](https://github.com/loopx-project/loopx/pull/7560)'s outcome-scope
+work without treating outcome relations as candidate-selection proof. Diagnostic
+counter folding in [#7587](https://github.com/loopx-project/loopx/pull/7587) is a
+separate compatible slice, not this replacement. Each slice can have its own PR
+and rollback; no generic retrieval framework or two-session rollout is required.
+
+The native quota caller now implements a bounded acceptance-material slice:
+known cumulative objectives, complete requirement descriptions and current review
+states remain in its required view; source history and review notes/evidence are
+addressable in the original immutable capture. Its read obligation, full/delta
+baseline and recovery move together. Selected detail reads never fulfill hidden
+required content or establish a full baseline. Unknown semantics and signed
+envelopes remain whole; the disabled path is unchanged. The original capture's
+values survive the typed path plan without a JavaScript numeric round trip.
+If the required view plus its detail index is not smaller in serialized UTF-8
+bytes, retain full delivery and its original obligations. Default detail examples
+select source, note or evidence fields rather than replaying the whole outcome.
+
+Native exec and code-mode fixtures also qualify two compactions within one work
+Turn: a sufficient working brief continues with the original work/settlement
+identity without replaying its packet or re-entering admission. The baseline is
+still invalidated; unfinished initial reads and missing necessary facts require
+same-capture recovery, while a new work Turn obtains its fresh guard. This is
+native protocol qualification with deterministic inference, not evidence of
+model compliance or live outcome/cost benefit. C1/C2 remains incomplete:
+candidate, preference and Explore staging, signed-envelope migration and matched
+accepted outcomes with complete costs still need their own qualification.
+
+## 6. Alternatives and design choices
+
+| Alternative | Disposition |
+| --- | --- |
+| Keep quota and TurnEnvelope as permanent compatible views | Reject as the end state: duplicate selection/rendering and field-drift remain; retain only bounded migration decoders |
+| Give the executor a compact Core packet view | Reject as the default two-session design: it retains protocol authoring load and two model-facing Core clients |
+| Pure natural-language chat with no runtime binding | Reject: stale/duplicate results, cancellation and restart cannot be reliably reconciled |
+| Always use two sessions | Reject: controller cost, latency and lossy delegation may exceed the benefit; keep a qualified single-session profile |
+| One universal runtime/effect executor | Reject: host, scheduler, transaction and provider permissions differ; share semantics and receipts, not ownership |
+
+## 7. Safety, privacy and compatibility
+
+Controller reasoning grants no extra authority. Runtime credentials and Core
+write capabilities remain inaccessible to the executor; scoped work artifacts
+are delivered under current access rules. Permission revocation and cancellation
+are enforced outside model memory. Sensitive source material stays within its
+authorized audience and retention boundary, including model-provider selection.
+
+Existing single-session behavior and optional-capability-off behavior need
+parity. Unsupported profiles fail explicitly. Old persisted captures and receipts
+retain their original version/signature and replay identity; never rewrite them
+to resemble the new schema. Mixed-version live writers are fenced, not merged
+by best-effort prose conversion. Schema removal requires the exact field inventory,
+lossless mapping and explicit maintainer approval required by the RFC index.
+
+## 8. Migration and rollback
+
+### C1 wire-layout recommendation
+
+The target combines quota packet's decision-necessary information with
+TurnEnvelope's efficiency and replaces both. “Complete” means complete necessary
+semantics, not every duplicated diagnostic in today's packet permanently inline.
+The lossless root-preserving candidate below is an intermediate migration oracle:
+it exposes omissions and reference breakage while consumers move. Renaming that
+candidate or forwarding all old fields does not satisfy the final design.
+
+Inventory each field and instruction clause with its owning rule and consumer.
+Keep current task, original requirements and revisions, relevant evidence,
+authority, required reads, execution/stop conditions and original settlement
+obligations available before their dependent decision. Reuse typed ownership to
+remove proven duplicate representations and unrelated diagnostic noise. Stable
+material can be referenced or differentially delivered only with verified
+retention or a resolvable, integrity-bound source and explicit read ordering;
+missing context must recover before dependent work. A reference alone does not
+prove that the model received its constraints. Unknown fields cannot be silently
+classified as optional or dropped by a prose heuristic.
+
+Within one canonical contract, absorb the useful envelope properties: clear
+execution identity and action organization, a single machine-owned binding,
+less duplicate instruction text, bounded delivery and reliable detail/recovery.
+Full/delta/detail are encodings of that instance, not permanent competing semantic
+views. Preserve raw source evidence in its existing owner without emitting a
+second executable packet. The final wire layout may change where its mapped
+references, consumers and measured benefit justify it; root preservation is not
+an immutable product constraint.
+
+| Source or concern | Candidate mapping and qualification |
+| --- | --- |
+| Current decision fields during migration | Preserve path/value in the lossless oracle; enumerate all modes and classify necessary semantics, proven duplication and diagnostic-only material before the final mapping. Do not infer optionality from one observed packet. |
+| Work context, required reads and settlement | Keep their existing `interaction_contract` paths and owners. Existing root-relative references retain their meaning; any intentional relocation requires explicit reference and reader migration. Never rewrite prose or command strings by pattern. |
+| Host-operation binding | Compose from the actual caller execution context. Validate consistency with source authority; reject conflicting bindings rather than choosing whichever representation is convenient. |
+| Content and transport integrity | Commit the entire semantic instance independently of the former compact action digest. Preserve exact capture-byte verification and original settlement identity as separate checks; changing a transport encoding does not create a new effect. |
+| Complete capture and Progressive view | Keep canonical `projection.json` distinct from its derived `required-context.json`/wire view; inventory exact root, revision, digest and pointer mappings. Save complete recovery before presentation; reference only through an authorized usable reader. |
+| Saved-file reuse, delivery coverage and retention | Inventory each existing typed owner and its evidence boundary separately. Proposed `confirmed_read_sections`/derived `consumed_pointers` describe observed coverage only; neither is artifact-reconstruction proof, comprehension or a full-read gate for file Delta. |
+| Unread discovery | Map the proposed `unread_context_index` to current complete-capture pointers, revisions and source/read obligations, including unchanged unconfirmed material. Rebind changed/unknown mappings; retain explicit unavailable states and permission checks. |
+| Historical receipts and readers | Decode the recorded version for outstanding work. A temporary internal adapter may serve an existing effect interpreter, but must not become a second emitted contract or a compact replacement for the model's required input. |
+
+A synthetic layout probe used real isolated File/SQLite quota captures and the
+existing TypeScript context codec. Preserving source paths permitted warm delta
+encoding; moving all facts under a new `facts` key while retaining the old
+`quota_packet` surface fell back to full with `delta_not_smaller`. Both layouts
+reconstructed exactly, and an epoch change required full delivery. Retention was
+synthetically asserted; this measures codec behavior, not host observation,
+model comprehension or outcome/cost benefit. It rejects **unmapped root relocation
+under the existing surface**, not nesting in general. A redesigned nested layout
+remains possible if its mapping and consumers justify the migration cost.
+
+Therefore C1/C2 must explicitly version the context surface and its fresh/reuse
+paths with the wire transition. Do not relabel an old surface or inherit its
+baseline by Turn identity. The transition first saves a complete compatible
+source; the model-facing view may already be Progressive. Reuse requires the
+appropriate saved-artifact or retained-model proof above. Qualification includes fields
+outside the old action projection, missing baselines, session/epoch changes and
+same-capture recovery. This resolves a concrete layout risk; shared writer and
+final-consumer replacement remain the next implementation, not another layout
+framework or a declaration that C1 is delivered.
+
+The unfinished implementation candidate [#7430](https://github.com/loopx-project/loopx/pull/7430)
+now composes a complete source in the existing TypeScript owner before both
+quota and native Turn capture, and passes it to actual Codex stdin. Isolated
+File/SQLite CLI tests with a synthetic executable cover source integrity,
+failed-attempt recovery and once-only settlement. This advances the two-writer
+and final-input replacement; it does not qualify C1 cutover. The candidate
+now routes capability reentry through the canonical CLI channel and preserves
+original hash-bound review/writeback readers in complete-contract Codex input.
+Synthetic File/SQLite execution qualifies those readers for fresh obligation-bound
+and prior Todo-bound replans. Native launch now derives its one causal binding
+from the recorded settlement identity; an observed semantic replan obligation
+cannot replace an existing Todo binding. Source-quota and health refusals still
+prevent host launch. Release fixture setup now imports its final source once;
+these executable checks do not qualify a real model or installed host.
+The structured-host renderer now shares complete-input transport with Codex,
+including original hash-bound material readers. Actual isolated File/SQLite
+Turn-to-DSH runner paths receive that same captured source; historical request
+prompts retain their exact content. Structured DSH still has Todo-scoped
+sessions: an obligation-only replan is rejected before dispatch, rather than
+inventing a Todo binding. Full-source input deliberately retains inactive
+capability configuration and diagnostics; those facts do not activate recall
+instructions or reflection result fields. This is a disclosed presentation
+change, with activation and historical parity checked separately.
+The Markdown quota entrypoints now render the same complete contract rather
+than selecting a second subset of facts. Actual File/SQLite CLI captures retain
+every field and instruction under both the ordinary and former envelope flag;
+JSON types and arbitrary source text survive rendering. External-worker
+File/SQLite admission, unresolved-attempt recovery and restart checks pass with
+the complete producer output, but an opaque shell wake still does not prove
+delivery of that original contract to an executor model.
+The real benchmark checkpoint preflight now verifies complete source equality
+for File/SQLite, replan/non-replan and context delivery on/off. Its optional
+full recovery retains that same source, with one initial admission and no
+reader writes. This qualifies transport to the checkpoint's model-input file,
+not native session capture or a benchmark/model outcome. A matching outer
+source hash alone previously admitted an unsupported version or invalid inner
+binding through `replan-view`; the reader now uses the existing complete-contract
+validator, while unversioned historical reads retain their decoder.
+Successor authoring is now bound to the already-decided Turn before complete
+capture, using the same formatting owner as historical staged reads. The complete
+contract includes original Turn/Goal binding and the obligation to finish the
+creation receipt's original settlement before ending, without executing the
+successor. A later modern material read does not append another binding. Actual
+File/SQLite App-heartbeat and generic-CLI tests create the successor from this
+inline contract, reject premature spend, settle the original identity once and
+leave the successor open, without another guard or a staged reader dependency.
+This changes complete-input successor guidance; historical unversioned reads
+retain their old behavior. Settlement-only, capability-intent, unbound and
+mismatched-context inputs retain their authoring unchanged. The checkpoint's
+legacy-reader tests alone do not establish this lifecycle result. Remaining
+material-reader retirement and other C1 consumers must not restore a second
+compact executable fact view merely to satisfy historical assertions.
+The complete-contract boundary now rejects unknown, empty or mistyped root
+execution actions, using the existing decision/frontier vocabularies both
+before capture and on later reads. Valid hashes do not make unknown execution
+semantics supported. Optional evidence remains intact, including unfamiliar
+versions and action-like field names; historical unversioned action routing is
+unchanged. This qualifies the root action boundary, not every required semantic
+field. A real File/SQLite native-CLI producer fault is rejected before capture,
+dispatch or spend. The preceding candidate reached a later launch refusal;
+these probes do not show prior unguarded execution. Selected-work tests now consume the complete interaction context and
+use the actual native `turn plan` entrypoint for host input. Real File/SQLite
+checks retain full task text, canonical notes, scoped gates, fresh requirement
+reads and source-loss recovery without rebinding an App capture to a native
+host. The six earlier failures at obsolete root-layout assertions remain
+historical failures; their downstream semantic checks now execute.
+The six earlier staged-reader failures are retained as historical evidence.
+The complete composer now reuses Explore's existing applicability correction
+before capture: a proven pure replan without a Todo does not advertise the
+Todo-bound result attachment. Evidence, independent graph commands and all
+before-work obligations remain; unfamiliar/custom instructions and ambiguous
+bindings stay intact. Supported Todo-bound attachment authoring remains fully
+inline. This is an applicability correction, not an authority change or a new
+compact fact view. Real File/SQLite native host inputs qualify both bindings.
+The staged tests now consume the complete CLI input and exercise the historical
+material-reader codec against that same immutable capture, including a hostile
+PATH, unavailable registry, tampered identity/acceptance and the actual writer.
+They compare all successor-binding instructions rather than excluding fields
+that the complete input now owns. The attachment refusal fixture supplies a
+valid explicit finding status so it reaches the real missing-Todo identity gate.
+All 23 staged checks and four native host cases passed; these overlapping scopes
+do not establish full consumer retirement or packaged-host qualification.
+The native context fixture now binds both CLI spellings to `complete_turn` and
+compares reconstructed facts with the original captures. Its four initial
+failures came from constructing the restoration oracle with retired surfaces;
+a Unix rendezvous check had masked the same mismatch by accepting full fallback.
+The corrected checks require the original target and actual delta mode. Ten
+cases pass through real Codex exec/app-server/code-mode and worker resume with
+isolated SQLite and deterministic loopback inference, including compaction,
+process resume, replaced history and an unqualified replay profile. No paid
+model or benchmark experiment ran. The current full quota-settlement CLI module
+passes 158 checks, including the historical cache-parity case; the earlier
+intermittent mismatch is not causally explained or relabeled as a pass.
+The File/SQLite context-to-DSH subprocess checks now use the complete capture and
+production request builder instead of treating a current CLI response as a legacy
+action projection. Normal capability-on/off inputs retain every source fact;
+bound replan uses the production capture binder and executes the delivered
+original-evidence readers. Altered source facts, schema versions and replan
+obligations reject before the runner seam. The explicit historical reference
+reader remains covered. Eight focused cases pass with an injected recorder,
+not a live DSH model; runtime code is unchanged by this test migration.
+The complete-contract boundary now also reuses the existing interaction decoder
+for its required version, channel types, notification policy and execution
+consistency. Four negative cases previously passed composition despite invalid
+semantics; they now reject even when a producer supplies correct integrity
+hashes. The original object and unknown optional facts remain intact rather than
+being replaced with normalized decoder output. File/SQLite native input checks
+reject an unsupported inner version before Codex prompt execution or DSH runner
+loading, without spend. The complete-contract/context/DSH/stdio selection passes
+352 cases; TypeScript checking and focused lint pass. This qualifies these
+interaction semantics, not every required field or packaged-host adoption.
+Remaining cache consistency investigation, other old reader expectations, staged instruction parity and
+actual optional/external consumers, version admission and packaged host
+continuity remain unfinished. Operation-SDK checks without an explicit native
+runtime are untested, not qualified. The default writer change remains
+unshipped; the PR is Draft for unfinished author work, not merely pending review. No model or cost benefit is
+established. Historical effect decoding is temporary; it must not become a
+second permanent executable view.
+
+### C1 caller replacement and cutover unit
+
+The cutover unit is a supported entrypoint **and its downstream consumers**,
+not an output flag. Source inspection at `99921829f2c5` identifies the following
+live seams. This supplements the earlier baseline audit; it is a migration
+design, not a claim that these paths have changed.
+
+| Live seam | Concrete replacement and retained owner |
+| --- | --- |
+| `quota.py::_emit_quota_result` / `_project_quota_cli_payload` | Compose the complete contract before capture; replace the ordinary/envelope execution-format branch. Retain admission, capability hooks, capture IO and host poll receipts with their current owners. A diagnostic status view is not an executable contract. |
+| `turn.py` after `build_fresh_turn_decision_owner().resolve()` | Call the same composition owner with the actual scheduler execution context. This entry calls `build_turn_envelope` directly; changing quota CLI emission alone does not migrate Turn. Retain the Turn plan, journal and receipt executor. |
+| `heartbeat/task_body.py::render_thin_heartbeat_task_body` | Replace the `captured_envelope` instruction split with one contract-reading instruction. Preserve exact selection/reentry transport, notification independence, required reads and original settlement. The saved bootstrap still resolves current instructions on wake. |
+| `turn_driver/codex_cli.py::_prompt` and `host_candidate.py::extract_turn_authority` / `render_prompt` | Replace format-specific model inputs at the actual prompt boundary. Today ordinary Codex receives the envelope, staged replan uses extracted authority, and structured hosts use extracted authority. Shared source bytes or signatures do not prove these final inputs preserve the same obligations. Keep provider result encoding and outer effect ownership. |
+| `turn_driver/decision_capture.py` and `cli_commands/quota_capture.py` | Reuse immutable capture, validated readers and full/delta delivery. Fresh delivery and saved-capture recovery must reconstruct the same contract; do not reuse a continuity baseline for a different projection merely because its Turn identity matches. |
+| `benchmark/runtime/worker.py`, `benchmark/runtime/sessions.py` and `scripts/external_scheduler_worker.py` | Migrate the product entry they actually invoke. Keep evaluation setup and outer wake ownership; do not add benchmark-only conversion or count a managed-host test as attached-host acceptance. |
+
+Before replacing any seam, its implementation PR records source path, field or
+instruction clause, current readers, target owner, representation, recovery and
+retirement condition. Relocation must include reference resolution; an omitted
+diagnostic needs evidence that it carries no action, authority, required read or
+acceptance obligation. Unknown data cannot silently disappear. Unknown required
+execution semantics cannot be made safe merely by forwarding their JSON: the
+dependent operation stays unavailable until a compatible consumer understands
+them. Do not classify obligations by substring matching.
+
+Use **one explicit version transition**, not automatic format negotiation per
+wake. New admission for a migrated binding requires compatible composition,
+delivery and consuming readers. An unsupported consumer receives an actionable
+unavailable result before dispatch, without creating a second live writer.
+Already admitted work continues its recorded version and original receipts;
+retain its historical decoder until that work and the supported recovery window
+are reconciled. Rollback likewise separates outstanding work from new admission.
+A version transition does not rewrite saved prompts, journals or source hashes
+as if they had always used the new contract.
+
+The first C1 PR must include the two production composition callsites above and
+at least one complete producer-to-final-input journey, with an explicit list of
+remaining readers. Qualifying that bounded slice does not enable the new writer
+for an unqualified host or close C1. The final cutover removes active format
+choice only after all supported readers qualify. Temporary decoders have named
+callers and removal conditions; they are not user-facing compatibility views.
+
+For each normal, selection, replan, wait, recovery and capability-off fixture,
+check independently authored obligations at **three boundaries**: composed
+contract, reconstructed delivery, and final model input plus required material
+reads. Include a source change outside the old action signature, a missing
+required source, an incompatible consumer and a lost settlement response.
+Reconstruction equality alone misses prompt-layer omission; a complete prompt
+alone misses stale authority or a duplicate debit. These are integration
+requirements, not authorization to run a model or launch an experiment.
+
+1. Inventory actual producers, readers, writers, saved prompts, captures and
+   external integrations. Map each old field and prose obligation to its retained
+   owner/field, authoritative derivation or explicitly approved removal. No
+   blanket claim of “same facts” suffices. Keep original failure fixtures.
+2. Qualify the unified contract in single-session execution through real quota,
+   thin-heartbeat and Turn entrypoints. Switch one writer per binding; old
+   readers are explicit version-pinned migration adapters with an identified
+   caller and removal condition. They do not become permanent product views.
+3. Add role-aware sessions, shared lifecycle reuse and the opt-in two-session
+   profile. Reuse existing same-session/native-resume and effect recovery code.
+4. Adopt the shared product profile in benchmark workers and the packaged App
+   heartbeat journey. Each host proves its own observation, stop and recovery
+   boundaries. Neither a CLI test nor a model simulation qualifies installed App.
+5. Remove old producers, format selectors, duplicate renderers and dual-format
+   tests after the last supported active reader migrates. Keep only historical
+   version decoders for supported receipt replay. End-state acceptance requires
+   one emitted contract and no choice between quota and Turn packet formats.
+
+Rollback disables new admission for the affected profile, drains or interrupts
+its attempts, reconciles receipts and restores the prior qualified profile on
+the next admitted work. Do not silently replace native sessions or reinterpret
+pending receipts. Before field/decoder removal, demonstrate export, old-version
+readback and downgrade behavior; retain the old reader until the supported
+retention/upgrade boundary is satisfied. No destructive migration is authorized
+by this document alone.
+
+## 9. Validation and acceptance
+
+| Claim | Evidence and required result | Boundary |
+| --- | --- | --- |
+| One complete contract | Field/clause inventory; same captured normal, replan, wait, recovery and capability-off workloads through all active entrypoints; identical reconstructed semantic instance | One serializer unit test is insufficient; malformed/unsupported versions fail explicitly |
+| Lossless context delivery | Full/delta/recovery equivalence, missing/late/truncated pages, role/session mismatch and real native compaction/resume | Include all read/recovery costs; no second admission or spend |
+| Role isolation and recovery | Controller/executor crash windows, duplicate dispatch, late result, revision change, lease expiry and stop under actual host tools | No executor Core access; no stale result adoption or hidden business executor |
+| Semantic adoption | Original requirements → controller decision → actual executor work → independent verification → accepted result and original-audience return | Read receipt, valid JSON or successful replan alone cannot pass |
+| Intelligent mediation | Coherent delegation, changed/contrary evidence and result interpretation across ordinary continuation, shared-constraint change, controller loss and a small-task counterexample | Explain the actual decision consequence and retained obligations; fewer queries or a shorter handoff cannot pass |
+| Human interaction during execution | C6/C8 journey below through the real supported host and packaged conversation | Controller responsiveness, proactive delivery and feedback adoption require separate evidence; no inference from routing ACKs or previews |
+| Shared production paths | Real CLI and supported File/SQLite paths; real isolated PostgreSQL suite when authority persistence changes; packaged App heartbeat and benchmark worker reuse | No live Goal corruption; unsupported/unrun hosts stay unqualified |
+| Outcome and cost benefit | Matched current single-session, unified single-session and unified two-session arms with fixed task/model/policy/budget/evaluator | Report uncertainty, failures and counterexamples; no claim from prompt bytes alone |
+
+The primary C1 comparison is **original quota packet versus the fused contract
+in the same single-session product path**. Keep host, task, original facts,
+model/policy, evaluator and available budget matched. Compare cold full input,
+ordinary warm continuation, replan, missing baseline and interrupted recovery;
+include long/repeated history and capability-off cases. The old envelope may be
+a diagnostic reference arm, not a second permanent destination. Compare the new
+full encoding and its delta encoding separately so transport reuse cannot hide
+a semantic regression. Controller/executor separation is a later independent
+comparison and cannot explain away a C1 regression.
+
+### Default adoption and retirement qualification
+
+The [context-delivery guide](../../guides/context-delivery.md#qualify-default-adoption-and-retirement)
+turns this comparison into an operator plan. Documentation may ship first;
+future broader default adoption needs both a declared DeepSeek model and a declared
+strong model to support the claimed effectiveness and complete-cost scope.
+The reference's existing Codex-scoped default remains current behavior, not proof
+that these model comparisons have passed.
+Record exact model/provider/version/effort and fixed task, source, host, tools,
+feedback, evaluator, budget and stops. Include actual final input/output,
+cached/uncached tokens, requests, detail/recovery reads, wall/IO/setup costs and
+human attention, alongside task-native outcomes, constraint misses, wrong
+actions and once-only recovery. Unknown cost is not zero; preserve repeated-run
+variation, failures and negative cases. Historical-best optimization keeps that
+native ranking, with final-retention facts separate. A Codex-scoped adapter
+cannot qualify a DeepSeek host.
+
+Keep this sequence in C1/C2/C9: explanation → both-model comparison → supported
+profile's reversible adoption/release → scoped default → named old-path
+retirement. Mixed or regressed results retain opt-in or explicit limitations.
+Retirement requires actual caller replacement, historical decoding/readback,
+supported-version and rollback coverage; full snapshots, digest checks,
+authority/identity/stops and recovery remain. Do not preserve two permanent
+semantic owners or delete a still-supported reader based on new-path existence.
+This is a qualification plan, not new experiment authority, a claim of shipped
+benefit, or a gate on other independent authorized work.
+
+The [packaged source comparison](ledger/controller-executor-unified-contract-v0/2026-10-29-packaged-source-comparison.md)
+pins mainline quota and the C1 candidate through real File/SQLite CLI delivery,
+file deltas, capture refusal/recovery and once-only settlement. Source fidelity
+improves while cold and observer-output bytes grow on that workload. Exact-byte
+capture checks and standalone numeric hash integrity remain distinct; this
+engineering evidence does not establish net cost benefit or complete C1.
+
+Qualify [human interaction during execution](#human-interaction-during-execution)
+on the same long-running work, rather than disconnected chat demonstrations:
+
+| Scenario | Decisive observation |
+| --- | --- |
+| Executor busy; user asks or inspects an artifact | Controller responds from current observed evidence and serves the saved artifact before task completion, without a second executor or an unnecessary interruption. |
+| Meaningful change, then no change and duplicate events | A useful report reaches the authorized audience without repeated user prompting; unchanged/duplicate observations do not produce repeated reports. Record actual delivery and cost, not a promised interval. |
+| Continuous or conflicting feedback | Each revision and its handling remain attributable; subsequent work/artifacts prove what was adopted. Pending, rejected, conflicting and authority-dependent changes stay explicit. |
+| Stop races correction or result | Current revision and scope govern acceptance; acknowledgement is distinct from actual host termination, and unknown/in-flight effects remain visible. |
+| Disconnect, restart, lost reply or delayed/duplicate result | Recover original queues, revisions and receipts; no lost correction, duplicate dispatch/debit or stale overwrite. Retry only unresolved delivery/effects. |
+| Rich view, missing media, stale evidence or wrong audience | A task-appropriate comparison/preview supports a user judgment and feedback; source/version and unknowns are readable, accessible text remains usable, and unauthorized delivery is refused. |
+
+Exercise the supported managed and attached App heartbeat journeys separately;
+an unsupported host stays explicit. Qualify installed behavior separately from
+packaged fixtures. Preserve the original-quota single-session gate, then measure
+the added interaction and presentation costs in the optional two-session arm.
+
+### C1 baseline boundary and reuse inventory
+
+The baseline is the **original caller-visible quota delivery**, not the raw
+internal decision. In `cli_commands/quota.py`, the original emitter captures the
+source, optionally applies `replan_cli_view` when a capture exists, then applies
+`compact_quota_should_run_cli_payload`. Native context delivery adds its own
+full/delta transport afterward. Record the exact revision, host flags, capture
+availability and detail options for both arms. Comparing a compact candidate
+against the larger internal source would overstate savings; comparing a full
+candidate against only a deferred entry would omit baseline follow-up costs.
+
+The existing paths already contain useful efficiency behavior. C1 should absorb
+its qualified semantics into the shared TypeScript composition/context owners,
+then retire the old caller-specific producer. Do not call the whole legacy
+compactor as a shortcut: exact sharing, omission and deferred reads have different
+information and failure consequences.
+
+| Existing information / transformation | Fusion disposition and decisive check |
+| --- | --- |
+| Selected work, original requirements, acceptance, evidence, permissions and stops | Available before the dependent decision. Keep distinct revisions and contradictory evidence; neither lane labels nor action signatures establish completeness. |
+| Identical acceptance copies, nested vision audits, authoring and optional guidance | Prefer one complete in-contract owner plus an exact reference where smaller. Compare JSON types and every clause; different/missing owners remain distinct. No extra read or new decision authority. Existing projection tests provide characterization, not new-consumer qualification. |
+| Bounded Todo lanes, shortened suggestions and omitted boundary/history entries | Treat as deliberate omission, not lossless deduplication. Retain completeness/count facts and same-capture recovery; prove the omitted item cannot change the current decision, or load it before deciding. Never inherit the old display limits as semantic limits. |
+| Captured replan review, acceptance detail and writeback readers | Separate decision facts from later authoring format while retaining the original identity and all required meaning. Bound reads to the same capture; count every required stage, error and recovery. A missing/stale reference must not trigger a new guard or authorize work. |
+| Full/delta/resume delivery | Reuse the existing continuity owner after composition. Establish exact semantic reconstruction and required material availability before action; charge cold fallback and lost-baseline recovery. |
+| Scheduler, admission and settlement identities | One authoritative instance before capture; transport must preserve host ownership, original Turn and once-only effects. Repeated representations do not justify weakening their checks. |
+
+A standalone late move of acceptance sharing is not automatically a useful
+prerequisite. A controlled source-level substitution against main
+`99cfa3ac559bfa237f04f36fb7e926672fea44b2` moved only that rule from the local
+CLI compactor into the existing `reference_context` call. On the same synthetic
+fixture with 100 distinct requirements, serialized projection input grew from
+102,680 to 344,010 bytes; the 102,189-byte caller-visible output stayed equal.
+The ordinary path still made one projection call; all-details delivery changed
+from local sharing to one call. These are projection-parameter measurements,
+not framed traffic, latency, model billing or the integrated C1 comparison.
+Retain this negative result rather than declaring a net efficiency win.
+
+The compatibility owner also uses one local JSON serialization identity for
+acceptance, Vision-audit and replan-authoring sharing. Python's ordinary value
+equality must not turn distinct booleans/numbers, integer/float representations
+or signed zero into an alias to another observation. Exact copies still share
+one in-response owner, including after key reordering; different facts remain
+complete. This repairs source fidelity without another projection RPC. It does
+not qualify the unified writer, final consumers or original-quota outcome/cost
+benefit.
+
+Repair relocated acceptance aliases at the current compatibility owner without
+that extra transport. Existing aliases must follow only inline owners actually
+moved by the projection, including aliases visited before their owner. Preserve
+complete values, original numeric types, carrier order and existing size checks;
+never infer arbitrary reference chains or rewrite saved captures. The complete
+C1 composition must absorb this rule at its source-owning boundary and retire
+the Python compatibility algorithm with its callers, rather than repeatedly
+shipping all acceptance copies across another bridge. Writer/consumer cutover
+and the original-quota outcome/full-cost gate remain open.
+
+A fixed-source synthetic replan audit of candidate `895f38fc5` illustrates why
+the boundary matters. With stride off and no capture staging, the raw source was
+21,461 compact UTF-8 JSON bytes, the original quota CLI projection 20,543, and
+the complete candidate 21,738: **+5.82% against CLI**, versus +1.29% against raw
+source. With capture staging, entry/review/writeback totaled 21,882 bytes versus
+21,821 for the candidate. With `evidence_conditioned_v1`, those staged bytes
+totaled 28,558 versus 33,368 for the candidate. These use the existing synthetic
+replan fixture and production projection/read functions with a synthetic capture
+route; they are not executed model trajectories or an installed-host trial.
+Extra acceptance/Explore reads, actual request framing, cache behavior and
+outcome differences are unmeasured. The legacy receipt toggle produced identical
+data and does not add an independent workload. No net-benefit conclusion follows.
+
+The next implementation slice should first qualify exact same-contract sharing
+through composition, readers and recovery, then assess deferred-detail choices
+with the matched workload above. Keep cold and staged totals separate and retain
+negative results; do not force a byte target by dropping unique instructions.
+
+Report the field/clause diff and its decision consequence together with actual
+model input, cached/uncached tokens, added reads/round trips, reconstruction,
+latency, failures/retries, verification and human intervention. A smaller first
+packet with more total reads can be negative. Judge positive only with preserved
+required semantics and comparable accepted outcomes at lower complete cost, or
+better accepted outcomes at comparable budget. Mixed results remain a tradeoff;
+transport-only passes and unmeasured outcomes remain inconclusive. Set numeric
+criteria before running matched experiments, using the existing measurement
+contract rather than inventing an arbitrary compression threshold. C1 cutover
+requires this quota-baseline comparison; a serializer or byte reduction alone
+cannot close it.
+
+Use the [existing measurement model](long-horizon-harness-benchmark-research-program-v0.md#6-measurement-model).
+Include both sessions' input/output/cached tokens, tool and material reads,
+planning/replan/recovery, wall time, verification, human attention and provider
+cost; unknown usage is not zero. Persist causal attribution without duplicating
+cost when an artifact is forwarded. Compare accepted outcomes under comparable
+budgets, not only replan counts or executor speed. Freeze criteria before any
+separately authorized experiment; this RFC specifies no automatic winner.
+
+For the later two-session comparison, attribute controller reasoning and all
+handoff/material, validation and recovery costs as well as executor work. The
+break-even question is whether those **added complete costs** are outweighed by
+avoided control/bookkeeping work, repeated execution or human intervention,
+while preserving comparable accepted outcomes. Account for actual repeated
+model consumption even when both sessions read the same artifact; forwarding
+one usage receipt must not double-count that receipt. Report workload-specific
+tradeoffs and unknown billing/cache coverage. No universal overhead threshold,
+compression ratio or per-message token ceiling is proposed. This comparison
+does not replace the prior original-quota versus unified single-session gate.
+
+## 10. Operational contract
+
+Existing Goal Chat, settings and work readback must expose the selected profile,
+actual controller/executor availability, current work, meaningful progress,
+unavailable/error state, scope of Stop and returned artifact. Avoid exposing
+internal packet selection as a user task. Reuse shared typed projections and
+configuration precedence; do not create an independent controller console or
+duplicate provider/model settings.
+
+C6/C8 own the [execution-time conversation and reporting journey](#human-interaction-during-execution).
+Reuse existing Chat/Lark artifact, activity, feedback and delivery projections
+within each supported audience; these sinks do not become work authority.
+Readback must distinguish report delivery, feedback handling, actual adoption
+and independent acceptance. Keep a failed report recoverable without replaying
+the underlying work.
+
+Observe captures, request/attempt/role/generation, current revisions, effect
+receipts and cost coverage in existing diagnostics. Give operators actionable
+recovery without raw private transcripts. Notifications remain separate from
+work continuation; event/time waits and backoff use the current scheduler owner.
+No model busy-polling loop or new recurring automation follows from this RFC.
+
+## 11. Normative delivery plan and refactor tasks
+
+These tasks extend roadmap S2/S4/S6/S7/S11 and the effect interpreter's existing
+convergence work, not a new roadmap. Reconcile related active tasks/PRs before
+claiming; reuse qualified fixes rather than reimplementing them. Task IDs below
+are stable design references, not claims that a canonical Todo is complete.
+
+| Task / dependency | Owner and concrete replacement | Decisive exit / rollback |
+| --- | --- | --- |
+| **C1 — Unified contract; first** | Interaction/work-context + quota/Turn owners: inventory fields/instruction clauses, capture/view/read-evidence mappings and versioned two-layer configuration; capture one schema and migrate ordinary quota/Turn producers and thin renderer | Single-session real-entry parity with necessary information, action binding and once-only settlement, plus §9's quota-baseline effectiveness/full-cost comparison; preserve explicit off and version-pinned readers until cutover qualifies |
+| **C2 — One context-delivery pipeline; C1** | Context owner + host observers: compose cross-host Progressive, independent qualified Delta, same-capture detail/recovery and conservative unread discovery; replace staged candidate delivery and duplicate packet branches | Unchanged unread constraints reach actual next-Turn work; qualify no-hook readers, exact evidence/continuity and all four layer combinations at complete cost; full fallback without a new admission; rollback encoding/configuration through the existing owner |
+| **C3 — Session binding and native lifecycle; C1** | Session/runtime owner: extend existing binding for role/generation; reuse native create/resume/observe/interrupt and ordered queues | Two roles cannot overwrite the Agent native ID, cross-read baselines or race execution; recovery observes existing attempts before retry; disable new role admission to roll back |
+| **C4 — Shared governed lifecycle; C1** | Effect/Turn owner + outer worker adapters: converge duplicated prepare/dispatch/observe/validate/writeback/settle orchestration around existing typed operations and receipts | App/Turn/external worker agree on admission, original result and single debit under partial failure; scheduler effects retain their true host owner; switch callers back only after receipt reconciliation |
+| **C5 — Replan and result authoring boundary; C1** | Goal/Vision and interaction owners: expose current facts and typed controller operations; remove ordinary executor obligations to manufacture Core writeback fields in the two-session profile | Fact-first decision preserves default/stride policy differences, all evidence and required validation; invalid proposed writes reject; single-session authoring remains qualified during rollout |
+| **C6 — Controller/executor exchange; C2–C5** | Manager/request + host owners: reuse versioned semantic requests and result return; replace schema-constrained executor work with natural-language work/material exchange; keep user interaction available during execution | Complete sources, local autonomy, Core isolation, corrective exchange, actual feedback adoption through ordered revisions and independently accepted outcome; busy, conflict, stop and late-result cases in §9; return new work to qualified single-session profile on rollback |
+| **C7 — Benchmark reuse and full-cost attribution; C4/C6** | Benchmark toolkit/execution owner: thin adapters select the same product profiles; consolidate duplicated launch/session settings and track both sessions without changing frozen trials | Native/plain controls unchanged; matched-arm configuration/replay and complete cost coverage; no jobs launched merely by merging helpers |
+| **C8 — Product configuration and operational readback; C3/C6** | Existing App/settings/Chat projections: one effective configuration owner, role-aware activity, failure/recovery, proactive evidence-based reports, task-appropriate rich views, feedback/readback, Stop and artifact return | Packaged managed and supported attached heartbeat journeys from §9, including unavailable host, late results, quiet/deduplicated reports, accessible fallback, audience denial and recovery; installed qualification separate; no new packet-format toggle |
+| **C9 — Retire old paths and qualify adoption; C1–C8** | Contract/runtime maintainers: remove superseded producers, format switches, duplicated prompts and tests; update protocols, guides and RFC delivery facts | Caller/field/decoder retirement inventory, historical replay and rollback evidence; App + benchmark acceptance and matched benefit before any default promotion |
+
+Evolve this delivery boundary through those existing tasks, not another roadmap:
+
+1. **C1:** map canonical capture, derived view, reader references, coverage and
+   retention to existing owners; version both layer decisions and the legacy
+   migration matrix above. Keep unresolved mappings explicit before caller cutover.
+2. **C2:** replace actual no-hook and native callers with the common Progressive
+   composition/reader and conservative unread index. Add trusted Host coverage
+   observations where available; unknown coverage must still work. Then qualify
+   independent Delta auto/full recovery on supported hosts, with §5's negative
+   cases and the original quota single-session/full-cost comparison.
+3. **C9:** retire conflated switches, duplicate delivery assumptions and superseded
+   readers only after their consumers, off path, historical replay and local
+   rollback qualify. Reconcile existing C1/C2 tasks/PRs and preserve unpassed size
+   or adoption gates; do not put this design into a frozen experimental treatment.
+
+The existing native context entry now supports a bounded C2 precursor: complete
+captures remain on disk, the normal response exposes file navigation, and exact
+file deltas do not require model retention. After compaction the next work Turn
+establishes a new full saved baseline, without an immediate full reread.
+Required facts still precede dependent decisions; admission and settlement are
+unchanged. This does not qualify C1's unified producer/consumer cutover or the
+matched effectiveness/full-cost result in §9. Rollback uses the existing
+context-delivery off path; staged material composition remains separately owned.
+
+Native delivery now composes the existing progressive plan and full/delta codec
+in one TypeScript invocation. The intermediate Python plan application and its
+dispatch are retired. Python retains the session lock, Host observations and
+private immutable-file publication: it saves the current complete recovery
+before the optional transaction, then publishes any required view before
+returning its encoded delivery. Original numeric spellings and source-reference
+identity use the existing projection-edit transport. This changes neither
+required-read obligations nor admission, settlement or the off path; it does
+not close C1/C2 adoption or establish model-outcome/full-cost benefit.
+
+The existing initial reader also consumes complete acceptance navigation bound
+to the captured Goal/Agent/Todo and source revisions. Suggested outcome bodies
+reach the starting read, including peer dependencies; other outcomes remain
+addressable. Missing or mismatched navigation keeps the prior detail route.
+This reuses the relationship owner rather than adding an ownership/prose scope
+rule. It changes neither activation defaults nor saved-view bytes or Delta;
+matched initial-plus-required-detail traffic is a separate component comparison,
+not the original quota outcome/full-cost qualification or an unread ledger.
+The TurnEnvelope owner retains the top-level decision-field vocabulary and
+supplies it to Progressive selection. Moving the selector does not duplicate
+that vocabulary across owners or relax its semantic module budget.
+
+Native Progressive supporting-material discovery now has a bounded precursor:
+an unconfirmed index binds exact deferred-field pointers to the current complete
+projection. Initial reads and file-backed warm deltas expose the complete index,
+without requiring an old packet or model retention. Selected reads do not clear
+its conservative coverage status or create a second ledger. Current-source CLI
+reads qualify transport into a synthetic next artifact, including changed and
+reordered material and unavailable predecessors; they do not establish natural
+model adoption. All-host defaults, other omitted material, trusted Host coverage,
+writer/reader cutover and §9's outcome/full-cost comparison remain open. Index
+overhead participates in the existing full-versus-folded byte guard.
+
+C1's inventory is part of its usable replacement, not a standalone architecture
+framework. C3/C4/C5 can proceed independently once C1's contract is stable;
+C7 can prepare measurements before C6 but cannot claim two-session outcomes.
+Implementation PRs must name the replaced caller, remaining gap, actual tests
+and rollback. No full language migration or unrelated manager rewrite is a
+prerequisite. No task is complete merely because a new abstraction compiles.
+
+C1 is one acceptance target, not one mandatory PR. Independently useful
+prerequisites may land first when existing callers adopt the shared owner, their
+entrypoint contracts are qualified, and rollback is local. For example, move
+exact context-reference composition and recovery into the existing TypeScript
+owner while the current quota and Turn entries keep their schemas. Name the
+remaining cutover consumer; do not add unused infrastructure or a second ledger.
+Separate shared-owner prerequisites, producer/capture cutover, reader recovery
+and retirement, and adoption/full-cost qualification where each boundary is
+independently reviewable. Record dependencies in the existing tasks and PRs.
+Splitting delivery does not close C1 or waive §9's original quota-baseline test.
+
+Native launch rechecks use the original `SettlementIdentity` as their sole
+Todo/obligation binding. Both `codex-cli` and `codex-app-server` call the existing
+`current_turn_host_launch_decision` owner; an observed replan packet is context,
+not an additional binding argument. This transport simplification can ship before
+wire cutover. Qualify real launch, refusal and replay against the same original
+identity; retain the current typed eligibility, Stop and settlement owners.
+
+The first **cutover** slice pairs the complete field/clause migration with a
+real single-session producer and consumer replacement. Start at the
+shared quota emission boundary and trace both attached heartbeat delivery and
+the Turn adapter; retain their actual host ownership. Do not build an unused
+third serializer while both active writers keep their own semantics. Existing
+`test_quota_decision_capture.py` and `test_turn_host_decision_capture.py` provide
+capture/recovery coverage to extend, not proof of the proposed schema. Qualify
+normal work, selection, replan, wait, unsettled-Turn recovery, unavailable detail
+and capability-off behavior through the real entries on isolated fixtures.
+Each case must check complete obligations and original settlement identity as
+well as reconstructed data. The oracle must include source-different but
+projection-equal cases; comparing two outputs of the same projection is circular
+evidence for completeness. Native-resume/context work remains with its existing
+owner; adopt its qualified changes and add only the integration coverage missing
+at the new composition boundary. Keep C1 open until the replacement works and
+the remaining supported readers have explicit cutover/retirement conditions.
+
+### Responsibility convergence and contributor handoff
+
+The [source-backed refactor handoff](ledger/controller-executor-unified-contract-v0/2026-10-27-refactor-handoff.md)
+decomposes C3/C4/C7/C8/C9 into concrete simplification candidates. It belongs to
+this plan, not another roadmap or evidence of shipped implementation. The pinned
+audit separates duplicated decisions, misplaced shared code, existing shared
+owners and hypotheses requiring semantic comparison.
+
+Keep three responsibilities clear:
+
+1. **Core semantic owners:** decide legal work/session/effect transitions and
+   validate original authority and receipts in the existing typed domains.
+2. **Shared managed execution:** drive those decisions through session binding,
+   native invocation, observations and recovery. Reuse existing Turn/effect
+   owners; this is not another permission engine or scheduler.
+3. **Host adapters:** implement native SDK/CLI transport, event translation,
+   supported resume and resource cleanup. Preserve real host differences rather
+   than hiding unsupported behavior behind a nominal common interface.
+
+Select work from the overall roadmap, current user outcome, demonstrated
+bottlenecks, open delivery and canonical work. Package IDs and table order are
+references, not global priority, an Agent's fixed agenda or reserved ownership.
+C1/C2 composition/capture/final-input work and these simplifications are options
+within that same frontier, not competing permanent Agent mandates. Owners name
+code boundaries, not assignments or execution grants; recheck target main,
+open PRs and canonical work before claiming one.
+
+| Existing task / package | Simplification result | Start condition |
+| --- | --- | --- |
+| **C3.1 Managed-operation protocol** | Codex and DSH adopt one operation-session flow; remove duplicated binding/profile checks and handoff/start orchestration, and DSH's dependency on a Codex-owned generic handler | When this duplication is the selected bottleneck: existing single-session behavior and two real callers; retain native differences |
+| **C3.2 Session-binding callers** | Reuse shared persistence; eliminate caller-side binding reconstruction and private cross-host imports where a cohesive existing operation can replace them | Pair with C3.1 if a separate change would leave only a rename/facade; role/generation expansion waits for stable C1 |
+| **C4.1 Receipt-to-continuation** | Adopt a qualified typed Turn observation/continuation boundary; retire replaced Python receipt reconstruction and decisions | Keep journal recovery distinct from next-work decisions; integrate C1 and existing recovery fixes |
+| **C4.2 Outer-worker adoption** | Consume qualified semantic results instead of reconstructing common retry/continuation policy | C4.1; preserve wake ownership, original receipts and opaque-command uncertainty |
+| **C4.3 Settlement-adapter convergence** | Reuse settlement primitives; retire a second step/condition interpreter only where obligations coincide | Candidate: compare Host Todo completion and Turn settlement; coordinate active settlement PRs |
+| **C7.1 Worker/process adapter cleanup** | Reuse applicable launch/drain/cleanup helpers and remove proven duplicated mechanics | Candidate: match ownership, signal/deadline and control-arm semantics first |
+| **C8.1 Operational readback** | App/Chat/CLI consume the same typed work/session facts; retire superseded caller classifications | Candidate: role facts available and duplicate classification demonstrated; retain unknown/coverage and audience boundaries |
+| **C9.1 Lease/source-path retirement** | Remove obsolete normal-writer routing/wrappers after caller migration; retain required release, fence-close and original-receipt recovery | Cross-RFC candidate: shared-authority/TS acceptance, not a controller-launch prerequisite |
+| **C9.2 Contract-test consolidation** | Shared invariant cases and thin native-adapter tests replace duplicated complete-flow fixtures | Companion to the owning replacement; preserve unique integration and negative cases |
+
+These are nine investigation/delivery packages, **not nine promised PRs**, a
+fixed remaining count or mandatory work before C1 lands. Do not select C3.1
+merely because it appears first, or prefer visible code deletion over a more
+valuable current correctness, contract-delivery or authority-retirement outcome.
+If selected, C3.2 may share C3.1's reversible PR. Only actual semantic dependencies
+constrain order. Existing-behavior repairs and proven local simplifications can
+land before C1; contract-dependent cutovers retain that dependency. Similar-looking
+files do not qualify a conditional candidate.
+
+Record why the chosen slice advances the current global outcome, which higher-
+value alternatives or in-flight deliveries were considered, and its actual
+dependency. Reassess after delivery or new evidence; this inventory neither
+exhausts useful work nor obliges an Agent to finish one lane before changing
+focus. Priority advice creates no new admission or approval gate.
+
+Each claimed package carries its source owners/callers, target boundary,
+specific deleted rules/branches, real-path oracle, dependencies and rollback
+in the existing Todo and PR. An audit assigns no peer work and creates no parallel
+task store. Complete caller replacement and deletion in the usable slice; keep a
+wrapper only for an identified external or recovery contract. Measure total
+production changes across languages, semantic owners, complete-transaction
+runtime crossings and the next representative rule's change sites. Python LOC
+reduction or a new shared class alone does not establish simplification; no
+arbitrary net-negative LOC quota replaces correctness or required validation.
+
+Reuse [TypeScript change-locality payoff](typescript-control-plane-migration-v0.md#28-change-locality-as-migration-payoff)
+and [smoke consolidation policy](../../development/good-smokes.md). Internal
+behavior-preserving replacements need real caller/backend evidence, not new
+settings screens. Changed caller-facing operations/readback retain C8's packaged
+frontend failure/recovery journey and first-screen evidence. C1/default-adoption
+complete-cost and benefit qualification remain unchanged; a bounded refactor is
+not full RFC acceptance.
+
+## 12. Open decisions
+
+1. **Exact wire name and field mapping — contract owner, before C1 cutover.**
+   Prefer evolving one existing registered vocabulary/version over a parallel
+   protocol family. Section 8 recommends preserving source-root paths; finalize
+   the version and host-binding mapping after the complete producer/reader/field inventory;
+   maintainer approval is required for removal, not for preserving old meaning.
+2. **First qualified two-session host — runtime owner, before C6 dispatch.**
+   Choose from actual session control and isolation capabilities. Managed Codex
+   may be an implementation vehicle; App heartbeat is a required product
+   qualification. Neither entry is presumed to prove the other or benchmark use.
+3. **Resource allocation and default — product/evaluation owners, after C7–C8.**
+   Test same-model controller/executor first to isolate architecture effects;
+   cheaper controller models and different budgets are separate experiments.
+   Keep the profile opt-in until full outcome/cost evidence supports a decision.
+
+## Appendix A: Execution ledger
+
+Source audits and subsequent delivery evidence live in
+[`ledger/controller-executor-unified-contract-v0/`](ledger/controller-executor-unified-contract-v0/).
+The directory is the index. A planning/source-inspection entry does not establish
+runtime delivery; live priorities and claims remain in the roadmap and canonical
+work. Keep historical entries append-only and refine the current normative plan
+here rather than treating a dated audit as a permanent execution queue.

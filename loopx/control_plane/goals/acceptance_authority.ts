@@ -1,4 +1,5 @@
-import {bindGoalOutcomesStateOwner, GoalOutcomeValidationError, goalOutcomeCheckBasis, refineGoalOutcome} from "./outcome_requirements.ts";
+import {bindGoalOutcomesStateOwner, GoalOutcomeValidationError, goalOutcomeCheckBasis, refineGoalOutcome,
+  outcomeContextNavigation} from "./outcome_requirements.ts";
 /** Acceptance effects use the existing canonical head, CAS and operation journal.
  * Only trusted local owner/host adapters may invoke these mutation exports. */
 import {isAbsolute} from "node:path";
@@ -560,6 +561,8 @@ export async function inspectGoalAcceptance(
   goalRef?: WireExactGoalRef,
   includeWorkDetails = true,
   agentId?: string,
+  registeredAgents?: unknown,
+  contextAgentId?: string,
 ): Promise<JsonObject> {
   const head = await store.loadAuthority();
   if (head.status !== "loaded") return source(store, {...head});
@@ -577,9 +580,18 @@ export async function inspectGoalAcceptance(
   const state = authority.kind === "legacy" ? authority.state
     : authority.owner_matches && authority.lifecycle.state === "active" ? authority.state : null;
   const tasks = [...todos.entries()].filter(([key]) => todoId === undefined || key === todoId).map(([key, todo]) => ({
-    todo_id: key, todo_semantic_digest: goalAcceptanceTodoDigest(todo),
-    ...(state ? acceptanceTask(key, todo, state) : {state: "unbound", criterion_ids: [], applicable: false}),
+    todo_semantic_digest: goalAcceptanceTodoDigest(todo),
+    ...(state ? acceptanceTask(key, todo, state)
+      : {todo_id: key, state: "unbound", criterion_ids: [], applicable: false}),
   }));
+  const contract = projectGoalAcceptance(head.head, goalId, registeredAgents);
+  const context = !includeWorkDetails && contextAgentId !== undefined && todoId !== undefined
+    ? outcomeContextNavigation(head.head, goalId, contextAgentId, todoId, contract) : null;
+  if (context && (!Array.isArray(registeredAgents) || !registeredAgents.includes(contextAgentId))) {
+    context.coverage_complete = false;
+    context.limitations = [...context.limitations as string[], "context_agent_unavailable"];
+    context.suggested_outcome_ids = ((contract.outcome_requirements as JsonObject).outcomes as JsonObject[]).map(o => o.id);
+  }
   return source(store, {status: "loaded", provider_revision: head.provider_revision,
     revision: state?.revision ?? null, contract_digest: state?.digest ?? null,
     contract: state ? state.document : null, tasks,
@@ -587,7 +599,8 @@ export async function inspectGoalAcceptance(
       completion_requirements: acceptanceCompletionRequirements(head.head, goalId, todoId)}),
     ...(agentId === undefined || currentGoalObjective(head.head) === null ? {} : {objective_work_digest: goalObjectiveWorkDigest(head.head, agentId),
       goal_objective_guard: goalObjectiveWorkGuard(head.head, agentId)}),
-    goal_acceptance_contract: projectGoalAcceptance(head.head, goalId)});
+    ...(context === null ? {} : {outcome_context: {...context, provider_revision: head.provider_revision}}),
+    goal_acceptance_contract: contract});
 }
 
 async function local(value: unknown, kind: "inspect" | "configure" | "verify" | "lifecycle" | "refine" | "objective"): Promise<JsonObject> {
@@ -606,7 +619,9 @@ async function local(value: unknown, kind: "inspect" | "configure" | "verify" | 
           request.todo_id == null ? undefined : requireAuthorityStoreId(request.todo_id, "todo_id"),
           request.goal_ref === undefined ? undefined : parseWireExactGoalRef(request.goal_ref, "acceptance request goal_ref"),
           request.include_work_details !== false,
-          request.agent_id === undefined ? undefined : requireAuthorityStoreId(request.agent_id, "agent_id"));
+          request.agent_id === undefined ? undefined : requireAuthorityStoreId(request.agent_id, "agent_id"),
+          request.registered_agents,
+          request.context_agent_id === undefined ? undefined : requireAuthorityStoreId(request.context_agent_id, "context_agent_id"));
       }
       if (kind === "configure") return configureGoalAcceptance(store, request);
       if (kind === "refine") return refineGoalAcceptanceOutcome(store, request);
@@ -623,10 +638,17 @@ async function local(value: unknown, kind: "inspect" | "configure" | "verify" | 
     const taskReason = kind === "inspect" && error instanceof AuthorityStoreProtocolError
       && ["goal_acceptance_unbound", "goal_acceptance_stale"].includes(error.message)
       ? error.message : null;
+    const providerFailure = localAuthorityOpenFailure(error);
     const result = {...failure(taskReason ?? (error instanceof AuthorityStoreProtocolError ? "goal_acceptance_invalid_request" : "goal_acceptance_effect_failed"),
       error instanceof Error ? error.message : "acceptance effect failed"),
       ...(error instanceof GoalOutcomeValidationError ? {error_detail: error.message} : {}),
-      decision_read_from_provider: false, legacy_fallback_used: false, ...localAuthorityOpenFailure(error)};
+      // Fixed, typed guidance survives the public CLI's exception redaction;
+      // never forward arbitrary provider/IO exception messages as error_detail.
+      ...(providerFailure.reason_code === "local_authority_provider_unavailable" ? {
+        error_detail: "PostgreSQL authority requires a service-owned store factory, which this local Goal acceptance entrypoint does not supply. " +
+          "Use a host supplying that factory; this local entrypoint supports File/SQLite. This refusal does not authorize switching providers.",
+      } : {}),
+      decision_read_from_provider: false, legacy_fallback_used: false, ...providerFailure};
     return store ? {...result, source_authority: authorityStoreSourceAuthority(store)} : result;
   }
 }

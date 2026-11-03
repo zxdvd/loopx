@@ -11,7 +11,7 @@ from pathlib import Path
 import signal
 import tempfile
 import sys
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 from loopx.capabilities.explore.result_log import validate_explore_result_event
 from loopx.chat_action_store import ChatActionStore
@@ -24,9 +24,23 @@ from loopx.chat_server import (
 from loopx.chat_store import ChatSessionStore
 from loopx.control_plane.effect_runtime import restart_effect_runtime
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+from loopx.capabilities.benchmark_toolkit.trajectory_assessment_store import DEFAULT_CONFIG, register_pack, inspect_pack, execute_pack
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tests" / "control_plane"))
 from canonical_authority_fixture import initialize_canonical_authority
+from host_process_fixture import write_python_host_fixture
+
+
+def materialize_analysis(source_root: Path, analysis: dict) -> Path:
+    """Preserve the captured UTF-8 artifact bytes that its digests describe."""
+    source_root.mkdir()
+    for name, text in analysis["artifacts"].items():
+        path = source_root / name
+        assert path.parent == source_root, "Fixture artifacts must be flat"
+        path.write_bytes(text.encode("utf-8"))
+    input_path = source_root / "input.json"
+    input_path.write_bytes(json.dumps(analysis["input"], ensure_ascii=False).encode("utf-8"))
+    return input_path
 
 
 def main():
@@ -35,6 +49,8 @@ def main():
     parser.add_argument("--assets-dir", type=Path, help="Frozen packaged UI for before/after inspection.")
     parser.add_argument("--fixture", type=Path, action="append",
         help="Captured-event wrapper; repeat for independently selectable Goals.")
+    parser.add_argument("--workspace-directory", action="store_true",
+        help="Serve the production directory for scoped Goal navigation tests.")
     args = parser.parse_args()
     fixtures = Path(__file__).resolve().parents[2] / "apps/presentation/dashboard/src/data/fixtures"
     sources = args.fixture or [fixtures / name for name in (
@@ -69,18 +85,59 @@ def main():
                 "adapter": {"kind": "read_only_project_map_v0", "status": "connected-read-only"}})
             log = runtime / "goals" / captured_goal / "explore-result-log.jsonl"
             log.parent.mkdir(parents=True)
-            log.write_text("".join(json.dumps(event, ensure_ascii=False) + "\n" for event in capture["events"]))
+            log.write_bytes("".join(json.dumps(event, ensure_ascii=False) + "\n" for event in capture["events"]).encode("utf-8"))
             initialize_canonical_authority(runtime, captured_goal, build_todo_runtime_shadow_projection(
-                goal_id=captured_goal, todos=[], handoff_mode="soft_claim"), state_path=state, provider="sqlite")
+                goal_id=captured_goal, todos=capture.get("todos", []), handoff_mode="soft_claim"), state_path=state, provider="sqlite")
             original.update({path: path.read_bytes() for path in (state, log)})
         registry = root / "registry.json"
         registry.write_text(json.dumps({"schema_version": 1, "common_runtime_root": str(runtime), "goals": goals}))
         original[registry] = registry.read_bytes()
+        # Optional synthetic analysis uses the real pack verifier, process/job
+        # owner and HTTP reader. It never enables model dispatch from the page.
+        fixture_config = {**DEFAULT_CONFIG, "research_synthesis": False}
+        fixture_config.pop("research_synthesis_revision", None)
+        for capture in captures:
+            for index, analysis in enumerate(capture.get("analyses", [])):
+                source_root = root / f"analysis-{capture['goal_id']}-{index}"
+                input_path = materialize_analysis(source_root, analysis)
+                scope = dict(runtime_root=runtime, owner_goal_id=capture["goal_id"])
+                registered = register_pack(**scope, input_path=input_path, source_root=source_root, title=analysis["title"],
+                                           config=analysis.get("config", fixture_config),
+                                           usage_jsonl=analysis.get("usage_jsonl"),
+                                           usage_session_id=analysis.get("usage_session_id"),
+                                           include_incomplete_usage=analysis.get("include_incomplete_usage", False),
+                                           include_tool_context=analysis.get("include_tool_context", False),
+                                           native_outcomes_json=analysis.get("native_outcomes_json"))
+                for language, output in analysis["outputs"].items():
+                    provider = write_python_host_fixture(root / f"analysis-provider-{index}-{language}",
+                        ("#!python\n" if sys.platform == "win32" else f"#!{sys.executable}\n")
+                        + "import sys\nfrom pathlib import Path\n"
+                        f"sys.stdin.read()\nPath(sys.argv[sys.argv.index('-o')+1]).write_bytes({json.dumps(output, ensure_ascii=False).encode()!r})\n"
+                        "print('{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}')\n")
+                    selected = inspect_pack(**scope, pack_id=registered["pack_id"], output_language=language)
+                    execute_pack(**scope, pack_id=registered["pack_id"], analysis_key=selected["analysis_key"], output_language=language, codex=str(provider))
         metrics = {"history_reads": 0, "mutation_attempts": 0}
 
         class Handler(ChatRequestHandler):
+            def _send_json(self, payload, *, status=200):
+                parsed = urlparse(self.path)
+                if status == 200 and parsed.path == "/status.json" and "run_history" in payload:
+                    goal = parse_qs(parsed.query).get("goal_id", [""])[0]
+                    query = "?" + urlencode({"goal_id": goal}) if goal else ""
+                    payload = {**payload, "local_dashboard_api": {
+                        **(payload.get("local_dashboard_api") or {}),
+                        "read_only_sources": [{"id": "research-preview", "label": "Research preview",
+                            "status_url": f"http://127.0.0.1:{self.server.server_port}/status.json{query}"}],
+                    }}
+                return super()._send_json(payload, status=status)
+
             def do_GET(self):
-                path = urlparse(self.path).path
+                parsed = urlparse(self.path)
+                path = parsed.path
+                if not args.workspace_directory and path == "/status.json" and parse_qs(parsed.query).get("view") == ["workspace-directory"]:
+                    # Like the runtime workspace reader, use the full-status
+                    # fallback: directory-only hydration omits source identity.
+                    return self._send_error("Use the captured source's full status read.", status=404)
                 if path == "/fixture/readback":
                     return self._send_json({"ok": True, **metrics,
                         "source_unchanged": all(path.read_bytes() == value for path, value in original.items()),
@@ -89,9 +146,9 @@ def main():
                     metrics["history_reads"] += 1
                 if path in {"/healthz", "/status.json", "/api/chat/explore-results",
                     "/api/chat/capabilities", "/api/chat/endpoints", "/api/chat/sessions", "/api/chat/goal-configuration",
-                    "/api/chat/research-analysis",
+                    "/api/chat/research-analysis", "/api/chat/research-analysis/citation", "/api/chat/research-analysis/usage-turn",
                     "/api/actions", "/api/chat/goals/contexts", "/api/chat/goal-results",
-                    "/api/chat/sidebar-goal-order", "/api/chat/usage-statistics",
+                    "/api/chat/sidebar-goal-order", "/api/chat/usage-statistics", "/api/chat/todo/detail",
                     "/api/chat/delivery-review", "/api/chat/goal-acceptance", "/api/chat/projects",
                     DEFAULT_EXTENSION_PRESENTATION_SURFACES_PATH, DEFAULT_EXTENSION_PROJECTION_PATH,
                 } or path.startswith("/chat/"):

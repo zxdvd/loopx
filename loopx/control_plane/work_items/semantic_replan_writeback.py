@@ -32,6 +32,8 @@ from .autonomous_replan_obligation import (
     project_todo_lifecycle_settlement_reentry,
 )
 from .progress_observation import guarded_replan_transition_delta, semantic_delta_from_writeback
+from .lifecycle_recovery import attach_receipt_replan_context
+from .replan_semantics_codec import project_replan_semantics
 from ..effect_runtime import effect_runtime_request_scope
 from .repair_delta import (
     build_repair_delta_contract,
@@ -131,12 +133,18 @@ def project_replan_writeback_rejection(
     capability_guard = obligation.get("capability_guard")
     if isinstance(capability_guard, Mapping) and rejection.semantic_delta.get("readback_actions"):
         next_cli_actions = rejection.semantic_delta["readback_actions"]
+    context_recovery = rejection.semantic_delta.get("context_recovery")
+    if isinstance(context_recovery, Mapping):
+        # TS owns the mismatch classification and complete review basis. Reading
+        # that basis precedes retry; the generic unbound writeback command would
+        # merely repeat the rejection and can lose the original Turn identity.
+        next_cli_actions = []
     return {
         "schema_version": REPLAN_WRITEBACK_REJECTION_SCHEMA_VERSION,
         "required": True,
         "host_action": (
-            "settle_todo_lifecycle"
-            if lifecycle_reentry is not None
+            "read_current_replan_context" if isinstance(context_recovery, Mapping)
+            else "settle_todo_lifecycle" if lifecycle_reentry is not None
             else "read_current_capability_evidence" if capability_guard
             else "write_typed_semantic_delta"
         ),
@@ -147,6 +155,7 @@ def project_replan_writeback_rejection(
         "reason_code": rejection.semantic_delta.get("reason_code"),
         "triggers": triggers,
         "next_cli_actions": next_cli_actions,
+        **({"context_recovery": dict(context_recovery)} if isinstance(context_recovery, Mapping) else {}),
         **({"capability_guard": dict(capability_guard)} if isinstance(capability_guard, Mapping) else {}),
     }
 
@@ -221,6 +230,7 @@ def qualify_replan_writeback(
     capability_evidence: CapabilityReplanEvidence | None = None,
     guard_capability: Mapping[str, Any] | None = None,
     receipt_bound_guard_recorded_at: str | None = None,
+    receipt_bound_replan_review: Mapping[str, Any] | None = None,
     replan_source_route: Mapping[str, Any] | None = None,
     replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
@@ -364,6 +374,28 @@ def qualify_replan_writeback(
             context.get("replan_transition_candidates", [])
             if isinstance(candidate.get("obligation"), dict) and
             candidate["obligation"].get("obligation_id") == guard_semantic_replan_obligation_id), None)
+    # Every selected replan retains its exact receipt-bound source. A missing
+    # reconstruction must not fall through as an unselected future obligation
+    # and commit an unqualified writeback. Plain outcome reviews additionally
+    # carry a scalar source; lifecycle/transition reviews need the same owner.
+    if guard_scoped and guard_semantic_replan_obligation_id:
+        obligation = project_replan_semantics({
+            "operation": "receipt_bound_obligation", "guard_scoped": True,
+            "selected_obligation_id": guard_semantic_replan_obligation_id,
+            "agent_id": safe_agent_id, "replay_phase": "open",
+            "current_obligation": obligation,
+            "receipt_review": receipt_bound_replan_review,
+            "transition_candidates": context.get("replan_transition_candidates", []),
+            "stride_strategy": context["stride_strategy"],
+        })["obligation"]
+        if obligation and not obligation.get("replan_context") and not obligation.get("settlement_action_packet"):
+            obligation = attach_receipt_replan_context(
+                obligation, None, goal_id=goal_id, agent_id=safe_agent_id,
+                source_status=status_payload, stride_strategy=context["stride_strategy"],
+                explore_reader=replan_explore_reader,
+                goal_acceptance_contract=(agent_todos or {}).get("goal_acceptance_contract"),
+                todo_items=agent_todo_source_items,
+            )
     if not obligation:
         # A validated Todo transition can discharge the read-model obligation
         # before refresh. Preserve that evidence in this run so periodic review
@@ -419,6 +451,7 @@ def enforce_open_replan_writeback(
     guard_scoped: bool = False,
     guard_semantic_replan_obligation_id: str | None = None,
     receipt_bound_guard_recorded_at: str | None = None,
+    receipt_bound_replan_review: Mapping[str, Any] | None = None,
     todo_fields: dict[str, Any] | None = None,
     external_progress_review: Mapping[str, Any] | None = None,
     capability_evidence: CapabilityReplanEvidence | None = None,
@@ -454,6 +487,7 @@ def enforce_open_replan_writeback(
         capability_evidence=capability_evidence,
         guard_capability=guard_capability,
         receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
+        receipt_bound_replan_review=receipt_bound_replan_review,
         replan_source_route=replan_source_route, replan_explore_reader=replan_explore_reader,
     )
     if not obligation:
@@ -501,6 +535,7 @@ def qualify_refresh_replan_writeback(
     settlement_guard_scoped: bool,
     settlement_guard_semantic_replan_obligation_id: str | None,
     receipt_bound_guard_recorded_at: str | None = None,
+    receipt_bound_replan_review: Mapping[str, Any] | None = None,
     newest_first_runs: list[dict[str, Any]],
     state_text: str,
     goal_id: str,
@@ -586,6 +621,7 @@ def qualify_refresh_replan_writeback(
             settlement_guard_semantic_replan_obligation_id
         ),
         receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
+        receipt_bound_replan_review=receipt_bound_replan_review,
         replan_source_route=replan_source_route, replan_explore_reader=replan_explore_reader,
     )
     if semantic_delta:

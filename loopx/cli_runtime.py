@@ -5,6 +5,7 @@ import json
 import os
 import sys
 from collections.abc import Callable
+from contextlib import contextmanager
 from pathlib import Path
 
 from . import __version__
@@ -15,7 +16,7 @@ from .paths import default_registry_path, global_registry_path, select_default_r
 HOST_GLOBAL_REGISTRY_SELECTOR = "@host-global"
 
 
-GLOBAL_OPTIONS_WITH_VALUE = frozenset({"--registry", "--runtime-root", "--format"})
+GLOBAL_OPTIONS_WITH_VALUE = frozenset({"--registry", "--runtime-root", "--format", "--cli-bin"})
 GLOBAL_OPTIONS_WITH_EQUALS = tuple(
 	f"{option}=" for option in sorted(GLOBAL_OPTIONS_WITH_VALUE)
 )
@@ -66,10 +67,18 @@ _REGISTRY_OPTIONAL_COMMANDS = frozenset(
 )
 
 _STATUS_COMMANDS = frozenset({"check", "status", "diagnose", "review-packet"})
-_SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | {
+PROJECT_LIFECYCLE_COMMANDS = {
+	"refresh-state", "checkpoint-context", "read-only-map", "reward", "operator-gate",
+}
+_SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | PROJECT_LIFECYCLE_COMMANDS | {
 	"todo", "quota", "task-lease", "change-window", "delegation", "turn", "doctor", "commands",
 	"authority-archive", "coordination-shadow", "extension", "slash-commands",
 	"manager-inbox",
+	"agent-context", "agent-directory", "agent-capabilities",
+	"handoff", "handoff-mode",
+	"performance-diagnosis",
+	"heartbeat-prompt",
+	"goal-acceptance",
 }
 
 
@@ -144,6 +153,11 @@ def build_cli_parser(
 	)
 	parser.add_argument("--runtime-root", help="Override registry common_runtime_root.")
 	parser.add_argument("--format", choices=["markdown", "json"])
+	from .command_invocation import validate_cli_bin
+	parser.add_argument(
+		"--cli-bin", dest="control_cli_bin", type=validate_cli_bin,
+		help="Preserve this executable name/path in generated control commands; does not execute it or change permissions.",
+	)
 	return parser, parser.add_subparsers(dest="command", required=True)
 
 
@@ -161,6 +175,17 @@ def resolve_cli_registry(
 	registry_was_configured = user_supplied_registry(raw_argv) or bool(
 		os.environ.get("LOOPX_REGISTRY")
 	)
+	if args.command == "update" and getattr(args, "update_action", None) == "activate":
+		# Service activation reads its route from the loaded original manager.
+		# It neither opens Goal authority nor guesses a default Chat store.
+		return registry_path, registry_was_configured
+	if args.command == "quota" and getattr(args, "quota_command", None) in {"context-read", "replan-view"}:
+		from .cli_commands.context_machine import has_explicit_context_read_source
+
+		# Captured readers own source validation (including missing references)
+		# and native-session scope; neither reaches live Goal authority.
+		if args.quota_command == "replan-view" or has_explicit_context_read_source(args):
+			return registry_path, registry_was_configured
 	if str(args.registry) == HOST_GLOBAL_REGISTRY_SELECTOR:
 		try:
 			runtime_root = (
@@ -258,6 +283,29 @@ def _top_level_command(argv: list[str]) -> str | None:
 	return None
 
 
+@contextmanager
+def cli_invocation_route(argv: list[str]):
+	"""Read the global route only; the canonical parser still validates argv."""
+	from .command_invocation import loopx_cli_route
+	program = None
+	index = 0
+	while index < len(argv):
+		value = argv[index]
+		option = value.split("=", 1)[0]
+		if option not in GLOBAL_OPTIONS_WITH_VALUE:
+			break
+		if "=" in value:
+			argument = value.split("=", 1)[1]
+		else:
+			index += 1
+			argument = argv[index] if index < len(argv) else None
+		if option == "--cli-bin":
+			program = argument
+		index += 1
+	with loopx_cli_route(program):
+		yield
+
+
 def _build_selected_parser(command: str) -> LoopXArgumentParser:
 	parser, subparsers = build_cli_parser(parser_class=_SelectedArgumentParser)
 	if command in _STATUS_COMMANDS:
@@ -268,6 +316,10 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .cli_commands.summary_all_registration import register_summary_all_command
 
 		register_summary_all_command(subparsers, add_subcommand_format)
+	elif command in PROJECT_LIFECYCLE_COMMANDS:
+		from .cli_commands.project_lifecycle import register_project_lifecycle_commands
+
+		register_project_lifecycle_commands(subparsers, add_subcommand_format)
 	elif command == "todo":
 		from .cli_commands.todo_registration import register_todo_command
 
@@ -280,6 +332,14 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .cli_commands.task_lease import register_task_lease_command
 
 		register_task_lease_command(subparsers, add_subcommand_format)
+	elif command == "handoff":
+		from .cli_commands.todo_continuation import register_todo_continuation
+
+		register_todo_continuation(subparsers, add_subcommand_format)
+	elif command == "handoff-mode":
+		from .cli_commands.handoff_mode import register_handoff_mode_command
+
+		register_handoff_mode_command(subparsers, add_subcommand_format)
 	elif command == "change-window":
 		from .capabilities.repository_change_window.cli import register_repository_change_window_commands
 
@@ -296,6 +356,18 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .cli_commands.manager_inbox import register_manager_inbox
 
 		register_manager_inbox(subparsers, add_subcommand_format)
+	elif command == "agent-context":
+		from .cli_commands.agent_context import register_agent_context
+
+		register_agent_context(subparsers, add_subcommand_format)
+	elif command == "agent-directory":
+		from .cli_commands.agent_directory import register_agent_directory
+
+		register_agent_directory(subparsers, add_subcommand_format)
+	elif command == "agent-capabilities":
+		from .cli_commands.agent_capabilities import register_agent_capabilities
+
+		register_agent_capabilities(subparsers, add_subcommand_format)
 	elif command == "authority-archive":
 		from .cli_commands.authority_archive import register_authority_archive_command
 
@@ -320,6 +392,18 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .help_surface import register_command_reference
 
 		register_command_reference(subparsers)
+	elif command == "performance-diagnosis":
+		from .capabilities.performance_diagnosis.cli import register_performance_diagnosis_commands
+
+		register_performance_diagnosis_commands(subparsers, add_subcommand_format)
+	elif command == "heartbeat-prompt":
+		from .cli_commands.support_control_heartbeat_registration import register_heartbeat_control_commands
+
+		register_heartbeat_control_commands(subparsers, add_subcommand_format)
+	elif command == "goal-acceptance":
+		from .cli_commands.goal_acceptance import register_goal_acceptance_command
+
+		register_goal_acceptance_command(subparsers, add_subcommand_format)
 	else:  # pragma: no cover - caller guards the private interface
 		raise ValueError(f"unsupported selected command: {command}")
 	return parser
@@ -331,6 +415,59 @@ def _dispatch_common_command(
 	registry_path: Path,
 	allow_missing_registry: bool,
 ) -> int | None:
+	if args.command == "heartbeat-prompt":
+		from .cli_commands.support_control_heartbeat import handle_heartbeat_prompt_command
+
+		return handle_heartbeat_prompt_command(
+			args, registry_path=registry_path,
+			registry_was_supplied=not allow_missing_registry,
+			print_payload=print_payload, output_format=output_format,
+		)
+	if args.command == "goal-acceptance":
+		from .cli_commands.goal_acceptance import handle_goal_acceptance_command
+
+		return handle_goal_acceptance_command(
+			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
+			output_format=output_format, print_payload=print_payload,
+		)
+	if args.command == "performance-diagnosis":
+		from .capabilities.performance_diagnosis.cli import handle_performance_diagnosis_command
+
+		return handle_performance_diagnosis_command(
+			args, output_format=output_format, print_payload=print_payload,
+		)
+	if args.command in {"agent-context", "agent-directory", "agent-capabilities"}:
+		from .paths import effective_runtime_root
+
+		if args.command == "agent-context":
+			from .cli_commands.agent_context import handle_agent_context as handle
+		elif args.command == "agent-directory":
+			from .cli_commands.agent_directory import handle_agent_directory as handle
+		else:
+			from .cli_commands.agent_capabilities import handle_agent_capabilities as handle
+		return handle(
+			args, registry_path, effective_runtime_root(registry_path, args.runtime_root),
+			print_payload, output_format,
+		)
+	if args.command in PROJECT_LIFECYCLE_COMMANDS:
+		from .cli_commands.project_lifecycle import handle_project_lifecycle_command
+		from .cli_rollout import append_cli_rollout_event
+		from .capabilities.periodic_report.post_writeback_hook import (
+			build_periodic_report_post_writeback_projection,
+			periodic_report_post_writeback_hooks_for_goal,
+		)
+		from .paths import effective_runtime_root
+
+		return handle_project_lifecycle_command(
+			args, registry_path=registry_path, print_payload=print_payload,
+			output_format=output_format, append_cli_rollout_event=append_cli_rollout_event,
+			post_writeback_hooks=(periodic_report_post_writeback_hooks_for_goal(
+				registry_path=registry_path, goal_id=args.goal_id,
+				runtime_root=effective_runtime_root(registry_path, args.runtime_root),
+			) if args.command == "refresh-state" else ()),
+			post_writeback_projection_builder=(build_periodic_report_post_writeback_projection
+				if args.command == "refresh-state" else None),
+		)
 	if args.command == "manager-inbox":
 		from .cli_commands.manager_inbox import handle_manager_inbox
 		from .control_plane.projects.registry_codec import load_project_registry
@@ -343,6 +480,15 @@ def _dispatch_common_command(
 		from .cli_commands.task_lease import handle_task_lease_command
 
 		return handle_task_lease_command(
+			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
+			output_format=output_format, print_payload=print_payload,
+		)
+	if args.command in {"handoff", "handoff-mode"}:
+		if args.command == "handoff":
+			from .cli_commands.todo_continuation import handle_todo_continuation as handoff_handler
+		else:
+			from .cli_commands.handoff_mode import handle_handoff_mode_command as handoff_handler
+		return handoff_handler(
 			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
 			output_format=output_format, print_payload=print_payload,
 		)
@@ -580,7 +726,8 @@ def main(argv: list[str] | None = None) -> int:
 	code = 1
 	error = None
 	try:
-		code = _run_command(command, raw_argv)
+		with cli_invocation_route(raw_argv):
+			code = _run_command(command, raw_argv)
 		return code
 	except BaseException as exc:
 		error = exc

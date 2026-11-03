@@ -38,6 +38,31 @@ test("late facts are allowed but no new operation once closeout has begun", () =
     .report_permission, "existing_operation_only");
 });
 
+test("an admitted semantic replan can report without ordinary delivery authority", () => {
+  const replan = {...proof, interaction_mode: "autonomous_replan", delivery_allowed: false};
+  const obligation = "replan-0000000000000001";
+  for (const status of ["autonomous_replan_required", "future_work_label"]) {
+    assert.equal(nativeChildReportAdmission(replan, status, "original", "open", false, obligation)
+      .report_permission, "new_operation");
+    assert.equal(nativeChildReportAdmission(replan, status, "original", "open", true, obligation)
+      .report_permission, "existing_operation_only");
+    for (const phase of ["settlement_pending", "settled"] as const) {
+      assert.equal(nativeChildReportAdmission(replan, status, "original", phase, false, obligation)
+        .report_permission, "existing_operation_only");
+    }
+  }
+  for (const denied of [
+    {...replan, ok: false}, {...replan, should_run: false}, {...replan, must_attempt_work: false},
+    {...replan, quiet_noop_allowed: true}, {...replan, delivery_allowed: "false"},
+    {...replan, interaction_mode: "successor_replan_required"},
+  ]) {
+    assert.equal(nativeChildReportAdmission(denied, "autonomous_replan_required", "original", "open", false, obligation)
+      .report_permission, "not_admitted");
+  }
+  assert.equal(nativeChildReportAdmission(replan, "autonomous_replan_required", "original", "open", false)
+    .report_permission, "not_admitted");
+});
+
 test("legacy ordinary compatibility never overrides partial or negative facts", async (t) => {
   for (const status of ["normal_run", "turn_run_once"]) {
     assert.equal(nativeChildReportAdmission({}, status, "original", "open", false)
@@ -75,6 +100,7 @@ async function fixture(replan = false) {
   const event = {schema_version: "loopx_rollout_event_v0", event_id: "event-original",
     event_kind: "quota_should_run", goal_id: goalId, agent_id: agentId, run_id: turnId,
     status: "autonomous_replan_required", details: {...proof, todo_id: identity.todo_id,
+      selected_todo_id: identity.todo_id,
       replan_obligation_id: identity.replan_obligation_id, settlement_effect_id: identity.effect_id}};
   const log = join(goalRoot, "rollout-event-log.jsonl");
   await writeFile(log, JSON.stringify(event) + "\n");
@@ -99,6 +125,23 @@ test("exact-Turn original binding is read without selecting or inferring new wor
     } finally {
       await rm(root, {recursive: true, force: true});
     }
+  }
+});
+
+test("readback validates a semantic replan obligation before report admission", async () => {
+  for (const replan of [false, true]) {
+    const {root, request, identity, event, log} = await fixture(replan);
+    try {
+      const details = {...event.details, delivery_allowed: false, interaction_mode: "autonomous_replan",
+        semantic_replan_obligation_id: "replan-0000000000000001"};
+      await writeFile(log, JSON.stringify({...event, details}) + "\n");
+      const result = await readQuotaSettlement(request);
+      assert.deepEqual(result.identity.result.value, settlementIdentityPayload(identity));
+      assert.equal(result.native_child_admission.report_permission, "new_operation");
+      assert.equal(result.heartbeat_receipt.details.delivery_allowed, false);
+      await writeFile(log, JSON.stringify({...event, details: {...details, semantic_replan_obligation_id: "malformed"}}) + "\n");
+      await assert.rejects(readQuotaSettlement(request), /semantic replan guard is malformed/);
+    } finally {await rm(root, {recursive: true, force: true});}
   }
 });
 
@@ -200,6 +243,19 @@ test("partial, denied or truthy current facts cannot requalify a negative guard"
     }
     assert.equal(heartbeatWorkRequalification(original, event.details, identity, "open", true).append, false);
     assert.equal(heartbeatWorkRequalification(event, event.details, identity, "open", false).append, false);
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
+test("a retained binding cannot replace fresh same-Todo executable selection", async () => {
+  const {root, identity, event} = await fixture();
+  try {
+    const original = {...event, details: {...event.details, delivery_allowed: false}};
+    for (const selected of [undefined, null, "todo_other_validation", true]) {
+      const current = {...event.details, selected_todo_id: selected};
+      assert.deepEqual(heartbeatWorkRequalification(original, current, identity, "open", false),
+        {append: false, details: null});
+    }
+    assert.equal(heartbeatWorkRequalification(original, event.details, identity, "open", false).append, true);
   } finally {await rm(root, {recursive: true, force: true});}
 });
 

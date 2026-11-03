@@ -245,7 +245,9 @@ even when fields, commands and enums are unchanged. Changed instructions need
 clause comparisons and passed real-caller counterfactuals covering ordering,
 evidence, modality, scope, continuation and stop conditions. Missing evidence or
 semantic drift blocks approval; an intentional change needs its authorization
-basis. Unchanged text may use a reasoned `not_applicable`. This is part of the
+basis, declared as `fields_by_verdict.intentional_change_validated` in the same
+assessment contract. `equivalent` adds no authorization field; a reasoned
+`not_applicable` needs only the common fields. This is part of the
 existing evidence judgment, not a new receipt or automatic meaning detector.
 Character budgets are cost guards: a justified increase is preferable to
 discarding useful control-plane meaning. Model comprehension remains unverified
@@ -277,7 +279,7 @@ workflow or the merge-focused `loopx-pr-merge` skill.
 | Command | CLI reference | Intent |
 | --- | --- | --- |
 | `/loopx-pr-review` | `loopx pr-review [--repo owner/repo] [--target-exact-head NUMBER@HEAD_OID] [--state open\|merged\|all] [--review-order forward\|reverse] [--since ISO] [--fresh-audit-exact-head NUMBER@HEAD_OID]` | Review a small explicit batch with repeatable `--target-exact-head`, or list a lifecycle queue when no target is supplied. Both paths provide concrete main-regression analysis and the five-block review contract. Forward visits other authors first; reverse inverts the entire actionable queue. Saved Agent settings apply automatically. `--fresh-audit-exact-head` separately forces new evidence for an unchanged concluded head. |
-| pre-merge readback | `loopx pr-review --goal-id GOAL --repo owner/repo --check-merge-readiness NUMBER@HEAD_OID` | Immediately before merge, fail closed unless the remote PR is still open at the reviewed head, its standalone conclusion approves that head, all checks are successful or skipped, review-thread pagination is complete with no unresolved thread, and merge state is compatible. The Goal-scoped command records a compact public-safe readiness observation; this read grants no merge authority. |
+| pre-merge readback | `loopx pr-review [--goal-id GOAL] --repo owner/repo --check-merge-readiness NUMBER@HEAD_OID` | Immediately before merge, fail closed unless the remote PR is still open at the reviewed head, its standalone conclusion approves that head, all checks are successful or skipped, review-thread pagination is complete with no unresolved thread, and merge state is compatible. Standalone checks require no Goal and write no Goal state. Add `--goal-id GOAL` for existing Goal-managed work to retain its CI policy and record a compact public-safe observation; this read grants no merge authority. |
 
 The slash command must run the CLI first. Agentloop must not reconstruct the
 review window by manually calling `gh pr view` / `gh pr list` for every PR. The
@@ -771,13 +773,26 @@ starts with `/loopx-pr-review`, words such as `open`, `closed`, `merged`,
 skip the review. Downgrade only for explicit opt-out phrases such as `只统计`,
 `只列出`, `stats only`, `list only`, `不要 review`, or `不用分析`.
 
-The published review is a full-PR bilingual review: one complete Chinese
-five-block review covering every changed surface, key symbol, positive and
-negative path, and validation, plus one concise English machine verdict
+The published review is a full-PR review primarily in Chinese: five complete
+sections covering every changed surface, key symbol, positive and negative path,
+and validation, plus one concise English machine verdict
 (`APPROVE`, `REQUEST_CHANGES`, or the author-owned `COMMENTED` fallback). The
-Chinese review carries the depth and evidence; the English verdict carries the
-machine-readable state and validation summary. A findings-only or blocker-only
-body is not a complete PR review.
+body carries the depth and evidence; the English verdict carries the
+machine-readable state and validation summary. Prefer `动机 / Motivation`,
+`改动思路 / Approach`, `具体改动 / Changes`, `对主干的风险 / Risks` and
+`我的整体评价 / Verdict`. These map to the same Chinese canonical section ids;
+existing headings and evidence floors remain valid. Older installed parsers use
+the canonical Chinese headings; the body's primary language stays Chinese.
+
+Use connected Chinese prose for the main narrative, problem analysis, evidence
+and conclusion. Keep finding titles informative and short; optional
+Problem / Evidence / Impact / Fix labels introduce Chinese explanations. Retain
+accurate English technical terms, symbols and commands where useful, explaining
+unfamiliar terms once. Mark validation PASS / FAIL / UNVERIFIED, using compact
+tables for actual comparisons. Do not expand English labels into long English
+passages, duplicate the analysis in both languages, impose a language ratio or
+delete evidence to make the text shorter. This is writing guidance, not a new
+language gate. A findings-only or blocker-only body is incomplete.
 
 The opening `动机` must stand alone for a reader unfamiliar with the repository:
 who encounters the problem, one triggering task and concrete before/after
@@ -825,6 +840,16 @@ all five Chinese sections plus a line-starting `English verdict: APPROVE` or
 state transition, author-owned conclusions use `COMMENTED` plus one exact title:
 `Approval conclusion (author-owned PR; GitHub blocks formal self-approval)` or
 `Request changes conclusion (author-owned PR; GitHub blocks formal self-review)`.
+The saved-result check and published-review readback apply the same literal,
+visible title rule. A near match, the opposite verdict's title, a hidden comment
+or a fenced example cannot supply that conclusion. Independent reviews retain
+their formal-state requirements. These checks establish publication consistency,
+not evidence truth or merge authority.
+
+提交前的结果检查与发布后的读回使用同一条可见的精确标题规则。近似标题、
+相反结论的标题、隐藏注释或代码块示例均不能代替作者结论；独立评审仍遵循
+原正式状态要求。这只校验发布一致性，不证明证据真实或授予合并权限。
+
 The compact result is versioned as `pull_request_review_conclusion_v0` and
 reports a typed verdict and invalid-reason codes. Queue selection and approval
 closeout share the typed owner for each reviewer's latest submitted opinion.
@@ -1238,8 +1263,9 @@ The packet should let a reviewer move through PRs in order:
    copied as the final risk judgement.
 8. Recheck the exact head, then decide `approve`, `request changes`, `defer`, or
    `merge after checks`. Immediately before merge, require
-   `loopx pr-review --goal-id GOAL --check-merge-readiness NUMBER@HEAD_OID` to
-   return `ready=true`.
+   `loopx pr-review --check-merge-readiness NUMBER@HEAD_OID` to
+   return `ready=true`. Add `--goal-id GOAL` only for already Goal-managed work;
+   standalone delivery requires no registration or binding.
 
 A response that only lists `Open` and `Merged` PRs, scale, and recommended next
 order is incomplete for `/loopx-pr-review`; it should continue into the
@@ -1269,10 +1295,12 @@ A first implementation is acceptable when:
 - `--fresh-audit-exact-head NUMBER@HEAD_OID` is the only packet-level way to
   turn an unchanged valid conclusion into an actionable fresh audit, and
   malformed, absent, or already-actionable targets fail closed;
-- Goal-scoped `--goal-id GOAL --check-merge-readiness NUMBER@HEAD_OID` rejects head drift, stale review
+- `--check-merge-readiness NUMBER@HEAD_OID` works without a Goal or Goal writes
+  and rejects head drift, stale review
   prose, non-approval conclusions, red/pending/unknown checks, incomplete or
-  unresolved review-thread evidence, and incompatible merge state, then records
-  the compact observation used to suppress only unchanged requalification;
+  unresolved review-thread evidence, and incompatible merge state; adding
+  `--goal-id GOAL` retains Goal policy and records the compact observation used
+  to suppress only unchanged requalification;
 - the default limit is 100, and exhaustive requests only proceed when
   `result_completeness.complete=true`; truncated packets provide a larger
   `recommended_limit` for the next read;
@@ -1324,14 +1352,23 @@ A first implementation is acceptable when:
 `pull_request_review.wait_for_ci` defaults to `true`. Machine defaults use the
 existing capability editor. A Goal may override the complete review namespace;
 clearing that override restores live machine defaults. Local required validation
-and exact-head review/thread gates apply in both modes. Attribute a red required
-check before selecting the review verdict: an unchanged failure reproduced on
-the immutable base and exact head, or an independently evidenced external
-outage, is not a reason to request code changes on an unrelated PR when its
-changed invariant has separate passing coverage. Record the red check and its
-owner; approval does not make a blocked merge ready. A new, worsened or
-unattributed current failure remains a review blocker. Policy revision 18 scopes
-the matrix to the reviewed head. Keep relevant older failures in existing
+and exact-head review/thread gates apply in both modes. CI completion, success
+and exhaustive failure attribution are not approval prerequisites. Unknown,
+failed, skipped, cancelled or pending remote jobs remain diagnostic rows with
+`required=false` when independent current evidence establishes the affected
+invariants. Preserve an unknown cause as `unresolved`; do not invent baseline or
+infrastructure attribution, demand CI logs solely to approve, or require the PR
+to repair unrelated jobs. A confirmed `pr_regression` blocks approval even if
+its row is marked diagnostic. Missing necessary review evidence and material
+instability remain blockers: name the current invariant and smallest decisive
+check instead of using “CI evidence unknown” as the finding.
+
+Claim that failed **required review validation** is unrelated only with the
+same failure reproduced on the immutable base and exact head, or independent
+evidence of an external outage, and separate passing coverage of the changed
+invariant. Record the red check and its owner; approval does not make a blocked
+merge ready. An unresolved required review validation still blocks approval.
+The matrix assesses the reviewed head. Keep relevant older failures in existing
 result/evidence text with their source and explain why current independent
 evidence covers the exposed invariant and conditions. An unknown historical
 cause alone is not a veto, nor does current passing evidence prove that cause
@@ -1346,7 +1383,7 @@ available CI and retain the configured merge gate, but do not require every
 remote job to finish or succeed before approving independently verified code.
 `repository_required_checks` records decisive repository validation for the
 review; each matrix row's `required` flag means review evidence, not GitHub
-branch protection. Record merely pending remote jobs as diagnostic rows with
+branch protection. Record remote CI observations as diagnostic rows with
 `required=false` when current independent coverage establishes their relevant
 invariants. If a queued job is the only decisive coverage, leave that invariant
 required and unverified. Pending CI alone never justifies `REQUEST_CHANGES`;

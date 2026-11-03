@@ -24,12 +24,12 @@ if __name__ == "__main__":
     bootstrap()  # Select SForge before any provider or adapter imports.
 
 from sforge.harness.benchmark import load_benchmark
-from sforge.harness.config import SForgeConfig
+from sforge.harness.config import load_config
 from sforge.harness.constants import get_admin_secret
 from sforge.harness.run_agent import run_agent
 from sforge.harness.task_spec import make_task_spec
 
-from benchmark.runtime.codex import TASK_ENTRIES, turn_envelope_receipt
+from benchmark.runtime.codex import Execution, TASK_ENTRIES, turn_envelope_receipt
 from loopx.reasoning_effort import REASONING_EFFORTS
 from loopx.control_plane.work_items.stride_policy_codec import stride_strategy_options
 from benchmark.runtime.sforge import (
@@ -44,6 +44,7 @@ from benchmark.edgebench.prompts import (
 from benchmark.edgebench.online_sampling import OnlineSampler
 from benchmark.edgebench.feedback import BestOnlyFeedback, FEEDBACK_MODES, validate_best_only
 from benchmark.edgebench.feedback_hook import FEEDBACK_PAYLOAD
+from benchmark.edgebench.result_publication import write_native_result as _write_native_final_result
 
 
 def _observe_run(call):
@@ -85,25 +86,6 @@ def _result_status(*, interrupted, started, runtime_seconds, exit_code, timed_ou
     return "terminal"
 
 
-def _write_native_final_result(trial, result, *, status, agent, task, run_id, model, effort,
-                               feedback="native", native_goal_outcome=None):
-    """Retain partial native scores without publishing a completion marker."""
-    if status != "terminal" and not (native_goal_outcome and result.runtime_seconds > 0):
-        return
-    final = dict(agent=agent, task=task, run_id=run_id, model=model, effort=effort,
-                 **result.to_dict())
-    if native_goal_outcome is not None:
-        final.update(runtime_status=status, native_goal_outcome=native_goal_outcome)
-    if feedback == "best-only":
-        final["evaluation_coverage"] = "online_only"
-        final["offline_scoring_complete"] = False
-    # SForge consumers treat final_result.json itself as a completed run.
-    destination = trial / ("final_result.json" if status == "terminal" else "partial_result.json")
-    pending = destination.with_suffix(".json.tmp")
-    pending.write_text(json.dumps(final, indent=2, ensure_ascii=False))
-    pending.replace(destination)
-
-
 def _task_default(task_id: str, key: str, explicit: int | None, fallback: int) -> int:
     """Resolve EdgeBench task settings; explicit values retain runtime semantics."""
     if explicit is not None:
@@ -113,6 +95,19 @@ def _task_default(task_id: str, key: str, explicit: int | None, fallback: int) -
     if type(value) is not int or value <= 0:
         raise ValueError(f"Invalid EdgeBench {key} default for {task_id}: {value!r}")
     return value
+
+
+def _configure_provider_retries(config, seconds):
+    if type(seconds) is not int or seconds < 0:
+        raise ValueError("--provider-rate-limit-retry-seconds must be nonnegative")
+    if seconds and (not config.agent_api_base_url or not config.agent_api_key):
+        raise ValueError("--provider-rate-limit-retry-seconds requires an API key and base URL")
+    if not hasattr(config, "agent_rate_limit_retry_seconds"):
+        if seconds:
+            raise ValueError("the selected SForge source does not support HTTP 429 retry configuration")
+        return config
+    # Explicit runner settings override ambient SForge defaults, including zero.
+    return replace(config, agent_rate_limit_retry_seconds=seconds)
 
 
 def main(argv=None):
@@ -126,11 +121,18 @@ def main(argv=None):
                         help="New-run default: native public feedback; blind/best-only are explicit controls")
     parser.add_argument("--turn-envelope", action="store_true",
                         help="Opt-in short heartbeat context with same-invocation full captures")
+    parser.add_argument("--context-delivery", choices=("off", "on"),
+                        help="Native Codex context delivery: on by default for heartbeat workers; pass off to disable")
+    parser.add_argument("--provider-request-admission", action="store_true",
+                        help="Opt-in canonical admission before each heartbeat custom Responses request")
     parser.add_argument("--native-goal-continue", action="store_true",
                         help="Opt-in: when a native Goal declares completion with budget left, start "
                              "continuation Goals until the budget edge (native-goal worker only)")
     parser.add_argument("--model", required=True)
     parser.add_argument("--effort", choices=REASONING_EFFORTS, required=True)
+    parser.add_argument("--provider-rate-limit-retry-seconds", type=int, default=0,
+                        help="Host API gateway HTTP 429 retry window for new trials; "
+                             "0 keeps pass-through behavior, e.g. 900 tolerates transient limits")
     parser.add_argument("--timeout", type=int,
                         help="Total trial seconds; task-defaults.json overrides the 18h fallback")
     parser.add_argument("--task-entry", choices=TASK_ENTRIES,
@@ -146,6 +148,8 @@ def main(argv=None):
                         help="Explicit heartbeat Goal-review strategy; omitted keeps the ordinary off treatment")
     parser.add_argument("--checkpoint-controller-file", type=Path,
                         help="Host-private native checkpoint controller; requires full fresh-replan handoff")
+    parser.add_argument("--checkpoint-export-root", type=Path,
+                        help="Existing physical host volume for full worker checkpoints; must preserve Linux filenames")
     parser.add_argument("--checkpoint-request", type=Path,
                         help="Explicit host JSON declaration staged into a heartbeat worker; omitted disables capture")
     parser.add_argument("--restore-checkpoint", type=Path,
@@ -157,6 +161,8 @@ def main(argv=None):
     retention.add_argument("--no-checkpoint-retention", action="store_true",
                            help="Keep every captured point; disable default checkpoint rotation")
     parser.add_argument("--restore-config", type=Path)
+    parser.add_argument("--restore-model-config", type=Path,
+                        help="Explicit destination config for changing only model/effort in a new checkpoint receiver; --restore-config retains the sealed source config")
     parser.add_argument("--restore-goal")
     parser.add_argument("--restore-agent")
     parser.add_argument("--restore-source-todo")
@@ -172,6 +178,9 @@ def main(argv=None):
                         help="Native default: 3600s between accepted submissions; other modes retain 120s")
     parser.add_argument("--judge-url", required=True)
     parser.add_argument("--api-proxy-url", help="Operator-owned, OpenAI-only CONNECT proxy")
+    parser.add_argument("--docker-host-bridge", action="store_true",
+                        help="Host services run on Docker's default bridge (e.g. runner inside a VM); "
+                             "pin host.docker.internal there instead of Docker's host-gateway alias")
     args = parser.parse_args(argv)
     api_base_url = os.environ.get("OPENAI_BASE_URL") or None
     api_key = os.environ.get("OPENAI_API_KEY") if api_base_url else None
@@ -188,6 +197,17 @@ def main(argv=None):
         parser.error("--task-entry loopx-planned requires a heartbeat worker")
     if args.turn_envelope and args.worker not in {"heartbeat-resume", "heartbeat-explore"}:
         parser.error("--turn-envelope requires a heartbeat worker")
+    if args.context_delivery is None:
+        args.context_delivery = Execution(mode="heartbeat" if args.worker.startswith("heartbeat-") else "plain").context_delivery
+    if args.context_delivery != "off" and not args.worker.startswith("heartbeat-"):
+        parser.error("--context-delivery requires a heartbeat worker")
+    if args.provider_request_admission:
+        if not args.worker.startswith("heartbeat-"):
+            parser.error("--provider-request-admission requires a heartbeat worker")
+        if not (api_base_url or "").strip() or not (api_key or "").strip():
+            parser.error("--provider-request-admission requires OPENAI_BASE_URL and OPENAI_API_KEY")
+        if (os.environ.get("CODEX_WIRE_API") or "responses") != "responses":
+            parser.error("--provider-request-admission requires CODEX_WIRE_API=responses")
     if args.native_goal_continue and args.worker != "native-goal":
         parser.error("--native-goal-continue requires --worker native-goal")
     if (args.replan_after_turns is not None or args.replan_after_todos is not None
@@ -208,6 +228,13 @@ def main(argv=None):
         parser.error("controller file and full controller_handoff must be enabled together with native feedback")
     if (args.checkpoint_retention_policy is not None or args.no_checkpoint_retention) and not handoff:
         parser.error("Checkpoint retention requires the explicit native controller capture path")
+    if args.checkpoint_export_root is not None:
+        if not handoff:
+            parser.error("Checkpoint export storage requires full controller capture")
+        from benchmark.edgebench.checkpoint_controller import _physical
+        _physical(args.checkpoint_export_root)
+        if not args.checkpoint_export_root.is_dir():
+            parser.error("Checkpoint export root must be an existing directory")
     restore_values = (args.restore_sha256, args.restore_config, args.restore_goal,
                       args.restore_agent, args.restore_source_todo)
     if bool(args.restore_checkpoint) != all(restore_values) or (not args.restore_checkpoint and any(restore_values)):
@@ -219,6 +246,8 @@ def main(argv=None):
         parser.error("Research component restoration requires an explicit warm checkpoint continuation")
     if args.restore_fresh_replan and not args.restore_checkpoint:
         parser.error("Fresh context requires an explicit warm checkpoint continuation")
+    if args.restore_model_config is not None and not args.restore_checkpoint:
+        parser.error("Model transition requires an explicit warm checkpoint continuation")
     if args.restore_checkpoint and (not handoff or args.eval_interval != 0 or args.replan_after_todos is not None):
         parser.error("Warm continuation requires full native checkpoint capture, no periodic evaluation and effective-Turn cadence")
     # One directory is one attempt: never reuse native registration or overwrite
@@ -271,7 +300,10 @@ def main(argv=None):
             # task remains the separately owned Goal objective.
             feedback_prompt = workspace_instructions + f"---\n\n{task.work.agent_query}\n"
         task_objective = task.work.agent_query
-    config = SForgeConfig(
+    config = replace(
+        load_config(),
+        # This runner owns the OpenAI route selection.  Explicitly clearing the
+        # route must also clear any ambient SFORGE_AGENT_API_* fallback.
         agent_api_base_url=api_base_url, agent_api_key=api_key,
         agent_model=args.model, agent_effort=args.effort,
         agent_timeout=args.timeout, log_dir=args.log_dir, tasks_dir=args.tasks_dir,
@@ -281,6 +313,10 @@ def main(argv=None):
         judge_cpu_limit=None if args.restore_checkpoint else 4,
         judge_mem_limit=None if args.restore_checkpoint else "8g",
     )
+    try:
+        config = _configure_provider_retries(config, args.provider_rate_limit_retry_seconds)
+    except ValueError as exc:
+        parser.error(str(exc))
     if args.api_proxy_url:
         config.agent_extra_env = {
             "HTTPS_PROXY": args.api_proxy_url, "HTTP_PROXY": args.api_proxy_url,
@@ -298,8 +334,16 @@ def main(argv=None):
         candidate = WarmStart(args.restore_checkpoint, args.restore_sha256, args.restore_config,
             args.restore_goal, args.restore_agent, args.restore_source_todo,
             int(time.time()) + args.timeout, args.replan_after_turns or 6,
-            tuple(args.restore_research_component), args.restore_fresh_replan)
+            tuple(args.restore_research_component), args.restore_fresh_replan,
+            destination_config=args.restore_model_config)
         metadata = candidate.verify(task.cwd)
+        if args.restore_model_config is not None:
+            from loopx.hosts.codex_checkpoint import checkpoint_destination_config
+            _, transition = checkpoint_destination_config(args.restore_config,
+                metadata["native_session"]["config_sha256"], args.restore_model_config)
+            if (transition["destination_model"] != args.model or
+                    transition["destination_effort"] != args.effort):
+                raise ValueError("Checkpoint destination model must match the explicit runner model/effort")
         snapshot = metadata["worker_file_snapshot"]
         capsule = args.restore_checkpoint / "components" / snapshot["native_capsule_component_id"]
         clock = attempt / "restored-phase-deadline"
@@ -311,6 +355,8 @@ def main(argv=None):
                          task_objective=task_objective,
                          task_entry=args.task_entry,
                          turn_envelope=args.turn_envelope,
+                         context_delivery=args.context_delivery,
+                         **({"provider_request_admission": True} if args.provider_request_admission else {}),
                          native_goal_continue=args.native_goal_continue,
                          replan_after_turns=args.replan_after_turns,
                          replan_after_todos=args.replan_after_todos,
@@ -339,12 +385,15 @@ def main(argv=None):
     checkpoint = None
     if args.checkpoint_controller_file is not None:
         from benchmark.edgebench.checkpoint_supervisor import CheckpointSupervisor
-        checkpoint = CheckpointSupervisor(args.checkpoint_controller_file, trial / "checkpoints",
+        destination = (args.checkpoint_export_root / args.run_id / args.task / "checkpoints"
+                       if args.checkpoint_export_root is not None else trial / "checkpoints")
+        checkpoint = CheckpointSupervisor(args.checkpoint_controller_file, destination,
                                           retention_policy=args.checkpoint_retention_policy,
                                           retention_enabled=not args.no_checkpoint_retention)
     backend = RecordingDockerBackend(log_dir=trial / "collected", logger=logger,
                                      oauth_proxy=bool(args.api_proxy_url or api_base_url),
                                      blind_api_endpoint=blind_endpoint, feedback=feedback,
+                                     docker_host_bridge=args.docker_host_bridge,
                                      **({"checkpoint": checkpoint} if checkpoint is not None else {}))
     for image in (task.work_image_key, task.judge_image_key):
         if not backend.image_exists(image):
@@ -369,9 +418,13 @@ def main(argv=None):
         **({"planning_timeout_seconds": None}
            if agent.task_entry == "loopx-planned" else {}),
         "model": args.model, "effort": args.effort, "timeout_seconds": args.timeout,
+        "provider_rate_limit_retry_seconds": args.provider_rate_limit_retry_seconds,
+        **({"docker_host_bridge": True} if args.docker_host_bridge else {}),
         "loopx_commit": pins[0], "runner_commit": pins[1],
         "sforge_source": active_source_receipt(),
         **turn_envelope_receipt(explicit=args.turn_envelope),
+        **({"context_delivery": "on"} if args.context_delivery != "off" else {}),
+        **({"provider_request_admission": "on"} if args.provider_request_admission else {}),
         **({"native_goal_continue": True} if args.native_goal_continue else {}),
         "task_sha256": hashlib.sha256(task_file.read_bytes()).hexdigest(),
         "feedback": args.feedback, "internet": task.internet,
@@ -398,6 +451,7 @@ def main(argv=None):
            if args.stride_strategy is not None else {}),
         **({"checkpoint_request_sha256": hashlib.sha256(checkpoint_request).hexdigest()}
            if checkpoint_request is not None else {}),
+        **({"checkpoint_export_directory": str(checkpoint.destination)} if checkpoint is not None else {}),
     }
     receipt_path = trial / "runtime-receipt.json"
     receipt_path.write_text(json.dumps(receipt, indent=2))
@@ -411,9 +465,13 @@ def main(argv=None):
             **({"restored_registration": restored_registration} if restored_registration is not None else {}),
             disable_stop_hook=False, disable_auto_resume=agent.resume_cmd is None,
             max_submissions=0 if args.feedback != "native" else None,
+            **(backend.registration_options(run_agent)
+               if feedback is not None or checkpoint is not None else {}),
         ))
     except Exception as error:
         receipt.update(status="runner_failed", error_kind=type(error).__name__)
+        if provider_failure := getattr(backend, "provider_failure_receipt", None):
+            receipt["provider_failure"] = provider_failure
         receipt_path.write_text(json.dumps(receipt, indent=2))
         raise
     finally:
@@ -438,6 +496,8 @@ def main(argv=None):
     receipt["execution"] = execution
     if native:
         receipt.update(native)
+    if provider_failure := getattr(backend, "provider_failure_receipt", None):
+        receipt["provider_failure"] = provider_failure
     _write_native_final_result(trial, result, status=status, agent=agent.name,
                                task=task.task_id, run_id=args.run_id,
                                model=args.model, effort=args.effort, feedback=args.feedback,

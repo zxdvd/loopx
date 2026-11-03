@@ -4,6 +4,7 @@
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject, type JsonObject} from "../runtime_decode.ts";
 import {isExploreEvidenceRef} from "./explore_evidence_ref.ts";
+import {normalizeExploreExecutionObservation} from "./explore_execution_observation.ts";
 
 export interface ExploreMeasurement {
   metric: string; value: number | null; unit: string; higher_is_better: boolean;
@@ -21,12 +22,28 @@ export interface ExploreMeasurementFeedback {
   improvement: number | null; measured_count: number; unknown_count: number;
 }
 
-export function normalizeExploreMeasurements(value: unknown): ExploreMeasurement[] {
+export function normalizeExploreMeasurements(value: unknown, context?: unknown, executionObservation?: unknown): ExploreMeasurement[] {
   if (!Array.isArray(value) || !value.length || value.length > 8) {
     throw new EffectRuntimeRequestError("measurements requires one to eight explicit measurements");
   }
+  if (context !== undefined) {
+    const shared = requireJsonObject(context, "measurement_context");
+    const keys = ["comparison_scope", "input_revision", "evaluation_ref"];
+    if (keys.some(key => !Object.hasOwn(shared, key)) || Object.keys(shared).some(key => !keys.includes(key))) {
+      throw new EffectRuntimeRequestError("measurement_context requires only comparison_scope, input_revision and evaluation_ref");
+    }
+    return normalizeExploreMeasurements(value.map(item => {
+      const observation = requireJsonObject(item, "measurement");
+      if (keys.some(key => Object.hasOwn(observation, key))) {
+        throw new EffectRuntimeRequestError("measurement cannot override its explicit comparison context");
+      }
+      // Authoring only: persist the existing complete measurement, never a
+      // mutable context reference or inferred comparison membership.
+      return {...shared, ...observation};
+    }), undefined, executionObservation);
+  }
   const seen = new Set<string>();
-  return value.map(item => {
+  const measurements = value.map(item => {
     const row = requireJsonObject(item, "measurement");
     const fields = ["metric", "value", "unit", "higher_is_better", "comparison_scope",
       "input_revision", "evaluation_ref", "candidate_ref", "evidence_ref"];
@@ -60,6 +77,19 @@ export function normalizeExploreMeasurements(value: unknown): ExploreMeasurement
     seen.add(key);
     return result;
   });
+  const mismatch = executionMeasurementError(measurements, executionObservation);
+  if (mismatch !== null) throw new EffectRuntimeRequestError(mismatch);
+  return measurements;
+}
+
+function executionMeasurementError(measurements: readonly ExploreMeasurement[], observation: unknown): string | null {
+  if (observation == null) return null;
+  const execution = normalizeExploreExecutionObservation({observation});
+  if (measurements.some(item => item.input_revision !== execution.input_revision))
+    return "measurements must retain the executed candidate's input revision";
+  if (execution.result_ref !== undefined && measurements.some(item => item.evidence_ref !== execution.result_ref))
+    return "measurements must cite the executed candidate's result reference";
+  return null;
 }
 
 function comparisonKey(node: string, metric: ExploreMeasurement): string {
@@ -85,7 +115,11 @@ export function projectExploreMeasurementFeedback(findings: readonly JsonObject[
   for (const finding of ordered) {
     const node = String(finding.node_id ?? ""), id = String(finding.finding_id ?? "");
     if (!node || !id) throw new EffectRuntimeRequestError("measurements require their node and finding identities");
-    for (const measurement of normalizeExploreMeasurements(finding.measurements)) {
+    const measurements = normalizeExploreMeasurements(finding.measurements);
+    // Old canonical history is auditable but is not a quantitative comparison
+    // source when its declared execution contradicts its measurements.
+    if (executionMeasurementError(measurements, finding.execution_observation) !== null) continue;
+    for (const measurement of measurements) {
       const key = comparisonKey(node, measurement), prior = groups.get(key);
       const previous = prior?.best ?? null;
       const point = measurement.value === null ? null : {finding_id: id,
@@ -107,5 +141,6 @@ export function projectExploreMeasurementFeedback(findings: readonly JsonObject[
 }
 
 export function normalizeExploreMeasurementsRequest(params: JsonObject): JsonObject {
-  return {measurements: normalizeExploreMeasurements(params.measurements)};
+  return {measurements: normalizeExploreMeasurements(params.measurements, params.measurement_context,
+    params.execution_observation)};
 }

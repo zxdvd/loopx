@@ -4,6 +4,7 @@ import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -29,6 +30,163 @@ from loopx.capabilities.manager_context.roundtrip import (
 )
 from loopx.chat_store import ChatSessionStore
 from loopx.control_plane.collaboration import conversation_scope
+
+
+@pytest.fixture
+def frozen_private_reply(tmp_path):
+    """Existing provider/Chat receipts, without starting a model or consumer."""
+    from loopx.control_plane.collaboration import conversation_reply_context
+    from loopx.extensions.lark.conversation_identity import identity_ref, lark_private_source
+
+    store = ChatSessionStore(tmp_path)
+    event = {"message_id": "om_current", "parent_id": "om_parent", "root_id": "om_root",
+             "thread_id": "omt_topic", "chat_id": "oc_owner", "sender_id": "ou_owner",
+             "sender_type": "user", "chat_type": "p2p"}
+    provider = identity_ref("cli_fixture")
+    source = lark_private_source(provider_ref=provider, event=event)
+    saved = {"kind": "bound_steward", "project_ref": "a" * 24, "workspace_path": str(tmp_path),
+             "audience": "bound_owner", "grant": "portfolio_read", "binding_id": "b" * 24,
+             "provider_ref": provider, "operator_ref": source["sender_ref"],
+             "source_ref": source["source_ref"], "goal_ids": []}
+    session = store.create_session(goal_id="loopx-manager", agent_id="codex",
+        adapter_kind="codex_app_server", upstream_thread_id="original", steward_context=saved,
+        channel_id=f"manager.external.native.{saved['binding_id']}.{source['source_ref']}")
+    parent = "Original parent with a code sample.\n\n```py\nprint('example')\n```"
+    source_text = "只核对这次修改。\n\nCurrent user message:\n用户自己输入的字样也要保留。"
+    context = {**event, "source_conversation_id": event["chat_id"], "reply_context": {
+        "message_id": event["parent_id"], "conversation_id": event["chat_id"], "content": parent},
+        "thread_context": {"conversation_id": event["chat_id"], "root_message_id": event["root_id"],
+            "thread_id": event["thread_id"], "messages": [
+                {"message_id": event["root_id"], "conversation_id": event["chat_id"], "thread_id": event["thread_id"],
+                 "position": -1, "content": "Earlier topic introduction", "sender": {"id": "ou_owner", "kind": "user"}},
+                {"message_id": event["message_id"], "conversation_id": event["chat_id"], "thread_id": event["thread_id"],
+                 "position": 2, "content": source_text}]}}
+    text = conversation_reply_context(context)["context_text"] + "\n\nCurrent user message:\n" + source_text
+    request = identity_ref(provider, event["message_id"])
+    turn, _ = store.create_turn(session["session_id"], client_turn_id=f"external-{request}", message=text, origin="lark")
+    correlation = {"request_ref": request, "binding_id": saved["binding_id"], "source": source,
+                   "session_id": session["session_id"], "turn_id": turn["turn_id"]}
+    native = {**correlation, "message": text, "command": None}
+    record = {**correlation, "event": event, "reply_context_message": text, "reply_context_source_text": source_text}
+    for directory, value in (("external-requests", native), ("lark-private-deliveries", record)):
+        _write(store.root / directory / f"{request}.json", value)
+    return store, session, turn, request, native, record, source_text, parent
+
+
+@pytest.fixture
+def private_snapshot(frozen_private_reply, tmp_path):
+    """Exercise provider history at its shipped HTTP composition boundary."""
+    import http.client
+    from types import SimpleNamespace
+    from urllib.parse import urlencode
+
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+
+    store, session, *_ = frozen_private_reply
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.chat_store, server.verbose = store, False
+    server.registry_path, server.runtime_root = tmp_path / "absent.json", tmp_path
+    server.runtime_controller = SimpleNamespace(
+        recover_exited_turn=lambda _: None, close=lambda: None,
+        # Chat keeps its own storage when no registry names another root.
+        coordination_runtime_root=store.root.parent,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def read(**query):
+        connection = http.client.HTTPConnection(*server.server_address, timeout=15)
+        try:
+            connection.request("GET", f"/api/chat/sessions/{session['session_id']}?{urlencode(query)}")
+            response = connection.getresponse()
+            payload = json.loads(response.read())
+            assert response.status == 200, payload
+            return payload
+        finally:
+            connection.close()
+
+    try:
+        yield read
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_frozen_private_reply_projects_original_text_without_mutating_model_input(frozen_private_reply, tmp_path, private_snapshot):
+    store, session, turn, _, _, _, source_text, parent = frozen_private_reply
+    before = {str(p): p.read_bytes() for p in store.root.rglob("*") if p.is_file()}
+    # The core projection carries no provider history; the composition root joins it.
+    generic = project_chat_session_snapshot(tmp_path, store, session["session_id"], registry=tmp_path / "absent.json",
+                                          message_limit=1)
+    assert "reply_context" not in generic["messages"][0]
+    snapshot = private_snapshot(message_limit=1)
+    message = snapshot["messages"][0]
+    assert message["text"] == turn["message"]
+    assert message["reply_context"]["source_text"] == source_text
+    assert message["reply_context"]["parent"]["content"] == parent
+    assert message["reply_context"]["parent"]["complete"] is True
+    assert [row["content"] for row in message["reply_context"]["thread"]["messages"]] == ["Earlier topic introduction"]
+    assert {str(p): p.read_bytes() for p in store.root.rglob("*") if p.is_file()} == before
+
+
+def test_reply_history_keeps_failed_and_recorded_recovery_context(frozen_private_reply, tmp_path, private_snapshot):
+    store, session, original, request, native, record, source_text, _ = frozen_private_reply
+    client = f"external-{request}-recovery-21-quota-1"
+    store.update_turn(session["session_id"], original["turn_id"], status="failed", error_code="synthetic_upstream_failure")
+    store.release_active_turn(session["session_id"], original["turn_id"])
+    recovery, _ = store.create_turn(session["session_id"], client_turn_id=client, message=original["message"], origin="lark")
+    native.update(turn_id=recovery["turn_id"], context_recovery={"client_turn_id": client, "failed_turn_id": original["turn_id"]})
+    record["turn_id"] = recovery["turn_id"]
+    for directory, row in (("external-requests", native), ("lark-private-deliveries", record)):
+        _write(store.root / directory / f"{request}.json", row)
+    snapshot = private_snapshot()
+    assert [m["reply_context"]["source_text"] for m in snapshot["messages"]] == [source_text, source_text]
+    # A plausible-looking suffix without its original native receipt is not a source.
+    store.update_turn(session["session_id"], recovery["turn_id"], status="completed")
+    store.release_active_turn(session["session_id"], recovery["turn_id"])
+    store.create_turn(session["session_id"], client_turn_id=f"external-{request}-recovery-999", message=original["message"], origin="lark")
+    snapshot = private_snapshot()
+    assert "reply_context" not in snapshot["messages"][-1]
+
+
+@pytest.mark.parametrize("drift", ["session", "turn", "binding", "source", "native_message", "frozen_message",
+                                  "parent", "thread", "order", "timestamp", "sender", "event_shape", "missing", "user_spoof", "foreign_origin"])
+def test_private_reply_view_requires_exact_frozen_source(frozen_private_reply, tmp_path, drift, private_snapshot):
+    store, session, turn, request, native, record, _, _ = frozen_private_reply
+    path = store.root / "lark-private-deliveries" / f"{request}.json"
+    if drift in {"session", "turn", "binding"}:
+        record[{"session": "session_id", "turn": "turn_id", "binding": "binding_id"}[drift]] = "foreign"
+    elif drift == "source":
+        record["source"] = {**record["source"], "source_ref": "d" * 24}
+    elif drift == "native_message":
+        native["message"] = "different input"
+    elif drift == "frozen_message":
+        record["reply_context_message"] += "changed"
+    elif drift == "event_shape":
+        record["event"] = []
+    elif drift in {"parent", "thread"}:
+        record["event"]["parent_id" if drift == "parent" else "thread_id"] = "foreign"
+    elif drift in {"order", "timestamp", "sender"}:
+        # Keep all correlation text identical, but challenge the wire decoder's ordering oracle.
+        replacement = {"order": '"position":-2', "timestamp": '"position":-1,"created_at":{}',
+                       "sender": '"position":-1,"sender":"invalid"'}[drift]
+        text = turn["message"].replace('"position":-1', replacement)
+        if drift == "sender":
+            text = text.replace(',"sender":{"id":"ou_owner","kind":"user"}', '')
+        native["message"] = record["reply_context_message"] = text
+        _write(store._turn_path(session["session_id"], turn["turn_id"]), {**turn, "message": text})
+        store.append_message(session["session_id"], role="user", text=text, turn_id=turn["turn_id"], origin="lark")
+    _write(path, record)
+    _write(store.root / "external-requests" / f"{request}.json", native)
+    if drift in {"missing", "user_spoof"}:
+        path.unlink()
+    if drift == "foreign_origin":
+        store.append_message(session["session_id"], role="user", text=turn["message"], turn_id=turn["turn_id"], origin="peer")
+    snapshot = private_snapshot()
+    message = snapshot["messages"][-1]
+    assert "reply_context" not in message
+    assert message["text"] in {turn["message"], record["reply_context_message"]}
 
 
 @pytest.fixture
@@ -160,6 +318,53 @@ def test_owner_return_does_not_create_source_policy(flow, project):
     assert not list(_root(root).glob("policy*"))
 
 
+def test_cli_legacy_explicit_original_revision_returns_once(flow, capsys):
+    from loopx.cli import main
+
+    root, registry, store, create = flow
+    session, turn, receipt = create()
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Checked the original request")
+    text = "Checked the original request and completed its existing work."
+    argv = ["--registry", str(registry), "--runtime-root", str(root), "--format", "json",
+            "manager-inbox", "report", "--goal-id", "research", "--agent-id", "worker",
+            "--request-id", rid, "--reply-text", text]
+    assert main([*argv, "--request-revision", "1"]) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "queued_for_original_conversation"
+    assert main(argv) == 0
+    assert json.loads(capsys.readouterr().out)["ok"] is True
+    assert drain(root, registry, store, None) == 1
+    assert drain(root, registry, ChatSessionStore(root), None) == 0
+    returned = [row for row in store.messages(session["session_id"])
+                if row.get("origin") == "manager_followup"]
+    assert len(returned) == 1 and returned[0]["turn_id"] == turn["turn_id"]
+    assert returned[0]["text"].split("\n\n", 1)[1] == text
+    assert reply_status(root, receipt)[0]["status"] == "delivered"
+    assert not list(_root(root).glob("policy*"))
+    entry = next((_root(root) / "entries").glob("*/*.json"))
+    assert "request_control" not in json.loads(entry.read_text())
+
+
+def test_legacy_original_revision_does_not_repair_mismatched_initial_delivery(flow):
+    root, registry, store, create = flow
+    session, turn, receipt = create(True)
+    rid = receipt["request_id"]
+    store.update_turn(session["session_id"], turn["turn_id"], response={
+        "context_handoff_receipt": {**receipt, "agent_id": "another-worker"},
+    })
+    acknowledge(root, "research", "worker", rid, "adopt", "Checked")
+    report(root, "research", "worker", rid, "conclusion", "Checked the original request.",
+           registry=registry, request_revision=1)
+    calls = []
+    drain(root, registry, store, lambda *args: calls.append(args))
+    assert calls == []
+    assert not any(row.get("origin") == "manager_followup"
+                   for row in store.messages(session["session_id"]))
+    assert reply_status(root, receipt)[0]["status"] != "delivered"
+    assert store.load_turn(session["session_id"], turn["turn_id"])["response"][
+        "context_handoff_receipt"]["agent_id"] == "another-worker"
+
+
 @pytest.mark.parametrize("audience", ["local_owner", "bound_owner"])
 @pytest.mark.parametrize("drift", ["channel", "goal", "context", "context_missing", "context_null"])
 def test_recovered_project_identity_cannot_publish_as_a_manager(flow, audience, drift):
@@ -246,8 +451,7 @@ def test_other_chat_host_cannot_delay_original_host_return(flow, explicit_source
     assert reply_status(root, receipt)[0]["status"] == "delivered"
 
 
-def test_exact_return_skips_other_host_before_admission(flow, monkeypatch):
-    from loopx.capabilities.manager_context import roundtrip
+def test_exact_return_skips_other_host_before_admission(flow):
     from loopx.control_plane.projects.registry_codec import SOURCE_SESSION_PROFILE_ID
 
     root, registry, store, create = flow
@@ -262,8 +466,9 @@ def test_exact_return_skips_other_host_before_admission(flow, monkeypatch):
     def unexpected(*args, **kwargs):
         raise AssertionError("A foreign host must not admit or deliver this return")
 
-    monkeypatch.setattr(roundtrip, "_exact_return_context", unexpected)
+    before = {path: path.read_bytes() for path in (_root(root) / "replies").rglob("*.json")}
     assert drain(root, registry, foreign, unexpected) == 0
+    assert {path: path.read_bytes() for path in before} == before
 
 
 def test_conclusion_coalesces_unsent_intermediate_decision_and_is_immutable(flow):
@@ -519,6 +724,69 @@ def test_ambiguous_provider_write_is_not_blindly_resent(flow):
     }
 
 
+def test_return_scan_isolates_invalid_address_from_valid_result(flow):
+    root, registry, store, create = flow
+    session, turn, receipt = create()
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Checked")
+    report(root, "research", "worker", rid, "conclusion", "The original request is complete.")
+    orphan = _root(root) / "replies" / "!orphan" / "conclusion.json"
+    _write(orphan, {"text": "An unrelated damaged address."})
+    original = orphan.read_bytes()
+
+    assert drain(root, registry, store, None) == 1
+    assert drain(root, registry, ChatSessionStore(root), None) == 0
+    assert reply_status(root, receipt)[0]["status"] == "delivered"
+    returned = [row for row in store.messages(session["session_id"])
+                if row.get("origin") == "manager_followup"]
+    assert len(returned) == 1 and returned[0]["turn_id"] == turn["turn_id"]
+    assert orphan.read_bytes() == original
+    assert not orphan.with_name("conclusion.delivery.json").exists()
+
+
+@pytest.mark.parametrize("missing", ["session", "turn"])
+def test_accepted_return_with_missing_original_route_terminates_without_resend(flow, missing):
+    root, registry, store, create = flow
+    session, turn, receipt = create(True)
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Checked")
+    report(root, "research", "worker", rid, "conclusion", "The original request is complete.")
+    attempt = {
+        "schema_version": "manager_return_delivery_attempt_v0", "provider": "lark",
+        "message_ref": "om_recorded_result", "intent_digest": "sha256:" + "a" * 64,
+        "provider_receipt": "sha256:" + "b" * 64,
+    }
+
+    class Transport:
+        sends = 0
+
+        def send_with_attempt(self, route, session, turn, text, record_attempt):
+            self.sends += 1
+            record_attempt(attempt)
+            return {"external_write_performed": True, "reply_verified": False}
+
+        def verify(self, *_):
+            pytest.fail("a missing original route cannot authorize verification")
+
+    sender = Transport()
+    drain(root, registry, store, sender)
+    path = _root(root) / "replies" / rid / "conclusion.delivery.json"
+    assert json.loads(path.read_text())["status"] == "verification_required"
+    directory = store.root / "sessions" / session["session_id"]
+    (directory / "session.json" if missing == "session" else
+     directory / "turns" / (turn["turn_id"] + ".json")).unlink()
+
+    assert drain(root, registry, ChatSessionStore(root), sender) == 1
+    state = json.loads(path.read_text())
+    assert state["status"] == "explicit_unverified"
+    assert state["error"] == "original_route_unavailable"
+    assert state["attempt"] == attempt
+    saved = path.read_bytes()
+    assert drain(root, registry, ChatSessionStore(root), sender,
+                 now=datetime.now(timezone.utc) + timedelta(days=1)) == 0
+    assert sender.sends == 1 and path.read_bytes() == saved
+
+
 def test_known_provider_locator_is_verified_after_restart_without_resend(flow):
     root, registry, store, create = flow
     session, _, receipt = create(True)
@@ -655,6 +923,96 @@ def test_chat_snapshot_keeps_current_session_delivery_after_unrelated_route_limi
         if row.get("message_id") in expected
     }
     assert returned == expected
+
+
+@pytest.fixture
+def returned_history(flow):
+    root, registry, store, create = flow
+    session, turn, receipt = create()
+    acknowledge(root, "research", "worker", receipt["request_id"], "adopt", "Checked")
+    report(root, "research", "worker", receipt["request_id"], "conclusion", "Completed the original request.")
+    assert drain(root, registry, store, None) == 1
+    return root, registry, store, session, turn, receipt
+
+
+@pytest.mark.parametrize("plural", [False, True])
+def test_history_delivery_reads_original_route_without_global_scan_and_stays_fresh(returned_history, monkeypatch, plural):
+    root, _, store, session, turn, receipt = returned_history
+    sid, rid = session["session_id"], receipt["request_id"]
+    if plural:
+        store.update_turn(sid, turn["turn_id"], response={"context_handoff_receipts": [receipt]})
+    messages = store.messages(sid)
+    followups = [message for message in messages if message.get("origin") == "manager_followup"]
+    routes = _root(root) / "roundtrips"
+    for index in range(10):
+        _write(routes / f"{index:064x}.json", {"request_id": f"{index:064x}", "session_id": "unrelated"})
+    original_glob = Path.glob
+
+    def no_global_routes(path, pattern, **kwargs):
+        assert path != routes, "A known original receipt must not enumerate all conversations"
+        return original_glob(path, pattern, **kwargs)
+
+    monkeypatch.setattr(Path, "glob", no_global_routes)
+    before = {path: path.read_bytes() for path in root.rglob("*.json")}
+    projected = project_chat_return_deliveries(root, sid, followups, source_store=store)
+    assert len(projected) == len(followups) == 1
+    assert projected[0]["return_delivery"]["status"] == "delivered"
+    assert {path: path.read_bytes() for path in root.rglob("*.json")} == before
+    # Delivery state remains current even when the original transcript is unchanged.
+    _write(_root(root) / "replies" / rid / "conclusion.delivery.json", {
+        "status": "verification_required", "error": "provider_delivery_unverified",
+    })
+    latest = project_chat_return_deliveries(root, sid, followups, source_store=store)
+    assert latest[0]["return_delivery"]["status"] == "verification_required"
+    assert latest[0]["return_delivery"]["error"] == "provider_delivery_unverified"
+    assert store.messages(sid) == messages
+
+
+@pytest.mark.parametrize("receipt_state", ["lost", "malformed", "unreadable_turn", "unmatched"])
+def test_history_delivery_keeps_fallback_for_missing_original_locators(returned_history, monkeypatch, receipt_state):
+    root, _, store, session, turn, receipt = returned_history
+    sid = session["session_id"]
+    if receipt_state == "unreadable_turn":
+        (store.root / "sessions" / sid / "turns" / (turn["turn_id"] + ".json")).write_text("{")
+    else:
+        response = {"context_handoff_receipts": "unsupported"} if receipt_state == "malformed" else (
+            {"context_handoff_receipts": [None, {"request_id": "../outside"}, {"request_id": "0" * 64}]}
+            if receipt_state == "unmatched" else None
+        )
+        store.update_turn(sid, turn["turn_id"], response=response)
+    messages = store.messages(sid)
+    routes, scanned = _root(root) / "roundtrips", []
+    original_glob = Path.glob
+
+    def observe(path, pattern, **kwargs):
+        if path == routes:
+            scanned.append(path)
+        return original_glob(path, pattern, **kwargs)
+
+    monkeypatch.setattr(Path, "glob", observe)
+    projected = project_chat_return_deliveries(root, sid, messages, source_store=store)
+    assert len(scanned) == 1
+    assert len(projected) == len(messages)
+    returned = next(message for message in projected if message.get("origin") == "manager_followup")
+    assert returned["return_delivery"] == {"schema_version": "manager_return_delivery_status_v0", **reply_status(root, receipt)[0]}
+    assert store.messages(sid) == messages
+
+
+@pytest.mark.parametrize("drift", ["session", "host", "request"])
+def test_history_original_receipt_is_only_a_locator_not_route_authority(returned_history, drift):
+    root, _, store, session, _, receipt = returned_history
+    sid, rid = session["session_id"], receipt["request_id"]
+    path = _root(root) / "roundtrips" / (rid + ".json")
+    route = json.loads(path.read_text())
+    if drift == "session":
+        route["session_id"] = "another-session"
+    elif drift == "host":
+        route["source_chat_runtime_root"] = str(root / "another-host")
+    else:
+        route["request_id"] = "0" * 64
+    _write(path, route)
+    messages = store.messages(sid)
+    assert project_chat_return_deliveries(root, sid, messages, source_store=store) == messages
 
 
 def test_provider_verification_outage_retries_read_only_without_resend(flow):
@@ -988,6 +1346,83 @@ def test_return_service_can_close_before_start(flow):
 
     assert service.stop.is_set()
     assert not service.thread.is_alive()
+
+
+def test_host_recovery_returns_the_original_result_once(flow, monkeypatch):
+    from loopx.capabilities.manager_context import roundtrip
+    root, registry, store, create = flow
+    _, _, receipt = create(True)
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "no_change", "Reviewed")
+    report(root, "research", "worker", rid, "conclusion", "Original result after host recovery.")
+    original, attempts, sends = roundtrip.drain, [], []
+    sent = threading.Event()
+    provenance = roundtrip.recover_source_chat_provenance
+    starts = []
+
+    def discover(*args, **kwargs):
+        starts.append(True)
+        return provenance(*args, **kwargs)
+
+    def failed_once(*args, **kwargs):
+        attempts.append(True)
+        if len(attempts) == 1:
+            raise AssertionError("synthetic host failure")
+        return original(*args, **kwargs)
+
+    def transport(*_):
+        sends.append(True)
+        sent.set()
+        return {"reply_verified": True, "idempotency_key": "sha256:synthetic-proof"}
+
+    monkeypatch.setattr(roundtrip, "drain", failed_once)
+    monkeypatch.setattr(roundtrip, "recover_source_chat_provenance", discover)
+    service = ReturnService(root, registry, store, transport)
+    service.start()
+    service.start()
+    try:
+        assert sent.wait(10)
+    finally:
+        service.close()
+    drain(root, registry, store, transport)
+    assert sends == [True]
+    assert starts == [True], "Step recovery must retain its scope instead of replaying startup discovery"
+    state = json.loads((_root(root) / "replies" / rid / "conclusion.delivery.json").read_text())
+    assert state["status"] == "delivered"
+
+
+def test_host_recovery_retains_the_queued_source_probe_backoff(flow, monkeypatch):
+    from loopx.capabilities.manager_context import execution
+    root, registry, store, _ = flow
+    original = execution.QueuedSourcePump
+    created, probes, deadlines = [], [], []
+    recovered = threading.Event()
+
+    def make_pump(*args):
+        pump = original(*args)
+        tick = pump.tick
+        created.append(pump)
+
+        def fail_after_first_probe(**kwargs):
+            tick(**kwargs)
+            probes.append(True)
+            deadlines.append(pump.next_probe)
+            if len(probes) == 1:
+                raise AssertionError("synthetic host failure after a real bounded probe")
+            recovered.set()
+
+        pump.tick = fail_after_first_probe
+        return pump
+
+    monkeypatch.setattr(execution, "QueuedSourcePump", make_pump)
+    service = ReturnService(root, registry, store, lambda *_: pytest.fail("No send is authorized"))
+    service.start()
+    try:
+        assert recovered.wait(10)
+    finally:
+        service.close()
+    assert len(created) == 1 and deadlines[0] == deadlines[1]
+    assert store.list_sessions() == [], "Host recovery cannot enroll a new Turn"
 
 
 @pytest.mark.parametrize("project", [False, True], ids=["steward", "project"])
@@ -1331,81 +1766,44 @@ def test_stored_empty_attachments_list_replays_without_delivery_conflict(flow):
     assert len(stored) == 1 and stored[0]["attachments"] == []
 
 
-def test_exact_loop_payload_conflict_sets_terminal_state_without_retry(
-    flow,
-    monkeypatch,
-):
-    root, registry, store, create = flow
-    session, turn, receipt = create(True)
+def test_exact_loop_payload_conflict_sets_terminal_state_without_retry(tmp_path):
+    from loopx.control_plane.projects.registry_codec import source_session_registry_transaction
+
+    registry = tmp_path / ".loopx" / "registry.json"
+    with source_session_registry_transaction(registry, operation="test_exact_return", create=lambda: {
+        "profile_id": "source_session_v1",
+        "goals": [{"id": "research", "repo": str(tmp_path), "status": "active",
+                   "goal_instance_id": "ginst_" + "a" * 32,
+                   "coordination": {"registered_agents": ["worker"]}}],
+        "session_bindings": [], "session_receipts": [], "lifetime_receipts": [],
+    }) as transaction:
+        transaction.commit(transaction.payload_copy())
+    store = ChatSessionStore(tmp_path)
+    session = store.create_session(goal_id="loopx-manager", agent_id="codex", adapter_kind="codex_app_server",
+                                   upstream_thread_id="fixture", channel_id="manager")
+    turn, _ = store.create_turn(session["session_id"], client_turn_id="original",
+                                message="Review the evidence.", origin="web")
+    receipt = deliver(tmp_path, registry, session=session, turn=turn,
+                      request={"goal_id": "research", "agent_id": "worker"})
+    store.update_turn(session["session_id"], turn["turn_id"], status="completing",
+                       response={"context_handoff_receipt": receipt})
+    store.finalize_managed_turn_completion(session["session_id"], turn["turn_id"])
     rid = receipt["request_id"]
-    acknowledge(root, "research", "worker", rid, "adopt", "Checked")
-    report(
-        root,
-        "research",
-        "worker",
-        rid,
-        "conclusion",
-        "Checked with the current evidence and found no gap.",
-    )
-    conflicting_mid = "handoff." + _hash([rid, "conclusion"])
-    store.append_message(
-        session["session_id"],
-        role="agent",
-        text="An earlier, different version of this conclusion.",
-        turn_id=turn["turn_id"],
-        origin="manager_followup",
-        message_id=conflicting_mid,
-    )
-    # The exact admission machinery needs a source-session registry fixture
-    # this module does not build; stub the context construction and the
-    # settlement writer so the exact loop's own delivery-side conflict
-    # check is what runs against the real divergent row above.
-    import loopx.capabilities.manager_context.roundtrip as return_roundtrip
-    from loopx.control_plane.projects.registry_codec import (
-        SOURCE_SESSION_PROFILE_ID,
-    )
-
-    settlements = []
-
-    def fake_settlement(root, registry, context, value, **kwargs):
-        settlements.append(dict(value))
-
-    monkeypatch.setattr(
-        return_roundtrip, "_write_exact_return_state", fake_settlement
-    )
-
-    def fake_context(root, registry, store, path, state_path, now, effects):
-        reply = return_roundtrip._read(path)
-        return {
-            "reply": {**reply, "phase": path.stem},
-            "row": {"request_id": rid, "agent_id": "worker"},
-            "route": {"session_id": session["session_id"]},
-            "session": session,
-            "turn": turn,
-            "store": store,
-            "state_path": state_path,
-            "state": {},
-            "token": "fixture",
-            "source_id": "lark:om_fixture_source",
-        }
-
-    monkeypatch.setattr(return_roundtrip, "_exact_return_context", fake_context)
-    profile = json.loads(registry.read_text())
-    profile["profile_id"] = SOURCE_SESSION_PROFILE_ID
-    registry.write_text(json.dumps(profile))
+    acknowledge(tmp_path, "research", "worker", rid, "adopt", "Checked", registry=registry)
+    report(tmp_path, "research", "worker", rid, "conclusion", "Checked the evidence.", registry=registry)
+    mid = "handoff." + _hash([rid, "conclusion"])
+    store.append_message(session["session_id"], role="agent", text="An earlier, different conclusion.",
+                         turn_id=turn["turn_id"], origin="manager_followup", message_id=mid)
     deliveries = []
-
-    def recording_transport(route, session, turn, text):
-        deliveries.append(text)
-        return {"reply_verified": True, "idempotency_key": "sha256:provider-proof"}
-
-    drain(root, registry, store, recording_transport)
+    assert drain(tmp_path, registry, store, lambda *args: deliveries.append(args)) == 1
     assert deliveries == []
-    assert len(settlements) == 1
-    assert settlements[0] == {
-        "status": "explicit_unverified",
-        "error": "manager_return_payload_conflict",
-    }
+    state_path = _root(tmp_path) / "replies" / rid / "conclusion.delivery.json"
+    state = json.loads(state_path.read_text())
+    assert state["status"] == "explicit_unverified"
+    assert state["error"] == "manager_return_payload_conflict"
+    assert state["goal_ref"] == receipt["goal_ref"]
+    assert drain(tmp_path, registry, ChatSessionStore(tmp_path), None) == 0
+    assert json.loads(state_path.read_text()) == state
 
 
 def test_explicit_channel_return_completes_transcript_only_without_sender(flow):

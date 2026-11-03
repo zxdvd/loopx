@@ -1,4 +1,4 @@
-/** One opt-in work and research stride strategy; all execution authority retains its owners. */
+/** One work and research stride strategy; all execution authority retains its owners. */
 import {createHash} from "node:crypto";
 import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import schema from "../stride_strategy_schema.json" with {type: "json"};
@@ -19,52 +19,19 @@ export function normalizeStrideStrategy(value: unknown): string {
 // Read-only questions for the existing three axes; not another decision schema,
 // result classifier, route ban or admission authority.
 const decisionValueReview = {
-  work_slice: "Compare the complete cost and useful outcome of continuation with one feasible alternative. " +
-    "Assess the quality of the first deliverable and later gain beyond the retained best separately; " +
-    "recovering an avoidable initial quality deficit is not evidence of additional capability. " +
-    "Name the observation that would change that choice, and size a complete experiment to obtain it. " +
-    "A larger test count is not greater decision value; preserve unfinished decisive work rather than restart its setup.",
-  route_distance: "Name the remaining authoritative goal gap, its limiting component and the plausible headroom. " +
-    "Keep the retained best artifact as the comparison anchor and check whether subsequent work actually implements the proposed mechanism change. " +
-    "Compare a different approach that can affect that component. Distinguish an unexecuted intervention, failed transfer and insufficient route potential: they imply different next experiments. " +
-    "When evidence weakens the current route, generate a small set of genuinely different explanations or approaches before selecting one: consider representation, decomposition, search method or information source where relevant. " +
-    "Contrast their predictions and full costs, then choose a discriminating experiment; parameter variants of the same mechanism are not independent alternatives. " +
-    "Missing feedback is a wait or evidence gap, not proof of route failure or exhausted alternatives. " +
-    "A changed auxiliary mechanism alone does not show that it addresses the gap.",
-  validation_scope: "Use evidence applicable to the limiting outcome and changed mechanism. " +
-    "Bind comparisons to the artifact version, input conditions and original budget, and distinguish when feedback became available from when work was submitted. " +
-    "Keep decision, execution and measured outcome separate; a saved snapshot is not proof of restoration or continued execution. " +
-    "First establish that the intervention actually changes the relevant behavior; unchanged outcomes may require tracing its activation rather than a wider parameter sweep. " +
-    "Choose a comparison or negative control that separates the surviving explanations, and state what each possible result would change. " +
-    "Before a check vetoes further work, identify its source and protected goal: an original constraint or frozen study criterion, versus an agent-proposed candidate heuristic. " +
-    "For a heuristic discrepancy, compare the incumbent under the same relevant control and measure or bound the effect on the goal; use a finite diagnosis that can decide grow or switch. " +
-    "A prospective heuristic revision needs an explicit rationale and retained counterevidence; it cannot turn an earlier failure into a pass, relax an original constraint or override a frozen study criterion. " +
-    "Distinguish readiness for an authorized informative evaluation from evidence sufficient to replace the incumbent. Consider its full marginal and opportunity cost under existing budget, feedback and permission limits; preserve the best qualified artifact. " +
-    "Distinguish local or synthetic gains from authoritative transfer, and repeated identical outcomes from new information. " +
-    "Choose decisive coverage before broadening a sweep; retain uncertainty and relevant negative evidence.",
+  work_slice: "Compare continuation with a feasible alternative by complete cost and useful outcome. " +
+    "Separate first deliverable quality from later gain beyond the retained best; recovering an avoidable initial quality deficit is not added capability. " +
+    "Name the choice-changing observation and a complete experiment to obtain it. Test count is not decision value; retain unfinished decisive work instead of restarting setup.",
+  route_distance: "Identify the authoritative goal gap, limiting component and headroom. Anchor to the retained best artifact; check whether subsequent work actually implements a mechanism addressing that gap. " +
+    "Distinguish unexecuted intervention, failed transfer and insufficient route potential. If evidence weakens the route, generate a small set of genuinely different explanations or approaches (representation, decomposition, search method or information source). " +
+    "Contrast their predictions and full costs, then choose a discriminating experiment; parameter variants of the same mechanism are not independent alternatives. Missing feedback is a wait or evidence gap, not route failure or exhaustion.",
+  validation_scope: "Bind evidence to the limiting outcome, changed mechanism, artifact version, input conditions and original budget; separate submission from when feedback became available. " +
+    "Separate decision, execution and outcome: a snapshot is not proof of restoration or continued execution. Check activation before widening a sweep; choose decisive comparisons/negative controls and what each result changes. " +
+    "Before a check vetoes work, identify its source and protected goal: original constraint or frozen study criterion versus agent-proposed candidate heuristic. For a heuristic discrepancy, compare the incumbent under the same relevant control, measure or bound the effect on the goal, and use finite diagnosis that can decide grow or switch. " +
+    "A prospective heuristic revision needs explicit rationale and retained counterevidence; it cannot turn an earlier failure into a pass, relax an original constraint or override a frozen study criterion. " +
+    "Separate readiness for an authorized informative evaluation from evidence sufficient to replace the incumbent; count full marginal/opportunity cost within budget, feedback and permission limits and preserve the best qualified artifact. " +
+    "Separate local/synthetic gains from authoritative transfer and identical outcomes from new information; retain uncertainty and negatives before broadening.",
 };
-export function stridePlanningGuidance(value: unknown): string[] {
-  if (normalizeStrideStrategy(value) === "off") return [];
-  return ["Review actual adoption of the previous decision, new information and authoritative goal outcomes separately. " +
-    "Choose grow to expand useful completed scope on a supported route, switch to test a different mechanism, or verify to resolve a route decision. " +
-    "Describe work size, route distance and validation breadth independently as concrete plans, with a reason for each. " +
-    "Name the reference method and the assumption or mechanism that changes; more tuning alone is not a route switch. " +
-    "Use the live decision_value_review questions to compare goal headroom and full cost through the three existing axes. " +
-    "Work size must cover a coherent accepted deliverable or an experiment capable of an interpretable conclusion: a new route may need a larger " +
-    "implementation and uncertain evidence may need broader validation. Expand useful work when evidence supports it; " +
-    "do not respond to a persistent unexplained gap by repeatedly making the same work smaller. " +
-    "For engineering, organizing or maintenance, grow can complete related implementation, integration, validation and readback together to reduce repeated planning and source reads. Work size is accepted scope, not Todo text, file count or tool calls. Do not bundle independent commitments or cross dependency, risk or authority boundaries to make work larger. Do not restart unfinished coherent work or repeat small probes unless changed inputs or a new uncertainty justify it. " +
-    "Where relevant, compare continuation, an alternative mechanism and replication using applicable Explore findings and scoped counterevidence. " +
-    "Do not force a pivot from elapsed time, a progress count or one noisy result. " +
-    "Missing or refuted evidence is not a universal route ban. Preserve the best qualified artifact and original priorities. " +
-    "Declare minimum evidence, a testable prediction, adoption criterion and full marginal cost including control and validation; review actual adoption, quality and cost next. Verify must resolve a named grow-or-switch question, not repeat an unchanged check. " +
-    "Carry the next_probe into existing executable Todo work, reusing an unfinished experiment when it still answers the question. " +
-    "Use agent_vision.todo_delta entries such as retain:todo_<id> to identify that work after its normal authoring/readback; do not invent IDs or add a planning-only Todo. " +
-    "Read planned_work and subsequent observations before crediting the previous decision. A negative experiment may finish its Todo while the broader goal remains open. " +
-    "Keep a candidate experiment separate from the best retained artifact: authorized evaluation may be informative before replacement is justified. " +
-    "Use the live stride_control contract for agent_vision.stride_decision. This controls proposal completeness, not execution, " +
-    "spawn, acceptance or a promise of utility; existing Todo/path and authority owners still govern work."];
-}
 
 export const STRIDE_DECISION_SCHEMA = decisionSchema.schema_version;
 export const STRIDE_PROBE_LIMITS = decisionSchema.probe_field_limits;
@@ -124,7 +91,9 @@ function comparisonCandidates(value: unknown): JsonObject[] {
 /** Agent interpretations are structured claims, not certified evidence or authority. */
 export function normalizeStrideDecision(value: unknown, bounded: BoundedText = text):
   [JsonObject | null, Record<string, number>] {
-  if (value === undefined) return [null, {}];
+  // Compact run history records absent optional decisions as JSON null.
+  // Absence is not a proposal and cannot satisfy an enabled stride review.
+  if (value == null) return [null, {}];
   const input = requireJsonObject(value, "stride_decision");
   // Off-mode transport and historical readback retain both earlier v1 shapes.
   // An enabled fresh review requires the current concrete-plan schema.
@@ -227,7 +196,6 @@ export function normalizeStrideDecision(value: unknown, bounded: BoundedText = t
 
 /** Historical read codec only, never a selectable strategy or new proposal. */
 export function normalizeRecordedStrideDecision(value: unknown): JsonObject | null {
-  if (value == null) return null;
   return normalizeStrideDecision(value)[0];
 }
 function normalizeHistoricalStrideDecision(value: unknown, bounded: BoundedText): [JsonObject, Record<string, number>] {
@@ -414,6 +382,9 @@ export function strideControlContract(context: JsonObject, obligationId: unknown
   return {schema_version: decisionSchema.schema_version, strategy_version: context.stride_strategy,
     reference_context_id: context.context_id ?? null, reference_obligation_id: obligationId,
     axis_names: decisionSchema.axis_names, actions: decisionSchema.actions,
+    basis_options: decisionSchema.basis_options,
+    required_fields: ["schema_version", "strategy_version", "reference_context_id", "reference_obligation_id",
+      "basis", "action", "axes", "next_probe", ...(previous ? ["previous_review"] : []), ...(basis ? ["explore_review"] : [])],
     axis_plan_limit: decisionSchema.axis_plan_limit,
     axis_reason_limit: decisionSchema.axis_reason_limit, probe_field_limits: STRIDE_PROBE_LIMITS,
     decision_value_review: {...decisionValueReview},
@@ -426,23 +397,15 @@ export function strideControlContract(context: JsonObject, obligationId: unknown
       selected_candidate_option: {
         attachment: "explore_review.selected_candidate",
         fields: ["todo_id", "node_id", "finding_id", "source_sha256"],
-        rule: "Optionally bind the next probe to an exact comparison_candidates Todo/outcome, cite that finding with disposition=used, and retain the same existing Todo in agent_vision.todo_delta. " +
-          "For an omitted alternative, read the existing global result pages and attach their coordinates in result_pages; current Todo links are replayed with those results. " +
-          "Cards share the page limit: expand --result-limit up to 20 for multiple Todos linked to one result. omitted_comparison_candidates discloses the remaining bound; omission does not mean ineligible. " +
-          "Choose continuation, a different mechanism or verification from the evidence; this source binding does not certify novelty, execution or utility and grants no admission.",
+        rule: "Optional: bind an exact comparison_candidates Todo/outcome, cite its finding as used, and retain that Todo in agent_vision.todo_delta. " +
+          "Read omitted alternatives via explore_basis.rule; cards share the page limit (--result-limit up to 20). Omission is not ineligibility. Binding grants no admission or proof of novelty, execution or utility.",
       },
     } : {}),
     minimal_example: example,
     attachment: "agent_vision.stride_decision", requires_evidence_linked_path: true,
     required_on_periodic_review: true,
-    rule: "Every due periodic review and observed-stall review (typed_progress_repeat, no_progress_streak, repeated_action_loop or external_progress_review_drift) with this strategy enabled must record a stride decision before settlement, including when a typed progress, successor, blocker or terminal outcome is also reported. " +
-      "The decision requires an evidence-linked Vision path (including a terminal stop when supported by evidence), an explicit grow/switch/verify action and a concrete plan/reason for each axis. " +
-      "Grow expands a supported route; switch names the reference method and changed mechanism; verify resolves a named grow-or-switch question. Size every action for a coherent accepted deliverable or complete interpretable experiment, including ordinary engineering and maintenance. Grow changes useful completed scope, not authority or settlement boundaries. " +
-      "The minimal example demonstrates syntax, not the recommended action for the current evidence. " +
-      "decision_value_review is Agent guidance for the existing axis plans/reasons and next_probe, not additional proposal fields or a settlement gate. " +
-      "When a previous decision is delivered, assess its adoption, information and goal gain in previous_review against its exact reference. " +
-      "When Explore basis is delivered, assess applicable findings/alternatives in explore_review; missing or omitted evidence stays unknown. " +
-      "An empty current projection does not establish that retained historical research is absent; distinguish unread or unprojected evidence from an exhausted alternative. " +
-      "These are Agent claims and proposal-shape obligations, not execution authority or utility certification. Other source-specific outcomes remain legal but cannot bypass a due stride review.",
+    rule: "Enabled periodic and observed-stall reviews require a current evidence-linked Vision path and stride decision before any settlement, including progress/successor/blocker/terminal exits. " +
+      "Each axis needs plan/reason: grow useful completed scope on a supported route; switch names reference method and changed mechanism; verify resolves a grow-or-switch question. Apply these plans to the actual Todo scope and acceptance using the existing Todo authoring/update commands, then record the verified IDs in todo_delta. Retain unfinished useful work; do not create successor microtasks merely to count progress. On grow, consolidate fragmented setup, implementation, integration and decisive validation into a coherent accepted deliverable or complete interpretable experiment, including engineering/maintenance. The next admitted work must execute that scope, method and validation plan; changing review frequency or repeating the proposal is not adoption. Keep the configured review interval and preserve dependencies, acceptance, risk, authority and per-Turn settlement boundaries. " +
+      "Review the exact previous decision's adoption/information/goal gain and delivered Explore sources in their review fields. Missing/omitted/unread/unprojected evidence stays unknown, not exhausted. Guidance adds no fields/gates; the example is syntax, not an action recommendation. Claims certify no authority, execution or utility. Other legal outcomes cannot bypass a due review.",
   };
 }

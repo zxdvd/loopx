@@ -22,6 +22,7 @@ from ...todos.contract import (
 from ...todos.todo_semantics import (
     todo_advancement_frontier_counts,
     todo_item_is_watch_only_monitor,
+    todo_scoped_runnable_advancement_count,
     todo_summary_open_task_counts,
 )
 from ...todos.succession_warning import (
@@ -1078,8 +1079,8 @@ def derive_goal_frontier_replan_obligation_from_summaries(
                     "priority": "P0",
                     "todo_ids": settlement_todo_ids,
                     "text": (
-                        "settle the exact completed Todos through no-follow-up or "
-                        "link each to a real runnable successor"
+                        "settle the completed scope using its original completion identity, or "
+                        "record a genuine dependency on the mutable successor; do not update terminal links"
                     ),
                 },
                 {
@@ -1099,8 +1100,10 @@ def derive_goal_frontier_replan_obligation_from_summaries(
             recommended_action=(
                 "settle the exact completed Todo(s) "
                 f"{settlement_summary} through loopx todo complete --no-follow-up "
-                "when no real work remains; otherwise link a real runnable successor. "
-                "do not invent a user gate or add a lifecycle-only filler Todo"
+                "with the original completion identity when no follow-up remains in that scope. "
+                "Independent open/deferred work remains active. For genuine dependent work, "
+                "record its real readiness dependency on the mutable successor, preserving gates; "
+                "never add links to a terminal Todo; do not invent a user gate or lifecycle-only filler Todo"
             ),
             extra_fields={
                 "resolution_mode": TODO_LIFECYCLE_SETTLEMENT_RESOLUTION_MODE,
@@ -1544,15 +1547,23 @@ def build_goal_frontier_projection_context_from_status(
         agent_todo_summary=agent_todo_summary,
         agent_id=agent_id,
     )
+    # Commitment floors include open work held by a receipt-owned retry. The
+    # typed selection projection, when complete for this lane, owns how much
+    # work is actually runnable; a commitment is not an execution candidate.
+    selectable_advancement_count = todo_scoped_runnable_advancement_count(
+        agent_todo_summary, agent_id=agent_id,
+    )
+    if selectable_advancement_count is None:
+        selectable_advancement_count = (
+            frontier_counts["current_agent_claimed_advancement_count"]
+            + frontier_counts["unclaimed_advancement_count"]
+        )
     vision_wait_state = build_goal_vision_wait_state(
         agent_todo_summary=agent_todo_summary,
         source_items=agent_todo_source_items,
         agent_id=agent_id,
         acceptance_gaps=source_acceptance_gaps,
-        selectable_advancement_count=(
-            frontier_counts["current_agent_claimed_advancement_count"]
-            + frontier_counts["unclaimed_advancement_count"]
-        ),
+        selectable_advancement_count=selectable_advancement_count,
     )
     acceptance_gaps = (
         [gap for gap in source_acceptance_gaps if gap.get("kind") in GOAL_ACCEPTANCE_HOLD_TRIGGERS]

@@ -4,14 +4,42 @@ import {settlementPlanPayload} from "../../loopx/control_plane/effect_program.ts
 import {visionAuthoringContract} from "../../loopx/control_plane/goals/vision_checkpoint.ts";
 import {projectMcpInteraction} from "../../loopx/control_plane/turn_driver/host_interaction.ts";
 import {turnScopedCliSettlementPlan} from "../../loopx/control_plane/quota/settlement_plan.ts";
+import {DELIVERY_OUTCOMES, decodeOptionalDeliveryOutcome, isTurnScopedSettlementOutcome}
+  from "../../loopx/control_plane/work_items/delivery_outcome.ts";
 
 const input = {
   identity: {goal_id: "goal", agent_id: "agent", todo_id: "todo", turn_instance_id: "turn"},
+  delivery_batch_scale_choices: ["test_only", "single_surface", "multi_surface", "implementation"],
   command_templates: {
+    todo_claim: "ordinary claim",
     todo_completion: "ordinary completion", durable_writeback: "writeback",
     quota_spend: "spend", terminal_closeout: "terminal completion",
   },
 };
+
+for (const lane of ["ordinary", "in_flight", "autonomous_replan"]) {
+  test(`${lane} settlement offers only outcomes that its writer can qualify`, () => {
+    const identity = lane === "autonomous_replan"
+      ? {goal_id: "goal", agent_id: "agent", replan_obligation_id: "replan", turn_instance_id: "turn"}
+      : input.identity;
+    const plan = turnScopedCliSettlementPlan({...input, identity,
+      ...(lane === "in_flight" ? {delivery_boundary: "in_flight_continuation"} : {}),
+    });
+    const guidance = plan.steps[1].precondition;
+    const offered = guidance.match(/; outcome=([a-z_|]+)\./)?.[1].split("|");
+    const binding = lane === "autonomous_replan" ? "replan" : "todo";
+    const blocked = {schema_version: "typed_progress_observation_v0", result_class: "blocked",
+      work_item_id: binding, blocker_id: "blocker", evidence_ids: ["evidence:failure"]};
+    // The writer's qualification rule, rather than the projection's source list,
+    // is the independent oracle for this Turn's advertised choices.
+    assert.deepEqual(offered, DELIVERY_OUTCOMES.filter(outcome =>
+      isTurnScopedSettlementOutcome(outcome, blocked, binding)));
+    assert.equal(isTurnScopedSettlementOutcome("outcome_gap", undefined, binding), false);
+    assert.equal(decodeOptionalDeliveryOutcome("surface_only"), "surface_only");
+    assert.equal(isTurnScopedSettlementOutcome("surface_only", blocked, binding), false);
+    assert.match(guidance, /do not relabel preparation-only work as progress/i);
+  });
+}
 
 test("ordinary completion is conditional on deliverable acceptance, not Turn accounting", () => {
   const plan = turnScopedCliSettlementPlan(input);
@@ -35,16 +63,38 @@ test("ordinary completion is conditional on deliverable acceptance, not Turn acc
   assert.equal((wire.ordered_steps as Record<string, unknown>[])[0].command_condition,
     "todo_deliverable_complete");
   assert.deepEqual(input.command_templates, {
+    todo_claim: "ordinary claim",
     todo_completion: "ordinary completion", durable_writeback: "writeback",
     quota_spend: "spend", terminal_closeout: "terminal completion",
   });
 });
 
-test("in-flight progress neither executes completion nor rewrites the declaration", () => {
+test("canonical hard-lease guidance carries execution preparation without changing other modes", () => {
+  const original = turnScopedCliSettlementPlan(input);
+  for (const handoff_mode of [undefined, null, "soft_claim", "legacy"]) {
+    assert.deepEqual(turnScopedCliSettlementPlan({...input, handoff_mode}), original);
+  }
+  const hard = turnScopedCliSettlementPlan({...input, handoff_mode: "hard_lease"});
+  assert.match(hard.steps[0].precondition, /ordinary Todo claim: `ordinary claim`/);
+  assert.match(hard.steps[0].command_template!, /--claim-operation-id '<original claim_operation_id>'/);
+  assert.match(hard.steps[3].command_template!, /--claim-operation-id '<original claim_operation_id>'/);
+  assert.deepEqual(hard.identity, original.identity);
+  assert.deepEqual(hard.steps.slice(1, 3), original.steps.slice(1, 3));
+  const explicit = turnScopedCliSettlementPlan({...input, handoff_mode: "hard_lease",
+    completion_proof_supplied: true});
+  assert.equal(explicit.steps[0].command_template, original.steps[0].command_template);
+  assert.equal(explicit.steps[3].command_template, original.steps[3].command_template);
+  assert.throws(() => turnScopedCliSettlementPlan({...input, handoff_mode: "hard_lease",
+    command_templates: {...input.command_templates, todo_claim: ""}}), /must be a non-empty string/);
+});
+
+test("in-flight validation offers completion only after original deliverable acceptance", () => {
   const plan = turnScopedCliSettlementPlan({...input, delivery_boundary: "in_flight_continuation"});
-  assert.equal(plan.steps[0].command_template, undefined);
-  assert.equal(plan.steps[0].command_condition, undefined);
-  assert.match(plan.steps[0].precondition, /keep the Todo open/);
+  assert.equal(plan.steps[0].command_template, "ordinary completion");
+  assert.equal(plan.steps[0].command_condition, "todo_deliverable_complete");
+  assert.equal(plan.steps[0].conditional, undefined);
+  assert.match(plan.steps[0].precondition, /keep the Todo open with its original declaration/);
+  assert.match(plan.steps[0].precondition, /semantic_closeout.*same Turn; no new guard or binding/);
   assert.match(plan.steps[1].precondition, /^validation succeeded/);
   assert.match(plan.steps[1].precondition, /Route elimination needs evidence/);
   assert.match(plan.steps[1].precondition, /failure alone is not progress/);
@@ -58,6 +108,20 @@ test("in-flight progress neither executes completion nor rewrites the declaratio
   assert.equal(plan.steps[3].conditional, true);
 });
 
+test("Todo-bound semantic planning shares its exact autonomous authoring contract", () => {
+  const ordinary = turnScopedCliSettlementPlan(input);
+  assert.deepEqual(turnScopedCliSettlementPlan({...input, autonomous_replan: false}), ordinary);
+  const replan = turnScopedCliSettlementPlan({...input, autonomous_replan: true});
+  assert.deepEqual(replan.steps[1].vision_authoring, visionAuthoringContract(true));
+  assert.match(replan.steps[1].precondition, /Autonomous replan uses --delivery-boundary semantic_closeout/);
+  assert.doesNotMatch(replan.steps[1].precondition, /outcome_progress may use in_flight_continuation/);
+  assert.deepEqual(replan.identity, ordinary.identity);
+  for (const i of [0, 2, 3]) assert.deepEqual(replan.steps[i], ordinary.steps[i]);
+  for (const autonomous_replan of [null, "true", 1]) {
+    assert.throws(() => turnScopedCliSettlementPlan({...input, autonomous_replan}), /must be a boolean/);
+  }
+});
+
 test("autonomous replan never manufactures a Todo completion step", () => {
   const plan = turnScopedCliSettlementPlan({...input,
     identity: {goal_id: "goal", agent_id: "agent", replan_obligation_id: "replan", turn_instance_id: "turn"},
@@ -66,6 +130,7 @@ test("autonomous replan never manufactures a Todo completion step", () => {
   assert.deepEqual(plan.steps.map(step => step.kind), ["validation", "durable_writeback", "quota_spend"]);
   assert.equal(plan.steps[0].command_template, undefined);
   assert.equal(plan.identity.binding_kind, "autonomous_replan");
+  assert.match(plan.steps[1].precondition, /Autonomous replan uses --delivery-boundary semantic_closeout/);
   assert.ok(plan.steps.every(step => step.vision_authoring === undefined));
   assert.match(plan.steps[1].precondition, /^validation succeeded/);
   assert.match(plan.steps[1].precondition, /Route elimination needs evidence/);
@@ -80,6 +145,10 @@ test("autonomous replan never manufactures a Todo completion step", () => {
 });
 
 test("incomplete command facts or ambiguous identity fail closed", () => {
+  for (const choices of [undefined, [], [""], [1]]) {
+    assert.throws(() => turnScopedCliSettlementPlan({...input, delivery_batch_scale_choices: choices}),
+      /must be an array of strings|must be a non-empty string/);
+  }
   for (const key of ["todo_completion", "durable_writeback", "quota_spend", "terminal_closeout"]) {
     assert.throws(() => turnScopedCliSettlementPlan({...input,
       command_templates: {...input.command_templates, [key]: ""},

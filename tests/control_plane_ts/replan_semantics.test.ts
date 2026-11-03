@@ -32,8 +32,9 @@ test("open-work review guidance does not require configured checks or outcome de
       assert.deepEqual(retired, ordinary);
       assert.deepEqual(current, ordinary, "default review and its authority do not depend on an outcome declaration");
       const guidance = (ordinary.planning_guidance as string[]).join(" ");
-      for (const clause of ["even with open Todos", "Strongest first delivery", "diagnostic validation",
-        "Flat metrics alone prove neither progress nor exhaustion", "scope negative results"]) assert.ok(guidance.includes(clause));
+      for (const clause of ["even with open Todos", "revisable planning choices", "never forces a pivot"]) {
+        assert.ok(guidance.includes(clause));
+      }
     }
   }
 });
@@ -123,10 +124,57 @@ test("verified original writeback projects only its outstanding debit even after
     current_obligation: null, transition_candidates: []}), /malformed/);
 });
 
+test("only a plain outcome review has a scalar receipt source", () => {
+  const source = {schema_version: "autonomous_replan_obligation_v0", required: true,
+    obligation_id: "replan-1111111111111111", agent_id: "reviewer", trigger_count: 1,
+    stop_condition: "Stop at owner-only decisions.",
+    triggers: [{kind: "goal_outcome_uncovered", text: "Private Goal prose stays outside telemetry"}],
+    replan_context: {context_id: "old-acceptance-basis"}};
+  const request = {operation: "receipt_review_source", agent_id: "reviewer", obligation: source};
+  assert.deepEqual(projectReplanSemantics(request), {review_source: {
+    kind: "goal_outcome_uncovered", stop_condition: source.stop_condition}});
+  for (const patch of [{required: false}, {schema_version: "unknown"}, {agent_id: "another-agent"},
+    {triggers: []}, {trigger_count: 2}, {trigger_count: undefined},
+    {triggers: [{kind: "periodic_review_due"}]},
+    {triggers: [{kind: "goal_outcome_uncovered"}, {kind: "external_progress_review_drift"}]},
+    {satisfying_semantic_outcomes: ["new_runnable_successor"]},
+    {progress_baseline: {}}, {progress_window: []},
+    {triggers: [{kind: "goal_outcome_uncovered", progress_baseline: {}}]},
+    {triggers: [{kind: "goal_outcome_uncovered", progress_window: []}]},
+    {stop_condition: null}, {stop_condition: "s".repeat(241)},
+    {resolution_mode: "todo_lifecycle_settlement"},
+    {capability_guard: {schema_version: "semantic_replan_capability_guard_v0"}}]) {
+    assert.deepEqual(projectReplanSemantics({...request, obligation: {...source, ...patch}}), {review_source: null});
+  }
+});
+
+test("a recorded outcome review survives work-link refinement without cached context or discharge", () => {
+  const id = "replan-1111111111111111";
+  const request = {operation: "receipt_bound_obligation", guard_scoped: true,
+    replay_phase: "open", selected_obligation_id: id, current_obligation: null,
+    transition_candidates: [], agent_id: "reviewer", receipt_review: {
+      kind: "goal_outcome_uncovered", stop_condition: "Stop at owner-only decisions."}};
+  const recovered = projectReplanSemantics(request).obligation as JsonObject;
+  assert.equal(recovered.obligation_id, id);
+  assert.equal(recovered.agent_id, "reviewer");
+  assert.equal(recovered.stop_condition, request.receipt_review.stop_condition);
+  assert.deepEqual(recovered.triggers, [{kind: "goal_outcome_uncovered"}]);
+  assert.equal(recovered.selection_binding, "heartbeat_receipt");
+  assert.equal(recovered.replan_context, undefined);
+  assert.equal(recovered.settlement_action_packet, undefined);
+  assert.equal(projectReplanSemantics({operation: "qualify", obligation: recovered}).accepted, false);
+  for (const invalid of [{guard_scoped: false}, {agent_id: null},
+    {receipt_review: null}, {receipt_review: {kind: "periodic_review_due"}},
+    {receipt_review: {kind: "goal_outcome_uncovered"}}]) {
+    assert.throws(() => projectReplanSemantics({...request, ...invalid}), /identity conflicts/);
+  }
+  assert.equal(projectReplanSemantics({...request, selected_obligation_id: null}).obligation, null);
+});
+
 test("obligation source governs both authoring projection and semantic discharge", () => {
   const projection = projectReplanSemantics({operation: "requirements", obligation});
   assert.match(String(projection.cli_semantic_args), /--agent-vision-json/);
-  assert.deepEqual((projection.writeback_contract as Record<string, unknown>).vision_authoring, visionAuthoringContract());
+  assert.deepEqual((projection.writeback_contract as Record<string, unknown>).vision_authoring, visionAuthoringContract(true));
   assert.equal(projectReplanSemantics({operation: "qualify", obligation,
     observation_delta: {delta_kinds: ["new_surface"]}}).accepted, false);
   const delta = projectReplanSemantics({operation: "qualify", obligation, agent_vision: vision});
@@ -225,7 +273,7 @@ test("external progress review: renamed identifiers discharge only behind new ev
   const contract = projection.writeback_contract as Record<string, unknown>;
   assert.equal(contract.identity_outcomes_require_new_evidence, true);
   assert.match(String(contract.alternative_cli_semantic_args), /--agent-vision-json/);
-  assert.deepEqual(contract.vision_authoring, visionAuthoringContract());
+  assert.deepEqual(contract.vision_authoring, visionAuthoringContract(true));
 
   const qualify = (observation_delta?: Record<string, unknown>, agent_vision?: Record<string, unknown>) =>
     projectReplanSemantics({operation: "qualify", obligation: review, observation_delta, agent_vision});
@@ -334,18 +382,8 @@ test("planning advice cannot discharge a replan or widen source-specific exits",
     const source = {triggers: [{kind}]};
     const projection = projectReplanSemantics({operation: "requirements", obligation: source});
     const guidance = projection.planning_guidance as string[];
-    assert.equal(guidance.length, 5);
-    assert.match(guidance[0], /operating objective and cumulative requirements/);
-    assert.match(guidance[0], /justified no-change decision/);
-    assert.match(guidance[0], /scope conflict, missing evidence or stale display text/);
-    assert.match(guidance[3], /provisional agent-created candidate rules/);
-    assert.match(guidance[3], /Do not relax frozen acceptance/);
-    assert.match(guidance[4], /Compare expected goal\/information gain with full marginal cost/);
-    assert.match(guidance[4], /executed path and current artifact/);
-    assert.match(guidance[4], /scope negative results to tested conditions/);
-    assert.match(guidance[4], /Correct within the affected work first/);
-    assert.match(guidance[4], /A due review can retain the path/);
-    assert.match(guidance[4], /neither adoption nor improvement/);
+    assert.ok(guidance.length > 0 && guidance.length <= 3);
+    assert.ok(guidance.join(" ").length < 3000, "boundaries replace the long method checklist");
     const refusal = projectReplanSemantics({operation: "qualify", obligation: source,
       planning_guidance: projection.planning_guidance});
     assert.equal(refusal.accepted, false);
@@ -355,7 +393,7 @@ test("planning advice cannot discharge a replan or widen source-specific exits",
 });
 
 
-test("versioned stride advice is opt-in and never a semantic discharge", () => {
+test("stride format replaces duplicate strategy advice and never discharges a semantic review", () => {
   const plain = {triggers: [{kind: "typed_progress_repeat"}]};
   const base = projectReplanSemantics({operation: "requirements", obligation: plain});
   const off = projectReplanSemantics({operation: "requirements", obligation: {
@@ -363,12 +401,11 @@ test("versioned stride advice is opt-in and never a semantic discharge", () => {
   assert.deepEqual(off, base);
   const enabled = {...plain, replan_context: {stride_strategy: "evidence_conditioned_v1"}};
   const withStrategy = projectReplanSemantics({operation: "requirements", obligation: enabled});
-  assert.deepEqual((withStrategy.planning_guidance as string[]).slice(0, 5), base.planning_guidance);
-  assert.equal((withStrategy.planning_guidance as string[]).length, 6);
+  assert.deepEqual(withStrategy.planning_guidance, base.planning_guidance);
+  assert.ok(withStrategy.stride_control);
+  assert.equal(base.stride_control, undefined);
   assert.deepEqual(withStrategy.required_any_of,
     ["fresh_vision_path_outcome", ...(base.required_any_of as string[])]);
-  assert.match((withStrategy.planning_guidance as string[])[5], /work size, route distance and validation breadth independently/);
-  assert.match((withStrategy.planning_guidance as string[])[5], /Do not restart unfinished coherent work/);
   assert.equal(projectReplanSemantics({operation: "qualify", obligation: enabled,
     planning_guidance: withStrategy.planning_guidance}).accepted, false);
   for (const version of ["future_v2", null, 1]) {
@@ -520,13 +557,14 @@ test("only a bound original receipt can select the source-derived legacy obligat
 });
 
 
-test("canonical no-follow-up restores only its exact admitted review and still owes Vision", () => {
+for (const recovery of ["same_turn_terminal_closeout", "lifecycle_reentry_terminal_closeout"]) {
+test(`${recovery} restores only its exact admitted review and still owes Vision`, () => {
   const id = "replan-1111111111111111", agent = "synthetic-agent";
   const row = {todo_id: "todo_original", text: "Verify independent source", status: "done", done: true,
     task_class: "advancement_task", claimed_by: agent, last_actor_agent_id: agent,
     completed_at: "2026-08-01T00:00:00Z", updated_at: "2026-08-01T00:00:01Z",
     completion_turn_key: "original-completion", no_followup: true, completion_continuation: "no_followup",
-    completion_recovery: "lifecycle_reentry_terminal_closeout"};
+    completion_recovery: recovery};
   const original = {required: true, obligation_id: id, resolution_mode: "todo_lifecycle_settlement",
     triggers: [{kind: "completed_advancement_without_successor", todo_id: row.todo_id,
       completion_turn_key: row.completion_turn_key, agent_id: agent}]};
@@ -565,6 +603,7 @@ test("canonical no-follow-up restores only its exact admitted review and still o
   assert.throws(() => projectReplanSemantics({...request,
     selected_obligation_id: "replan-2222222222222222"}), /identity conflicts/);
 });
+}
 
 test("lifecycle reconstruction restores completion order before its trigger bound", () => {
   const agent = "synthetic-agent";
@@ -583,6 +622,41 @@ test("lifecycle reconstruction restores completion order before its trigger boun
   assert.deepEqual((projectReplanSemantics({operation: "lifecycle_source", agent_id: agent,
     guard_recorded_at: "2026-08-01T00:00:05Z", items: ties}).items as JsonObject[])
     .map(item => item.todo_id), ["todo_4", "todo_3", "todo_2", "todo_1"]);
+});
+
+test("lifecycle reconstruction excludes rows closed by an inferred successor", () => {
+  const agent = "synthetic-agent", id = "replan-1111111111111111";
+  const row = {todo_id: "todo_settled", status: "done", done: true, task_class: "advancement_task",
+    claimed_by: agent, last_actor_agent_id: agent, completed_at: "2026-08-01T00:00:00Z",
+    updated_at: "2026-08-01T00:00:10Z", completion_turn_key: "settled-completion",
+    no_followup: true, completion_continuation: "no_followup",
+    completion_recovery: "lifecycle_reentry_terminal_closeout"};
+  // The admitted summary had no gap for this older row: a later row resumes on it.
+  const resumed = {...row, todo_id: "todo_resumed", completed_at: "2026-07-31T00:00:00Z",
+    updated_at: "2026-07-31T00:00:00Z", completion_turn_key: "resumed-completion",
+    no_followup: null, completion_continuation: "active_goal", completion_recovery: null};
+  const resumer = {...resumed, todo_id: "todo_resumer", completion_turn_key: "resumer-completion",
+    successor_todo_ids: [resumed.todo_id], resume_when: `todo_done:${resumed.todo_id}`};
+  const original = {required: true, obligation_id: id, resolution_mode: "todo_lifecycle_settlement",
+    triggers: [{kind: "completed_advancement_without_successor", todo_id: row.todo_id,
+      completion_turn_key: row.completion_turn_key, agent_id: agent}]};
+  const candidate = {obligation: original, source_obligation: original, lifecycle_settled: true,
+    guard_recorded_at: "2026-08-01T00:00:05.123456Z", items: [row, resumed, resumer]};
+  const request = {operation: "receipt_bound_obligation", guard_scoped: true, replay_phase: "open",
+    selected_obligation_id: id, agent_id: agent, current_obligation: null, transition_candidates: [candidate]};
+  assert.deepEqual((projectReplanSemantics({operation: "lifecycle_source", agent_id: agent,
+    guard_recorded_at: candidate.guard_recorded_at, items: candidate.items}).items as JsonObject[])
+    .map(item => item.todo_id), [row.todo_id]);
+  const result = projectReplanSemantics(request).obligation as JsonObject;
+  assert.equal(result.obligation_id, id);
+  assert.equal(result.resolution_mode, "receipt_bound_replan_settlement");
+  // An unblock edge closes the gap the same way. A non-advancement resumer
+  // infers no edge, so the row stays and the exact trigger check still fails.
+  const unblocker = {...resumer, resume_when: null, unblocks_todo_id: resumed.todo_id};
+  assert.equal((projectReplanSemantics({...request, transition_candidates: [{...candidate,
+    items: [row, resumed, unblocker]}]}).obligation as JsonObject).obligation_id, id);
+  assert.throws(() => projectReplanSemantics({...request, transition_candidates: [{...candidate,
+    items: [row, resumed, {...resumer, task_class: "continuous_monitor"}]}]}), /identity conflicts/);
 });
 
 

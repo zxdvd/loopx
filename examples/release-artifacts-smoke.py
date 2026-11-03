@@ -71,6 +71,9 @@ def fixture_recovery_contract(workflow: str, identity: release_artifacts.Release
         "examples/personal-workspace-browser/typed-actions.mjs",
         "examples/personal-workspace-browser/goal-work-map.mjs",
         "examples/personal-workspace-browser/goal-workspace-m2.mjs",
+        "examples/personal-workspace-browser/lark-cli-missing.mjs",
+        "examples/personal-workspace-browser/pr-review-agent-order.mjs",
+        "apps/presentation/dashboard/smoke/workspace-locale-browser-smoke.mjs",
     )
     recover = workflow_run(workflow, "Resolve browser fixture correction without rebuilding product bytes")
     restore = workflow_run(workflow, "Restore browser fixtures and bind verified package checksums")
@@ -281,7 +284,7 @@ def main() -> int:
         "python scripts/release_artifacts.py write-checksums",
         "python scripts/release_artifacts.py verify-checksums",
         "uses: actions/attest@v4",
-        "gh release upload",
+        "scripts/release_artifacts.py upload-immutable",
         "vars.PYPI_PUBLISH_ENABLED == 'true'",
         "environment:\n      name: pypi",
         "pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33",

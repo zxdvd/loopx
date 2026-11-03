@@ -6,6 +6,7 @@ from pathlib import Path
 import shlex
 from typing import Any
 
+from ...command_invocation import loopx_cli_argv
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..settlement_driver import decode_settlement_result
 from .accounting_admission import quota_accounting_admission
@@ -28,6 +29,7 @@ from .effect_program import (
     settlement_binding_args,
     settlement_result_payload,
     settlement_step_command,
+    turn_instance_arg,
 )
 
 QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA = (
@@ -186,7 +188,7 @@ def attach_settlement_progress(
     identity = readback.identity.value
     if payload.get("ok") is not True or progress.get("next_step") != "quota_spend" or identity is None:
         return
-    prefix = "loopx"
+    prefix = shlex.join(loopx_cli_argv())
     if registry_path is not None:
         prefix += f" --registry {shlex.quote(str(registry_path))}"
     if runtime_root is not None:
@@ -248,6 +250,7 @@ __all__ = [
     "settlement_binding_args",
     "settlement_result_payload",
     "settlement_step_command",
+    "turn_instance_arg",
 ]
 
 
@@ -311,6 +314,12 @@ def _semantic_replan_guard(value: Any) -> dict[str, Any] | None:
         # The TS readback owner validates the schema and ids. Preserve the
         # selected authority evidence when adapting the receipt to refresh.
         result["selected_capability_guard"] = dict(capability)
+    if "selected_review_source" in guard:
+        review = guard["selected_review_source"]
+        if not isinstance(review, dict) or selected_obligation_id is None:
+            raise RuntimeError("selected review source requires a typed object and obligation")
+        # Semantic eligibility and scalar bounds belong to the TS owner.
+        result["selected_review_source"] = dict(review)
     return result
 
 

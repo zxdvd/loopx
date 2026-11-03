@@ -57,6 +57,7 @@ def _receipt_bound_guard_fields(
             and guard.get("selected_obligation_id") == obligation_id
         ),
         "receipt_bound_guard_recorded_at": receipt.get("recorded_at"),
+        "receipt_bound_replan_review": guard.get("selected_review_source") if isinstance(guard, Mapping) else None,
         "receipt_bound_successor_replan": bool(getattr(readback, "successor_replan_pending", False)),
     }
 
@@ -504,6 +505,20 @@ def bind_action_selection_cli_routes(
         selection_command["route_prefix"] = shlex.join(tokens)
 
 
+def _receipt_bound_recovery_required(
+    payload: Mapping[str, Any], receipt_bound_todo_id: str,
+) -> bool:
+    selected_value = payload.get("selected_todo")
+    selected = selected_value if isinstance(selected_value, Mapping) else {}
+    if (
+        selected.get("todo_id") != receipt_bound_todo_id
+        or payload.get("normal_delivery_allowed") is not True
+    ):
+        return True
+    wait_kind = str(selected.get("resume_when") or "").split(":", 1)[0]
+    return wait_kind not in ("", "monitor_changed", "todo_done")
+
+
 def build_live_quota_should_run_decision(
     status_payload: dict[str, Any],
     *,
@@ -530,8 +545,10 @@ def build_live_quota_should_run_decision(
     interaction_projection_hooks: Sequence[InteractionProjectionHookRegistration]
     | None = None,
     turn_start_hook_dispatch: Mapping[str, Any] | None = None,
+    context_navigation: bool = False,
     workspace_path: Path | None = None,
     goal_ref: Mapping[str, object] | None = None,
+    inline_goal_source: bool = False,
 ) -> dict[str, Any]:
     """Build one live CLI decision while keeping host observation injectable."""
     resolved_context = resolve_scheduler_execution_context(scheduler_execution_context)
@@ -740,8 +757,14 @@ def build_live_quota_should_run_decision(
         receipt_bound_todo_id and agent_id and turn_instance_id
         and receipt_bound_replay_phase is not ReceiptBoundReplayPhase.SETTLED
         and payload.get("effective_action") != EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value
-        and (payload.get("selected_todo") or {}).get("todo_id") != receipt_bound_todo_id
+        and (
+            receipt_bound_replay_phase is ReceiptBoundReplayPhase.SETTLEMENT_PENDING
+            or _receipt_bound_recovery_required(payload, receipt_bound_todo_id)
+        )
     ):
+        # A verified writeback seals this Turn even while its Todo stays open
+        # and selected. Let the existing typed owner project only the remaining
+        # settlement; another delivery cannot replace the immutable writeback.
         if settlement_readback is not None:
             attach_settlement_progress(
                 payload, settlement_readback,
@@ -755,6 +778,7 @@ def build_live_quota_should_run_decision(
             monitor_phase=(receipt_bound_monitor_phase.value if receipt_bound_monitor_phase else None),
             settlement_progress=settlement_readback.progress if settlement_readback else None,
             replay_phase=receipt_bound_replay_phase,
+            heartbeat_receipt=settlement_readback.heartbeat_receipt if settlement_readback else None,
         )
     if hook_dispatch["failures"]:
         payload["capability_hook_dispatch"] = {
@@ -802,5 +826,6 @@ def build_live_quota_should_run_decision(
     from ..work_items.context_readback import attach_work_context
 
     attach_work_context(payload, registry_path=registry_path, runtime_root=runtime_root,
-        hook_dispatch=turn_start_hook_dispatch)
+        hook_dispatch=turn_start_hook_dispatch, context_navigation=context_navigation,
+        inline_goal_source=inline_goal_source)
     return payload

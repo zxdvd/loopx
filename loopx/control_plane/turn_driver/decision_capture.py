@@ -1,27 +1,52 @@
-"""Private observation IO for the real Turn host; TS owns binding validation."""
+"""Private original-capture and presentation IO; TS owns binding validation."""
 from __future__ import annotations
 
+import hashlib
 import json
+import shlex
 import os
 import socket
 import stat
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from ..quota.turn_envelope import bind_turn_decision_capture
 from ..quota.error_codes import QuotaCommandValidationError
+from ..content_digest import BARE_SHA256_PATTERN
+from .native_context_profile import (
+    NATIVE_CONTEXT_PAGE_BYTES as NATIVE_CONTEXT_PAGE_BYTES,
+    NATIVE_CONTEXT_PAGE_OUTPUT_BYTES as NATIVE_CONTEXT_PAGE_OUTPUT_BYTES,
+    NATIVE_CONTEXT_LARGE_OUTPUT_BYTES as NATIVE_CONTEXT_LARGE_OUTPUT_BYTES,
+    NATIVE_CONTEXT_HISTORY_TOKENS as NATIVE_CONTEXT_HISTORY_TOKENS,
+    NATIVE_CONTEXT_OUTPUT_ENV as NATIVE_CONTEXT_OUTPUT_ENV,
+    native_context_page_budget as native_context_page_budget,
+)
+
+
+def private_capture_uid() -> int:
+    """Fail closed until this IO boundary has a qualified non-POSIX ACL reader.
+
+    POSIX mode bits cannot establish Windows privacy. Check before creating or
+    reading private captures, and before evaluating bounded settlement commands.
+    """
+    getuid = getattr(os, "getuid", None)
+    if os.name != "posix" or not callable(getuid):
+        raise ValueError("private capture validation is unsupported on this platform; "
+                         "use the same Turn command without --max-page-output-bytes")
+    return getuid()
 
 
 def write_decision_capture(
-    path: Path, payload: Mapping[str, Any], *, publish=os.link,
+    path: Path, payload: Mapping[str, Any], *, publish: Callable[[str, Path], None] = os.link,
 ) -> None:
     """Publish complete private JSON once; never replace an earlier observation."""
     descriptor, temporary = tempfile.mkstemp(prefix=".decision-", dir=path.parent)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            json.dump(dict(payload), stream, ensure_ascii=False, indent=2, allow_nan=False)
+            json.dump(dict(payload), stream, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
@@ -30,11 +55,38 @@ def write_decision_capture(
         Path(temporary).unlink(missing_ok=True)
 
 
-def prepare_turn_decision_capture(
+@dataclass(frozen=True)
+class StagedTurnDecisionCapture:
+    """Validated private IO, published only after the native start is admitted."""
+
+    plan: dict[str, Any]
+    path: Path
+    observation: dict[str, Any]
+    existed: bool
+
+    def publish(self) -> dict[str, Any]:
+        if self.path.is_symlink():
+            raise ValueError("Turn decision capture must not be a symlink")
+        if self.path.exists():
+            # Python considers True == 1; original JSON evidence must retain
+            # its value types as well as its content. Object key order is IO.
+            current = json.loads(self.path.read_text(encoding="utf-8"))
+            if (json.dumps(current, sort_keys=True, allow_nan=False)
+                    != json.dumps(self.observation, sort_keys=True, allow_nan=False)):
+                raise ValueError("Turn decision capture changed before publication")
+        elif self.existed:
+            raise ValueError("Original Turn decision capture is missing; restore the original observation")
+        else:
+            self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            write_decision_capture(self.path, self.observation)
+        return self.plan
+
+
+def stage_turn_decision_capture(
     plan: Mapping[str, Any], *, journal_path: Path,
     decision: Mapping[str, Any] | None, existing_journal: bool,
-) -> dict[str, Any]:
-    """Called under the Turn journal lock before Host/admission effects.
+) -> StagedTurnDecisionCapture:
+    """Validate under the journal lock before admission, without publishing IO.
 
     Existing journals must retain their original reference. A missing legacy
     observation cannot be reconstructed from today's guard. Already committed
@@ -49,7 +101,8 @@ def prepare_turn_decision_capture(
                          "recover its pending effects before starting a fresh Turn")
     if path.is_symlink():
         raise ValueError("Turn decision capture must not be a symlink")
-    if path.exists():
+    existed = path.exists()
+    if existed:
         observation = json.loads(path.read_text(encoding="utf-8"))
     elif existing_journal or capture:
         raise ValueError("Original Turn decision capture is missing; restore the original "
@@ -58,15 +111,26 @@ def prepare_turn_decision_capture(
         if decision is None:
             raise ValueError("New Turn requires its full original decision")
         observation = dict(decision)
+    from ...command_invocation import current_loopx_cli_argv
+
     bound = bind_turn_decision_capture(
         observation, envelope, captured_decision_path=str(path),
         turn_instance_id=str(transaction.get("turn_instance_id") or transaction["turn_key"]),
         turn_key=transaction["turn_key"],
+        # New journals have a real immutable source and executable reader.
+        # Legacy journals retain their recorded delivery/recovery route.
+        reader_argv=current_loopx_cli_argv() if not existing_journal else None,
     )
-    if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        write_decision_capture(path, observation)
-    return {**plan, "turn_envelope": bound}
+    return StagedTurnDecisionCapture({**plan, "turn_envelope": bound}, path, observation, existed)
+
+
+def prepare_turn_decision_capture(
+    plan: Mapping[str, Any], *, journal_path: Path,
+    decision: Mapping[str, Any] | None, existing_journal: bool,
+) -> dict[str, Any]:
+    """Retain the existing immediate publication API for original-capture callers."""
+    return stage_turn_decision_capture(plan, journal_path=journal_path,
+        decision=decision, existing_journal=existing_journal).publish()
 
 
 def validate_handoff_socket(value: str) -> Path:
@@ -91,3 +155,262 @@ def validate_handoff_socket(value: str) -> Path:
     except OSError as exc:
         raise QuotaCommandValidationError(f"invalid decision handoff socket: {exc}") from exc
     return path
+
+
+_CONTEXT_CAPTURE_PAGE_START = (
+    "Follow next_command through eof and combine content in byte-offset order. "
+    "In code-mode, forward successful exec stdout directly with text(result.output); "
+    "retain errors. The reader verifies the original capture SHA-256; keep its returned digest and byte cursors. "
+    "Do not hash or retype the packet. "
+)
+_CONTEXT_CAPTURE_PAGE_END = (
+    "Legacy default pages can be batched to save round trips; start with at most two "
+    "and inspect every output. A host may truncate inside valid JSON or omit a whole output. "
+    "Consume all model-visible content in UTF-8 byte-offset order with complete coverage through total_bytes. "
+    "If a range or output is missing, truncated or uncertain, reread the affected range "
+    "of this same capture with fewer pages or a smaller --page-bytes; do not trust a preview or EOF alone. "
+    "Do not rerun admission or ask the owner. File existence and page EOF are not retention proof."
+)
+CONTEXT_CAPTURE_SELECTION_GUIDANCE = (
+    "For known required pointers, repeat --select in one call without listing again. "
+    "For unknown pointers, use --list on the nearest known parent; add --list-depth 2 "
+    "when nested discovery helps, expanding only needed branches. "
+    "Size batches against the combined output budget; avoid selecting both a parent and its children. "
+    "A missing pointer rejects the batch: inspect its parent in this capture before retrying. "
+)
+
+# A durable capture is a source library, not an instruction to import it all.
+CONTEXT_CAPTURE_NAVIGATION_GUIDANCE = (
+    "The complete decision is saved locally. Choose the sections needed for the current decision; "
+    "you do not need to read the whole file or drain all pages before working. "
+    + CONTEXT_CAPTURE_SELECTION_GUIDANCE +
+    "Read applicable goals, acceptance criteria, constraints and stop conditions before dependent work; "
+    "read the current operation/settlement contract before effects, and supporting evidence when verification needs it. "
+    "An index is navigation, not evidence of reading or fresh authority. "
+    "Keep the original Turn/capture/effect identities. After compaction recover only missing necessary facts "
+    "from this capture; never rerun admission or repeat effects just to recover context. "
+    "Saved-file deltas may use unread baseline files; this is not a claim of retained model input. "
+    "Selected/index reads never establish full model-context retention. "
+)
+
+# Native paging verifies capture bytes; the existing codec separately declares
+# its continuity basis. Generic/off readers retain their original obligations
+# without claiming that a native input observer exists.
+CONTEXT_CAPTURE_PAGE_GUIDANCE = _CONTEXT_CAPTURE_PAGE_START + (
+    "For --max-page-output-bytes, read one output per call if retained-history limits are unknown. "
+) + _CONTEXT_CAPTURE_PAGE_END
+CONTEXT_CAPTURE_READ_GUIDANCE = (
+    "Follow next_command through eof and combine content in byte-offset order. "
+    "In code-mode, forward successful exec stdout directly with text(result.output); "
+    "retain errors. Small batches can save model round trips; start with at most two default pages "
+    "and inspect every output. A host may truncate inside valid JSON or omit a whole output. "
+    "Check each model-visible content's UTF-8 byte length against next_offset (total_bytes at eof), "
+    "complete coverage and the original SHA-256. If incomplete, reread the affected range "
+    "of this same capture with fewer pages or a smaller --page-bytes; do not trust a preview or EOF alone. "
+    "Do not rerun admission or ask the owner. File existence and page EOF are not retention proof."
+)
+
+
+def context_capture_read_command(path: Path, digest: str, *, offset: int = 0,
+                                 page_bytes: int | None = None,
+                                 max_page_output_bytes: int | None = None,
+                                 select: list[str] | None = None,
+                                 selection_sha256: str | None = None,
+                                 list_fields: bool = False,
+                                 list_depth: int | None = None,
+                                 initial_read: bool = False,
+                                 reference_file: Path | None = None) -> str:
+    from ...command_invocation import loopx_cli_argv
+
+    if page_bytes is None:
+        page_bytes = NATIVE_CONTEXT_PAGE_BYTES
+        if max_page_output_bytes is None:
+            max_page_output_bytes = NATIVE_CONTEXT_PAGE_OUTPUT_BYTES
+    return shlex.join([*loopx_cli_argv(), "--format", "json", "quota", "context-read",
+        *(["--reference-file", str(reference_file)] if reference_file is not None
+          else ["--capture-file", str(path), "--capture-sha256", digest]),
+        "--offset", str(offset), "--page-bytes", str(page_bytes),
+        *(["--initial-read"] if initial_read else []),
+        *(["--list"] if list_fields else []),
+        *(["--list-depth", str(list_depth)] if list_depth is not None else []),
+        *(argument for pointer in select or [] for argument in ("--select", pointer)),
+        *(["--selection-sha256", selection_sha256] if selection_sha256 is not None else []),
+        *(["--max-page-output-bytes", str(max_page_output_bytes)] if max_page_output_bytes is not None else [])])
+
+
+def write_context_read_reference(path: Path, digest: str, *, selection: dict[str, Any] | None = None,
+                                 navigation: dict[str, Any] | None = None) -> Path:
+    """Immutable reader IO metadata, not a new identity or authority store.
+
+    A short filename locates the document; only its complete stored digests are
+    checked. A collision or replaced document fails closed, never overwrites.
+    """
+    payload = {"schema_version": "context_capture_read_reference_v1", "path": str(path), "sha256": digest}
+    if selection is not None:
+        payload["selection"] = selection
+    if navigation is not None:
+        payload["navigation"] = navigation
+    suffix = ("." + hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
+              if selection is not None or navigation is not None else "")
+    reference = path.with_name(path.stem + suffix + ".reader.json")
+    try:
+        write_decision_capture(reference, payload)
+    except FileExistsError:
+        existing = read_context_read_reference(str(reference))[1]
+        if existing["path"] != payload["path"]:
+            # Readers resolve parent aliases, while retaining the exact leaf.
+            # Compare that same spelling without rewriting immutable metadata
+            # or treating a different leaf (including a hardlink) as identical.
+            original = Path(existing["path"]).expanduser().absolute()
+            current = path.expanduser().absolute()
+            if original.parent.resolve(strict=True) / original.name == current.parent.resolve(strict=True) / current.name:
+                existing["path"] = payload["path"]
+        if json.dumps(existing, sort_keys=True) != json.dumps(payload, sort_keys=True):
+            raise ValueError("original reader reference changed; restore it without rerunning admission") from None
+    return reference
+
+
+def read_context_read_reference(value: str) -> tuple[Path, dict[str, Any]]:
+    """Read one private physical descriptor; the caller verifies capture bytes."""
+    from ..effect_runtime import MAX_REQUEST_BYTES
+
+    uid = private_capture_uid()
+    path = Path(value).expanduser().absolute()
+    path = path.parent.resolve(strict=True) / path.name
+    if path.is_symlink():
+        raise ValueError("reader reference must be a physical file, not a symlink")
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    with os.fdopen(descriptor, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != uid or info.st_mode & 0o077
+                or info.st_size > MAX_REQUEST_BYTES):
+            raise ValueError("reader reference must be a private regular file owned by this user")
+        raw = stream.read(MAX_REQUEST_BYTES + 1)
+    if len(raw) > MAX_REQUEST_BYTES:
+        raise ValueError("reader reference exceeds the existing transport limit")
+    payload = json.loads(raw)
+    if (not isinstance(payload, dict) or payload.get("schema_version") != "context_capture_read_reference_v1"
+            or not isinstance(payload.get("path"), str) or not isinstance(payload.get("sha256"), str)
+            or BARE_SHA256_PATTERN.fullmatch(payload["sha256"]) is None
+            or ("selection" in payload and not isinstance(payload["selection"], dict))):
+        raise ValueError("reader reference is incomplete or unsupported")
+    return path, payload
+
+
+def read_context_capture_file(value: str, digest: str, *, private: bool = False) -> tuple[Path, bytes, dict[str, Any]]:
+    """One bounded physical-file/hash check for readers and native observations."""
+    from ..effect_runtime import MAX_REQUEST_BYTES
+
+    if not isinstance(digest, str) or BARE_SHA256_PATTERN.fullmatch(digest) is None or not value:
+        raise ValueError("context-read requires the original capture file and its exact SHA-256")
+    uid = private_capture_uid() if private else None
+    path = Path(value).expanduser().absolute()
+    # Parent aliases such as macOS /tmp are normal capture locations.
+    # Resolve those once, but never follow a substituted final file.
+    path = path.parent.resolve(strict=True) / path.name
+    if path.is_symlink():
+        raise ValueError("context-read requires the physical original capture path, not a symlink")
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    with os.fdopen(descriptor, "rb") as stream:
+        metadata = os.fstat(stream.fileno())
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_REQUEST_BYTES:
+            raise ValueError("capture must be a regular JSON file within the existing transport size limit")
+        if private and (metadata.st_uid != uid or metadata.st_mode & 0o077):
+            raise ValueError("native context requires a private capture owned by this user")
+        raw = stream.read(metadata.st_size + 1)
+    if len(raw) != metadata.st_size or hashlib.sha256(raw).hexdigest() != digest:
+        raise ValueError("capture digest mismatch; restore the original capture, do not rerun admission")
+    payload = json.loads(raw.decode("utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("capture must contain a complete JSON object")
+    return path, raw, payload
+
+
+def capture_page_range(page: dict[str, Any], *, raw: bytes, digest: str) -> tuple[int, int] | None:
+    """Verify reported page bytes, independently of a host's retention claim."""
+    if ("selection_sha256" in page or "selected_pointers" in page
+            or page.get("schema_version") != "context_capture_page_v1" or page.get("sha256") != digest):
+        return None
+    start, content = page.get("offset"), page.get("content")
+    if type(start) is not int or start < 0 or not isinstance(content, str) or page.get("ok") is not True:
+        return None
+    data = content.encode("utf-8")
+    end = start + len(data)
+    if (page.get("total_bytes") != len(raw) or end > len(raw) or not data
+            or page.get("eof") is not (end == len(raw))
+            or page.get("next_offset") != (None if end == len(raw) else end)
+            or raw[start:end] != data):
+        # Valid page JSON and a correct cursor can still carry the wrong body.
+        return None
+    return start, end
+
+
+def capture_context_projection(payload: dict[str, Any], *, directory: Path,
+                               read_guidance: str = CONTEXT_CAPTURE_READ_GUIDANCE,
+                               filename: str = "projection.json") -> dict[str, Any]:
+    """Save the full projection independently of the optional presentation codec."""
+    if filename not in ("projection.json", "required-context.json"):
+        raise ValueError("unsupported captured context filename")
+    projection = directory / filename
+    write_decision_capture(projection, payload)
+    digest = hashlib.sha256(projection.read_bytes()).hexdigest()
+    return {
+        "path": str(projection), "sha256": digest,
+        "instruction": "Complete JSON for this captured view. Use it when required content is missing or uncertain; "
+            "compaction alone does not require replay within an existing work Turn. "
+            + read_guidance,
+        "command": context_capture_read_command(projection, digest),
+    }
+
+
+def project_captured_context(
+    payload: dict[str, Any], *, directory: Path | None, request: dict[str, Any] | None,
+    goal_id: str, agent_id: str, surface: str, capture_id: str,
+    captured_recovery: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Adapt an admitted capture to the shared TS presentation owner.
+
+    The caller-owned rendezvous may supply a continuity observation. It must
+    either confirm intact final input or explicitly select native lifecycle
+    assumptions. Unsupported ordinary CLI clients never supply this request. Every
+    opt-in attempt saves the complete projected JSON for same-capture recovery;
+    neither malformed requests nor optimization failures rerun the guard.
+    A native caller may pass its already-published recovery reference, never a
+    reference supplied in the external request.
+    """
+    if request is None or directory is None:
+        return payload
+    from ..effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
+    from ..quota.turn_envelope import prepare_context_delivery
+
+    try:
+        recovery = captured_recovery if captured_recovery is not None else capture_context_projection(
+            payload, directory=directory)
+        scope = request.get("scope")
+        if not isinstance(scope, dict) or scope.get("goal_id") != goal_id or scope.get("agent_id") != agent_id:
+            return payload
+        retained = request.get("retained")
+        continuity = request.get("continuity")
+        if "native_input" in request:
+            from .codex_input_trace import codex_context_in_active_input
+
+            # An optional native observation can only narrow the caller's
+            # retention claim. It never mints an ACK or enables tracing, and a
+            # malformed/stale observation must not fall back to that claim.
+            observation, baseline = request["native_input"], request.get("baseline")
+            native_session = scope.get("session_id")
+            if (not isinstance(observation, dict) or not isinstance(baseline, dict)
+                    or not isinstance(native_session, str)
+                    or not codex_context_in_active_input(observation, baseline=baseline,
+                        session_id=native_session)):
+                retained = None
+                continuity = None
+        delivery = prepare_context_delivery(payload, scope=scope,
+            capture_id=capture_id, surface=surface,
+            baseline=request.get("baseline"), retained=retained, continuity=continuity)
+        delivery["recovery"] = recovery
+        return delivery
+    except (OSError, ValueError, TypeError, EffectRuntimeRemoteError, EffectRuntimeStartupError):
+        # The original full payload is already available. An unavailable optional
+        # codec/capture must not convert safe full delivery into an execution gate.
+        return payload

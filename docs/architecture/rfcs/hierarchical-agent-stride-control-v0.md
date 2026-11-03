@@ -695,7 +695,7 @@ times separately. Check whether later work implemented the proposed mechanism;
 a decision record, saved snapshot or new identifier alone does not establish
 adoption, restoration or improved results. These are refinements of the existing
 Agent questions, not new decision fields, score thresholds or settlement gates;
-the strategy remains default-off. Identify the remaining authoritative goal gap, its limiting
+the inherited capability default enables the strategy; explicit off and saved legacy configurations retain their meaning. Identify the remaining authoritative goal gap, its limiting
 component and plausible headroom before choosing the next mechanism. Compare
 continuation with plausible alternatives that change the limiting assumption or
 mechanism, including complete cost. A stalled route calls for a discriminating
@@ -762,7 +762,7 @@ these facts do not change the admitted context/basis identity. Changed source
 requires rereading within the original Turn. Page coordinates persist with the
 decision into subsequent review; node-filtered/planner detail routes remain
 outside this bounded citation path. No separate receipt store is introduced.
-The enabled review also carries the prior decision's existing `todo_delta`
+The replan context also carries the prior decision's existing `todo_delta`
 targets in `decision_followthrough.planned_work`: current canonical status and
 claim, plus references to causally later observations of that exact work item.
 Legacy descriptive Todo deltas remain readable with unresolved linkage; an
@@ -770,9 +770,44 @@ overlong reference is never truncated into a different Todo identity.
 Missing Todo sources and omitted work remain explicit; a missing observation
 does not prove non-execution, and Todo completion does not prove objective gain.
 Related observations survive unrelated recent activity in the bounded window.
-The same bounded followthrough is included in `stride_control` so compact Host
-envelopes expose it without requiring another full-context read. Historical
-decision identities and off-mode output remain unchanged.
+Generic followthrough is available with stride off as well: `result_counts`
+separates advanced, unchanged, blocked and terminal observations, while visible
+rows retain their result class and delivery outcome. The compatibility
+`recorded_progress_count` is an observation count, never successful work.
+Historical decision identities and stride admission/settlement gates remain
+unchanged; off-mode context now includes this feedback without enabling stride.
+
+Ordinary replan already reviews the goal, unmet requirements, actual work and
+evidence to choose continuation or adjustment. Stride adds the source-bound
+structured decision, next probe and applicable previous-decision review, with
+the existing typed settlement requirements. Shared planning guidance applies
+independently of the Stride setting. The captured
+reader below serves both off and enabled modes. Keep its delivery/settlement
+benefit separate from strategy adoption and outcome benefit; an off-mode reader
+comparison cannot establish a Stride effect. See the
+[shared guidance and contract boundaries](../../reference/protocols/goal-vision-replan-contract-v0.md#replan-planning-guidance).
+
+The [captured replan reader](../../reference/protocols/turn-envelope-v0.md#captured-replan-reads--捕获后的重规划读取)
+separates state review from authoring on one immutable decision snapshot.
+Cumulative acceptance uses lossless content-bound detail reads, and Explore
+receives a separate context increment. Existing uncaptured callers retain their
+full delivery. File/SQLite source tests and populated packet budgets qualify
+transport and writer continuity; installed adoption, real model decisions and
+matched outcome/cost benefit remain unqualified. This introduces no new planning
+receipt, model checkpoint or requirement to change direction.
+The reader replaces repeated method guidance with compact semantic boundaries
+and the existing stride format. Benchmark preflight captures the original
+decision through the CLI and delivers its staged view even with TurnEnvelope
+off; retaining a full checkpoint packet alone does not qualify model exposure.
+Captured CLI and Turn entries now share delayed settlement-format delivery;
+new native journals deliver the same reader through actual Codex/structured
+Host inputs. The executor retains its signed identity and full source. Core Goal
+and the current horizon stay explicit each Turn, with only cumulative acceptance
+detail indexed. Legacy journals and uncaptured Host requests keep their original
+fallback until they possess the same immutable source/reader binding. No new
+cache, acknowledgement or planning owner is introduced. Qualification must count
+entry, applicable acceptance/evidence, writeback and recovery together; successful
+reader routing is not model adoption, scientific benefit or a total-cost pass.
 
 The next-review input also exposes causally later ordinary writebacks for the
 declared work in `ordinary_work`, with per-Todo `ordinary_evidence_refs`. Its
@@ -835,7 +870,8 @@ source-bound stride decision. Typed progress, successor and terminal results
 remain valid evidence/outcomes, while a bare Todo successor transition cannot
 stand in for the review. An evidenced path decision can retain unfinished useful
 work without a fabricated new progress identifier or Todo. Explicit acceptance
-and capability outcome restrictions still apply; default-off and other sources
+and capability outcome restrictions still apply; explicit off, saved legacy
+cadence-only configurations and other sources
 retain their prior exit policies. No new detector, threshold or action is added.
 
 The frozen [EdgeBench diagnostic window](https://huggingface.co/datasets/songwells/loopxbench/blob/c5dd30bfaa2f5af42ccd7d0ca9ed59b865a81d42/public/edgebench-20261018-v1/diagnostic_windows.csv)
@@ -853,12 +889,25 @@ This proves the scripted control path, not model adoption or EdgeBench score gai
 Existing negative-result and later-work followthrough coverage remains necessary.
 The effective review cadence remains owned by the
 [Goal Vision/replan contract](../../reference/protocols/goal-vision-replan-contract-v0.md#default-review-cadence)
-and Goal/device configuration. Six effective work Turns is the default; enabling
-the stride strategy for one Goal inherits its live review cadence, and only an
-explicit Goal cadence override pins a separate count or unit. The cadence is not
-Todo size, an experiment boundary or a mandatory route switch; this refinement
-does not change counting. Matched continuation must qualify actual
-adoption, target benefit and full cost before promotion or synergy claims.
+and Goal/device configuration; six effective work Turns is the default. Stride
+no longer maps grow/verify to fixed cadence multipliers. It governs work shape:
+apply the three independent plans to actual Todo scope and acceptance through
+existing authoring/update commands, record verified IDs in `todo_delta`, and
+execute the retained or revised work under normal admission. Supported grow
+consolidates fragmented setup, implementation, integration and decisive validation
+into a coherent accepted deliverable or complete interpretable experiment.
+Keep dependencies, acceptance, risk, authority and per-Turn settlement boundaries.
+The next review must distinguish declared scope from actual execution, outcome
+quality and full cost; preserving a plan is not adoption or benefit.
+
+Evidence-conditioned stride is the capability default for inherited configuration.
+Explicit off, saved legacy cadence-only configurations and historical records
+retain their semantics. Clear overrides to inherit, or select off to roll back;
+no installed configuration, frozen worker or historical receipt is rewritten.
+The codec's missing historical strategy remains off. Review questions and syntax
+examples remain together; no extra decision fields, strategy versions or
+machine-enforced semantic classifier are added. Matched continuation must still
+qualify target benefit and full cost before promotion or synergy claims.
 
 Exploratory iteration may run only strategy-enabled test arms and reuse historical
 baselines as descriptive references. A fresh concurrent baseline is not required

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlparse
@@ -44,6 +44,28 @@ from .history import load_registry
 from .paths import resolve_runtime_root
 from .registry import registry_goals
 from .repository_identity import normalize_repository_identity
+
+
+def manager_source_scope_resolver(
+    server: Any, *, registry_path: Path, executor_runtime_root: Path,
+) -> Callable[[dict[str, Any]], list[str] | None]:
+    """Keep the default manager's native and legacy source routing together."""
+    from .extensions.lark.manager_routing import authorized_manager_goal_ids
+
+    def read(session):
+        controller = server.runtime_controller
+        if isinstance(session.get("steward_context"), dict):
+            bindings = controller.project_contexts.conversation_bindings
+            if bindings is None:
+                raise ValueError("Steward conversation bindings are unavailable")
+            return bindings.steward_scope(session)
+        return authorized_manager_goal_ids(
+            build_lark_goal_topic_runtime_snapshot(
+                registry_path=server.registry_path, runtime_root_override=server.runtime_root_override,
+            ), session, runtime_root=controller.coordination_runtime_root,
+            registry_path=registry_path, executor_runtime_root=executor_runtime_root,
+        )
+    return read
 
 
 def _compact_text(value: Any, *, limit: int = 600) -> str:
@@ -692,10 +714,13 @@ class LarkChatRequestMixin:
                             cached_auth[key] = original_runner(args, cwd, timeout)
                         return cached_auth[key]
                 for profile in selected_profiles if configured else []:
-                    if any(row["transport_ref"] == profile for row in configured):
+                    shared_private = next((row for row in configured if row["transport_ref"] == profile), None)
+                    if shared_private is not None and shared_private.get("audience", "owner") != "owner":
                         raise ValueError("this App owns a private listener; disconnect it first")
                     identity = _app_identity_for_private_guard(profile, provider_runner, cli_bin)
-                    if identity and any(row["provider_ref"] == identity_ref(identity) for row in configured):
+                    if shared_private is not None and (not identity or shared_private["provider_ref"] != identity_ref(identity)):
+                        raise ValueError("the shared App identity changed; verify its original profile")
+                    if identity and any(row["provider_ref"] == identity_ref(identity) and row["transport_ref"] != profile for row in configured):
                         raise ValueError("this App alias owns a private listener; disconnect it first")
             executor_endpoint_id = (
                 manager_executor_endpoint_default(

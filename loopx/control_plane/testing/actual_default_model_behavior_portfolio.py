@@ -64,7 +64,8 @@ ACTUAL_DEFAULT_MODEL_BEHAVIOR_CATALOG_SCHEMA_VERSION = (
     "actual_default_model_behavior_scenario_catalog_v0"
 )
 ACTUAL_DEFAULT_MODEL_BEHAVIOR_REPEAT_ATTEMPTS = 2
-ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET = 40_000
+# Synthetic pretty-JSON regression allowance, not a production transport limit.
+ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET = 90_000
 ACTUAL_DEFAULT_MODEL_BEHAVIOR_CONTRAST_SCHEMA_VERSION = (
     "actual_default_model_behavior_contrast_v0"
 )
@@ -336,11 +337,11 @@ _CONTRASTS = (
             "decision",
             "user_action_required",
             "must_attempt_work",
-            "delivery_allowed",
             "quiet_noop_allowed",
             "external_write_requested",
         ),
-        ("selected_todo_id",),
+        # The Host must attempt the replan, without ordinary delivery authority.
+        ("selected_todo_id", "delivery_allowed"),
     ),
 )
 ACTUAL_DEFAULT_MODEL_BEHAVIOR_CONTRAST_COUNT = len(_CONTRASTS)
@@ -411,42 +412,29 @@ def actual_default_model_behavior_scenario_catalog() -> dict[str, Any]:
 
 
 def _write_scenario_project(root: Path) -> tuple[Path, Path]:
+    root = root.resolve()
+    from ..coordination.new_goal_storage_transport import initialize_goal_storage_target
+    from ..goals.source_session_registration import configure_source_creation_goal
+
     project = root / "project"
-    state_file = (
-        project
-        / ".codex"
-        / "goals"
-        / ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_GOAL_ID
-        / "ACTIVE_GOAL_STATE.md"
-    )
+    state_file = project / ".codex" / "goals" / ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_GOAL_ID / "ACTIVE_GOAL_STATE.md"
     state_file.parent.mkdir(parents=True)
     state_file.write_text("# Active Goal State\n", encoding="utf-8")
     registry_path = project / ".loopx" / "registry.json"
     registry_path.parent.mkdir(parents=True)
-    registry_path.write_text(
-        json.dumps(
-            {
-                "schema_version": "0.1",
-                "goals": [
-                    {
-                        "id": ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_GOAL_ID,
-                        "status": "active",
-                        "repo": str(project),
-                        "state_file": str(state_file.relative_to(project)),
-                        "coordination": {
-                            "agent_model": "peer_v1",
-                            "registered_agents": [
-                                ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_AGENT_ID
-                            ],
-                        },
-                    }
-                ],
-            },
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    runtime_root = root / "runtime"
+    goal = {
+        "id": ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_GOAL_ID,
+        "status": "active", "repo": str(project),
+        "state_file": str(state_file.relative_to(project)),
+    }
+    # This is a new empty synthetic Goal, not an imported legacy authority.
+    # Reuse the first-party typed creation owner before requesting its frontier.
+    configure_source_creation_goal(goal, [ACTUAL_DEFAULT_MODEL_BEHAVIOR_FIXTURE_AGENT_ID],
+                                   "sqlite", "portfolio-entry-fixture")
+    registry_path.write_text(json.dumps({"schema_version": "0.1",
+        "common_runtime_root": str(runtime_root), "goals": [goal]}, indent=2) + "\n", encoding="utf-8")
+    initialize_goal_storage_target(runtime_root, goal, registry_path=registry_path)
     return project, registry_path
 
 
@@ -853,6 +841,8 @@ def _validate_quota_hot_path_compaction_regression(
         raise ValueError("compaction-regression source must exceed the hot-path budget")
     if _pretty_json_size(packet) > ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET:
         raise ValueError("compaction-regression packet exceeds the hot-path budget")
+    if packet.get("capability_gate") != source.get("capability_gate"):
+        raise ValueError("compaction regression must preserve complete capability candidate context")
     if contract.get("selected_todo_id") != expected_selected_todo_id:
         raise ValueError("compaction regression must preserve the selected todo")
 

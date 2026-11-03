@@ -117,6 +117,55 @@ def test_review_only_cli_retains_origins_and_requires_provenance_for_new_require
     assert cli("inspect")[1] == before
 
 
+def test_cumulative_review_evidence_reuses_real_quota_sources_without_hiding_new_judgment(acceptance_goal):
+    from loopx.control_plane.quota.turn_envelope import prepare_context_delivery, restore_context_delivery
+
+    project, _, cli, run = acceptance_goal
+    declared = refinement([{"id": f"r{i}", "description": "Retain the original requirement"}
+        for i in range(12)], "message:first")
+    assert record(project, cli, declared, "declare")[0][0] == 0
+    review = {"outcome_id": "tour", "review": [{"id": r["id"], "conclusion": "uncertain",
+        "evidence_refs": ["artifact:validation/" + "segment/" * 12],
+        "note": ("Retain the measured result and its applicability. " * 10).strip()} for r in declared["requirements"]]}
+    (code, result), _ = record(project, cli, review, "review")
+    assert code == 0, result
+    companion = {**declared, "outcome_id": "compatibility", "objective": "Keep the compatible export",
+        "requirements": [{"id": f"tail{i}", "description": ("Keep the compatibility tail. " * 16).strip()}
+            for i in range(12)]}
+    (code, companion_result), _ = record(project, cli, companion, "companion")
+    assert code == 0, companion_result
+
+    def capture():
+        code, packet = run("quota", "should-run", "--goal-id", "goal-acceptance", "--agent-id", "agent-a")
+        assert code == 0, packet
+        return packet["interaction_contract"]["agent_channel"]["work_context"]
+
+    original = capture()
+    scope = dict(goal_id="goal-acceptance", agent_id="agent-a", session_id="fixture", context_epoch="cycle")
+    baseline = prepare_context_delivery(original, scope=scope, capture_id="original")
+    review["review"][0]["conclusion"] = "unmet"
+    assert record(project, cli, review, "negative-review")[0][0] == 0
+    current = capture()
+    def outcomes(context):
+        return next(s["content"]["goal_acceptance_contract"]["outcome_requirements"]["outcomes"]
+            for s in context["sources"] if s.get("source") == "goal_acceptance")
+    full = prepare_context_delivery(current, scope=scope, capture_id="current")
+    delta = prepare_context_delivery(current, scope=scope, capture_id="current", baseline=baseline,
+        retained={"complete": True, "target": baseline["target"]})
+    assert delta["mode"] == "delta", delta.get("reason")
+    assert "segment/" not in json.dumps(delta), "unchanged evidence must not be retransmitted"
+    assert "Keep the compatibility tail" not in json.dumps(delta), "an unrelated outcome must not be retransmitted"
+    assert [row["id"] for row in outcomes(current)] == [row["id"] for row in outcomes(original)]
+    assert outcomes(current)[1] == outcomes(original)[1], "another outcome's requirements and evidence stay intact"
+    restored = restore_context_delivery(delta, baseline=baseline, current=full)
+    assert restored["context"] == current
+    acceptance = next(s["content"] for s in restored["context"]["sources"] if s.get("source") == "goal_acceptance")
+    row = acceptance["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]["requirements"][0]
+    assert row["agent_review"]["conclusion"] == "unmet" and row["agent_review"]["evidence_refs"] == review["review"][0]["evidence_refs"]
+    assert not row["planning_satisfied"] and row["status"] != "accepted"
+    assert restore_context_delivery(delta, baseline=None, current=full)["context"] == current
+
+
 def test_typed_outcome_gaps_are_transported_only_to_their_agent():
     gap = {"kind": "goal_outcome_uncovered", "agent_id": "author", "outcome_id": "tour", "requirement_ids": ["opening"]}
     summary = {"goal_acceptance_contract": {"enabled": False, "outcome_requirements": {"acceptance_gaps": [gap]}}}
@@ -183,7 +232,7 @@ def test_default_review_uses_one_existing_writeback_and_preserves_verification_b
     assert before["revision"] == 1
     code, applied = run(*args)
     assert code == 0, json.dumps(applied)
-    result = applied["goal_outcome_update"]["goal_acceptance_contract"]
+    result = cli("inspect")[1]["goal_acceptance_contract"]
     assert len(result["outcome_requirements"]["outcomes"][0]["sources"]) == (2 if include_source else 1)
     assert "enabled" not in result and "criteria" not in result, "review is a default capability"
     req = result["outcome_requirements"]["outcomes"][0]["requirements"][0]
@@ -192,6 +241,60 @@ def test_default_review_uses_one_existing_writeback_and_preserves_verification_b
     code, replay = run(*args)
     assert code == 0 and replay["goal_outcome_update"]["status"] == "replayed", json.dumps(replay)
     assert cli("inspect")[1]["goal_acceptance_contract"]["outcome_requirements"]["revision"] == 2
+
+
+def test_batched_review_returns_receipt_without_echoing_cumulative_contract(acceptance_goal):
+    project, _, cli, run = acceptance_goal
+    assert record(project, cli, refinement([
+        {"id": "opening", "description": "Retain the introduction"},
+    ], "message:tour"), "declare-tour")[0][0] == 0
+    other = {
+        **refinement([
+            {"id": f"section-{index}", "description": ("Retain the complete approved section. " * 8).strip()}
+            for index in range(8)
+        ], "message:other-deliverable"),
+        "outcome_id": "other-deliverable", "objective": "Deliver another complete artifact",
+    }
+    (code, declared), _ = record(project, cli, other, "declare-other")
+    assert code == 0, declared
+    before = cli("inspect")[1]
+    retained = {item["id"]: item for item in before["goal_acceptance_contract"]["outcome_requirements"]["outcomes"]}
+    document = project / "review.json"
+    document.write_text(json.dumps({
+        "operation_id": "review-tour",
+        "expected_provider_revision": before["provider_revision"],
+        "refinement": {"outcome_id": "tour", "review": [{
+            "id": "opening", "conclusion": "met", "evidence_refs": ["artifact:tour"],
+            "note": "Read the artifact and confirmed the original introduction",
+        }]},
+    }))
+    args = ("refresh-state", "--goal-id", "goal-acceptance", "--agent-id", "agent-a",
+        "--no-global-sync", "--goal-outcome-update-json", str(document))
+    for suffix, status in [(('--dry-run',), "planned"), ((), "applied"), ((), "replayed")]:
+        code, result = run(*args, *suffix)
+        assert code == 0, result
+        receipt = result["goal_outcome_update"]
+        assert receipt["ok"] and receipt["status"] == status
+        assert receipt["operation_id"] == "review-tour"
+        assert receipt["goal_id"] == "goal-acceptance"
+        assert receipt["provider_revision"] and receipt["source_authority"]
+        assert "goal_acceptance_contract" not in receipt
+        assert "other-deliverable" not in json.dumps(receipt)
+        current = cli("inspect")[1]["goal_acceptance_contract"]["outcome_requirements"]
+        outcomes = {item["id"]: item for item in current["outcomes"]}
+        assert set(outcomes) == {"tour", "other-deliverable"}
+        assert outcomes["other-deliverable"] == retained["other-deliverable"]
+        assert outcomes["tour"]["sources"] == retained["tour"]["sources"]
+        if status == "planned":
+            assert outcomes == retained
+        else:
+            requirement = outcomes["tour"]["requirements"][0]
+            assert requirement["agent_review"]["conclusion"] == "met"
+            assert requirement["status"] == "unverified"
+            assert not requirement["agent_review"]["independently_verified"]
+            assert current["revision"] == 3, "replay must not apply the review twice"
+    code, ordinary = run("refresh-state", "--goal-id", "goal-acceptance", "--agent-id", "agent-a", "--no-global-sync")
+    assert code == 0 and "goal_outcome_update" not in ordinary
 
 
 def test_local_research_outcomes_preserve_root_continuation_and_runnable_work(acceptance_goal):
@@ -224,6 +327,48 @@ def test_local_research_outcomes_preserve_root_continuation_and_runnable_work(ac
     assert declaration["execution_authority_granted"] is False
 
 
+@pytest.mark.parametrize("invalid_field", ["evidence_refs", "acceptance_summary", "agent_id"])
+def test_batched_refinement_rejects_invalid_vision_before_mutation(acceptance_goal, invalid_field):
+    project, _, cli, run = acceptance_goal
+    before = cli("inspect")[1]
+    update = project / "update.json"
+    update.write_text(json.dumps({
+        "operation_id": "validated-writeback",
+        "expected_provider_revision": before["provider_revision"],
+        "refinement": refinement([{"id": "opening", "description": "Keep the introduction"}], "message:first"),
+    }))
+    packet = {
+        "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "The introduction still needs validation."},
+        "path_delta": {"outcome": "continue", "prior_assumption": "Retain the introduction.",
+            "observed_reality": "Independent validation remains open.",
+            "retained": ["Original content"], "evidence_refs": ["artifact:tour"]},
+    }
+    invalid = json.loads(json.dumps(packet))
+    if invalid_field == "evidence_refs":
+        invalid["path_delta"]["evidence_refs"] = [f"artifact:part-{i}" for i in range(5)]
+    elif invalid_field == "acceptance_summary":
+        invalid["vision_patch"]["acceptance_summary"] = "x" * 421
+    else:
+        invalid["agent_id"] = "other-agent"
+    vision = project / "vision.json"
+    vision.write_text(json.dumps(invalid))
+    args = ("refresh-state", "--goal-id", "goal-acceptance", "--agent-id", "agent-a",
+        "--no-global-sync", "--goal-outcome-update-json", str(update), "--agent-vision-json", str(vision))
+    for suffix in [(), ("--dry-run",)]:
+        code, rejected = run(*args, *suffix)
+        assert code == 1 and not rejected["appended"], rejected
+        assert invalid_field in rejected["error"], rejected
+        assert cli("inspect")[1] == before, "bad input must not advance the outcome or provider revision"
+        assert "goal_outcome_update" not in rejected
+    # Repair only the malformed packet: no new basis or operation identity.
+    vision.write_text(json.dumps(packet))
+    for status in ["applied", "replayed"]:
+        code, result = run(*args)
+        assert code == 0 and result["goal_outcome_update"]["status"] == status, result
+    assert cli("inspect")[1]["goal_acceptance_contract"]["outcome_requirements"]["revision"] == 1
+
+
 def test_batched_refinement_receipt_survives_later_writeback_failure(acceptance_goal, monkeypatch, capsys):
     from loopx.cli import main
     import loopx.cli_commands.project_lifecycle_refresh_state as refresh
@@ -243,11 +388,13 @@ def test_batched_refinement_receipt_survives_later_writeback_failure(acceptance_
     assert main() == 1
     failed = json.loads(capsys.readouterr().out)
     assert failed["goal_outcome_update"]["status"] == "applied", failed
+    assert "goal_acceptance_contract" not in failed["goal_outcome_update"]
     assert cli("inspect")[1]["goal_acceptance_contract"]["outcome_requirements"]["revision"] == 1
     monkeypatch.setattr(refresh, "refresh_state_run", original_refresh)
     assert main() == 0
     recovered = json.loads(capsys.readouterr().out)
     assert recovered["goal_outcome_update"]["status"] == "replayed", recovered
+    assert "goal_acceptance_contract" not in recovered["goal_outcome_update"]
     assert cli("inspect")[1]["goal_acceptance_contract"]["outcome_requirements"]["revision"] == 1
 
 

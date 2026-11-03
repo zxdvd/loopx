@@ -26,6 +26,46 @@
 每个受评测候选使用新 finding id，仅纠正同一结论时复用 id。未测量显式记为 `null`，
 零分和负分仍为有效测量。
 
+若要复用已核实的比较条件，将三个字段一次保存到 `conditions.json`：
+
+```json
+{"comparison_scope":"validation:fixed-budget-v1","input_revision":"dataset-v1",
+ "evaluation_ref":"evaluator:v1"}
+```
+
+同时传入 `--measurement-context-json conditions.json` 与
+`--measurements-json observations.json`。此时每项观测省略这三个字段，例如：
+
+```json
+[{"metric":"quality","value":9,"unit":"points","higher_is_better":true,
+  "candidate_ref":"candidate:b","evidence_ref":"result:b"}]
+```
+
+普通附件及 path-delta 附件也支持在 `measurements` 旁提供可选
+`measurement_context` 对象。写入前会展开成原有完整记录，不保存可变上下文引用。
+观测重复填写比较字段（即使值相同）、上下文字段缺失或多余都会在记录前拒绝。
+原有完整条目格式继续可用。复用声明不认证可比性；任务、数据、评测器、模型或预算
+改变时另选上下文，条件未知时保持分开。此便捷输入不授予评测、纠正或执行权限。
+
+比较条件与候选、单次结果分别记录：
+
+| 字段 | 连续 finding 中的含义 |
+| --- | --- |
+| `input_revision` | 实际受评测的任务或数据版本；确认输入未变时保持一致。 |
+| `evaluation_ref` | 评测器或计分协议版本；确认协议未变时保持一致。 |
+| `candidate_ref` | 实际受评测的代码或工件版本；候选改变时更新。 |
+| `evidence_ref` | 单次评测结果或回执；在 finding 的 `evidence_refs` 中保留准确来源。 |
+
+例如，在同一问题上将候选 A 的 8 分、候选 B 的 9 分记录为**两个 finding**。
+其他比较字段不变时，两者均使用 `input_revision=dataset-v1`、
+`evaluation_ref=evaluator:v1`，候选与结果引用分别为 `candidate:a`/`result:a`、
+`candidate:b`/`result:b`。反馈包含两条实测记录，改善幅度为 +1。
+若把各候选哈希填进 `input_revision`，或把各次提交编号填进 `evaluation_ref`，
+则会被拆成只有一条记录的组，改善幅度为 null；它不表示零收益。
+确认来源后才通过既有纠正路径修正误填的 finding，原始记录保留在历史中。
+条件已变或可比性未知时必须分开，不得为得到差值而编造共同版本。
+本地样本库扩充不改变实际受评测的固定子集版本；受评测样本改变才更新该版本。
+
 只有节点、指标、单位、方向、比较范围、输入版本和评测器全部一致时才比较。
 任务、模型或资源预算、评测条件改变时，生产者必须更换比较范围；原生评测与本地
 代理指标分别记录。Explore 校验声明的比较键，不认证声明真实性。它在上下文裁剪前
@@ -40,6 +80,11 @@
 下一轮指导使用这些反馈排查退步、回看更好候选，再决定是否
 重复尝试。best 不代表当前保留版本、因果收益、验收通过或执行授权；是否实际采用
 并产生收益，仍需后续工作和证据确认。自动分支排序保持原有行为。
+
+手动登记的量化 finding 同样进入既有结果分页；关联可执行工作时，也进入其精确来源
+比较卡片，无需补写 `writeback-result` 来源标签。先读取结果页，再按需绑定
+`selected_candidate`，仍核对来源修订、Todo 关联和后续实际工作。未带测量的手动笔记
+保持既有摘要/审计路径。读取或选择某条成绩不认证实际采用或执行。
 
 ## 概览
 
@@ -228,12 +273,12 @@ Todo 关联保留既有可恢复边界与 claim/lease 证明；恢复旧批次�
 
 关于 DSpark 引文（arXiv:2607.05147）的准确性说明：真实 DSpark 会在每个 per-step 置信度低于固定阈值的第一个位置截断半自回归 draft 块，并且只把 per-step 置信度累乘作为校准诊断。这里的 prefix-survival theta 模型（survival product × throughput 曲线）是 LoopX 特有的、面向**串行依赖** todo 链的扩展。绝不能用它来衡量独立并行 worker lanes 的规模——早期校准运行曾因此把 treatment arm 截到 5/10 lanes；worker 规划现在使用 `schedule_independent_lanes` 代替。
 
-命令只读，并与 `worker-branch-plan` 一样受 per-goal opt-in 门控（见下文）：没有 `explore_harness.enabled=true` 时返回 disabled packet，`--width` 在自身上限之外还被 `max_children` 封顶。它不 claim todo、不 acquire lease、不 launch agent、不 spend quota、不改变 active state。它只输出预测 packet：
+命令只读，并与 `worker-branch-plan` 一样受 Goal 有效模式门控（见下文）：没有 `explore_harness.enabled=true` 时返回 disabled packet，`--width` 在自身上限之外还被 `max_children` 封顶。它不 claim todo、不 acquire lease、不 launch agent、不 spend quota、不改变 active state。它只输出预测 packet：
 
 - 选中的分支、置信度、hazards 与 reason codes；
 - 被排除的 `continuous_monitor` 诊断——仍可见，但绝不进入探索调度器或消耗分支宽度；
 - 基线串行执行与 DSpark 风格选中前缀的 dry-run A/B 估计（`ab_result.estimated_speedup_vs_baseline`）；
-- 供 operator 或注册 peer runner 显式执行的 `loopx todo claim` / `loopx task-lease acquire` 建议；
+- 供 operator 或注册 peer runner 执行的普通 `loopx todo claim` 建议；认领管理执行并返回任务引用；
 - 保持 packet 咨询性、而非替代 `quota should-run` 的安全边界。
 
 advancement todo 可通过挂一个或多个显式 Explore node id 选择 typed 结果诊断：
@@ -275,24 +320,26 @@ loopx explore worker-branch-plan --goal-id <id> --worker-width 5 \
 
 资源输入可选。没有 `--resource-capacity` 时，无 lane 与 legacy todos 保留现有 width/scheduler 行为。资源感知模式下，无 tag todos 保持原来的无约束行为；带 tag lane 必须有匹配的声明容量。使用没有匹配容量的 usage 会 fail closed，以捕捉拼错的 lane key。
 
+Lane key 会统一大小写、空格与连字符（`LONG POOL` 和 `long-pool` 都表示 `long_pool`）。CLI 与映射输入都会拒绝规范化后的重复 key，避免覆盖容量或占用。计数必须是非负整数；布尔值与非整数小数会被拒绝。
+
 这仍是仅分析证据：`resource_portfolio.score_delta=0`、typed evidence 保持 `score_delta=0`、planner 只读。容量与占用不 claim todo、不 acquire lease、不 launch worker、不写状态、不授予 quota 权威。它们只约束预测 portfolio；执行仍进入下面描述的正常 LoopX 生命周期。
 
-该命令只读、per-goal opt-in。它设计为**叠加在现有 LoopX harness 之上**，而不是并排或取代：
+该命令只读，需要开启 Goal 有效模式。它设计为**叠加在现有 LoopX harness 之上**，而不是并排或取代：
 
 1. LoopX 提供 harness 输入：quota/status 上下文、open agent todo 投影、explore result 投影、所有权、能力、写作用域元数据。
 2. opt-in planner 把 todos 分组为 worker-lane 候选，用 DSpark 风格 confidence/prefix/load 打分选择 worker branch 前缀。
-3. 执行必须回到正常 LoopX 路径：`quota should-run`、`todo claim`、`task-lease acquire`、worker 执行、`explore node|edge|finding`、`refresh-state`、`quota spend-slot`。
+3. 执行必须回到正常 LoopX 路径：`quota should-run`、`todo claim`、worker 执行、`explore node|edge|finding`、`refresh-state`、`quota spend-slot`。
 
-因此 packet 对已 opt-in 的 goal 包含 `harness_compatibility` 与 `boundary` 字段：`replaces_loopx_runtime=false`、`launches_workers=false`、`claim_and_lease_are_suggested_only=true`；deny-by-default 的 disabled packet 携带 `boundary` 块和 opt-in `required_contract`。packet 可被控制器或 operator 用来决定启动哪些 worker，但不能自行 launch worker 或变更控制面。
+因此 packet 对已 opt-in 的 goal 包含 `harness_compatibility` 与 `boundary` 字段：`replaces_loopx_runtime=false`、`launches_workers=false`、`claim_is_suggested_only=true`；deny-by-default 的 disabled packet 携带 `boundary` 块和 opt-in `required_contract`。packet 可被控制器或 operator 用来决定启动哪些 worker，但不能自行 launch worker 或变更控制面。
 
 ### 每 Goal 独立 Opt-In 门控
 
-Explore Graph 与 Explore Harness 是相互独立的可选能力。开启一个绝不开启另一个：
+Explore Harness 统一提供 `off`、`evidence`、`planning` 三种模式；planning 包含证据图。旧配置字段仍兼容：
 
 - `explore_graph.enabled` 控制持久图投影与任何已配置的展示 sink。每次成功的 material `refresh-state` 事务后，LoopX 折叠 canonical Explore 证据并运行已配置 sink。语义 digest 让未变更的 refresh 成为零写操作。已配置行 sink 只有在 row/result-id readback 验证投影后才算完成。失败同步或 readback 不推进其 digest，下次 material refresh 会重试。视觉 sink 还会预检确定性交付标记：已有标记对先前写做对账而不重复发布；有界 readback 超时在该 stage batch 停止后续调用并留下可重试 receipt，而不是盲目重复远端写。
-- `spawn_policy.explore_harness.enabled` 只控制下面描述的只读分支规划器。它不创建、更新或发布图。
+- `spawn_policy.explore_harness.enabled` 开启只读分支规划及证据层，但不授予外部 sink 发布权限。
 
-两个门控默认缺失/false。常见模式是 Graph on、Harness off：保持 operator 面向的拓扑最新，同时不改变工作的规划方式。
+没有 Goal 显式模式时继承机器默认；两者均未配置则关闭。`evidence` 保持证据图可用，`planning` 同时提供规划建议。
 
 ```yaml
 # inside the registered goal entry
@@ -584,3 +631,41 @@ python3 -m pytest -q \
 smoke 证明投影契约（折叠、blocked reasons、树、Mermaid）、记录时路径拒绝、dry-run 默认、分页发现、零写幂等 resync、单行漂移修复、嵌套 create-receipt 处理、shared 可见性脱敏、免传输卡片内容、opt-in todo branch-plan packet、adaptive resilient worker harness 配置档，以及针对临时 registry 的 CLI 表面，无需 live Lark credentials。它还证明 worker-lane router 契约：请求宽度不再被静默压到 worker 上限以下、独立 lane 准入下空闲 lanes 是队列耗尽（不是上限）、routing bias 在不动 value bookkeeping 的情况下重排 lanes、confident-prefix bundles 在校准阈值截断并对 reject-heavy families 坍缩、router-state novelty ledger 跨 epochs 去重而 coverage debt 累积 bias、观测负载配置档通过 CLI flags 校准准入。
 
 runtime smoke 与聚焦 pytest 模块还覆盖：可恢复 prefix 复用、prefix/suffix novelty 与双复用记账、按 suffix 数加权的 router acceptance、显式 legacy fallback、重启兼容、recorded 与 fatal 失败下的清理、无可变状态别名的并发组、fatal 结构预检、record-mode 畸形 item 隔离与 resume 连续性、聚合指标投影，以及无 legacy `execute` 方法的 episode-only adapters。
+
+### 结论状态与问题收束
+
+写回模板的 `status` 留空，由调用方明确选择 `tentative`、`confirmed` 或
+`refuted`。`tentative` 在研究界面显示为“暂定结论”，表示尚未确认或反驳，
+不表示有检查任务排队。确认与反驳仅适用于记录中声明的结论和范围；证据引用、
+检查通过或某个分数不能自动证明更广泛的收益。
+在解读中区分已建立的观察、仍未知的结论和下一步有用的验证。问题已回答时，
+使用已有可选 `question_update` 收束，不因整体 Goal 未完成而一直保持开放，
+也不因结论被确认就自动关闭问题。历史状态与 CLI finding 默认值保持兼容。
+
+
+## 机器默认值
+
+在「设置 → 设备 → Explore Harness」选择 **关闭**、**仅证据** 或 **证据与规划**，
+预览后应用。planning 包含证据图和只读分支规划建议；未配置时仍默认关闭。
+
+机器命名空间 `explore_harness` 使用
+`{"schema_version":"explore_harness_machine_defaults_v0","mode":"planning"}`，
+沿用 `machine-config` 的预览、精确版本应用、移除与回滚事务。已有与新建的、没有
+显式模式的 Goal 实时继承，不批量改写注册表。独立 runtime root 保留各自设置，
+包括隔离的 benchmark runtime。
+
+Goal 显式模式及旧版 graph/harness `enabled` 字段优先，包括 `false`。只有 profile
+或组合设置时不会固定模式。Goal 设置展示有效模式及来源；「恢复继承」或
+`configure-goal --clear-explore-configuration` 清除该 Goal 的 Explore 覆盖，保留
+其他 spawn 设置。若要单独关闭某个 Goal，显式设为 `off`。
+
+在表单或 JSON 中修改 profile 或组合设置会保留模式继承；只有显式选择模式才会
+创建模式覆盖。
+
+Turn 上下文、规划、quota/history、Todo 结算、原生完成操作和交付后图更新使用同一个模式解析器。证据模式
+不授予对外发布权限；机器默认开启只保留本地图投影，不自动启用外部 sink。
+profile、研究范围、spawn 权限、lease、quota 和宿主续跑仍由各自机制管理。
+配置已开启本身不代表证据已被采纳或任务效果已提升。
+
+原生研究任务完成事务结束前保持图锁，继承时还保持设备配置锁。继承 planning
+与 Goal 显式选择 planning 一样，要求对应任务和输入的 typed experiment 证据。

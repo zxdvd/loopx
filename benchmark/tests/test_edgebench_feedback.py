@@ -123,6 +123,7 @@ def test_silent_baseline_then_complete_official_improvement_and_source_identity(
 @pytest.mark.parametrize("fault", [None, "submission", "task", "score", "pass_rate", "invalid",
                                     "pending", "error", "epoch", "evaluator", "network"])
 def test_official_response_binding_failure_retries_without_advancing(publisher, monkeypatch, fault):
+    publisher.bind({"SFORGE_TOKEN": "private-token"})
     baseline, candidate = row(1, 1, pass_rate=.5), row(2, 3, pass_rate=.75)
     archive(publisher, 2)
     expected = official_result(candidate)
@@ -164,8 +165,9 @@ def test_official_response_binding_failure_retries_without_advancing(publisher, 
     packet = json.loads(transport.files[str(FEEDBACK_FILE)])["latest"]
     assert packet["official_result"] == expected
     assert calls[-2][0].endswith("/api/v1/result/s2")
-    assert "params" not in calls[-2][1]  # No credentials go into the disclosed API body.
+    assert calls[-2][1]["params"] == {"token": "private-token"}
     assert calls[-1][1]["params"] == {"admin_secret": "private-secret"}
+    assert all(secret not in json.dumps(packet) for secret in ("private-token", "private-secret"))
     publisher.update(values, transport, None)
     assert publisher.notifications == 1
 
@@ -359,13 +361,15 @@ def test_cli_native_context_default_and_explicit_controls_reach_registration(tmp
     constructed = {}
     def backend(**kwargs):
         constructed.update(kwargs)
-        return SimpleNamespace(image_exists=lambda image: True)
+        return SimpleNamespace(image_exists=lambda image: True,
+            registration_options=lambda runner: {"host_registration_callback": kwargs["feedback"].bind})
     monkeypatch.setattr(run, "RecordingDockerBackend", backend)
     def handoff(**kwargs):
         selected = mode or "native"
         assert kwargs["agent"].feedback == selected
         assert kwargs["max_submissions"] == (None if selected == "native" else 0)
         assert (constructed["feedback"] is not None) == (selected == "best-only")
+        assert ("host_registration_callback" in kwargs) == (selected == "best-only")
         assert constructed["blind_api_endpoint"] == (None if selected == "native" else ("192.0.2.1", 9090))
         prompt = kwargs["agent"].feedback_prompt
         assert prompt.endswith("---\n\nComplete the task\n")

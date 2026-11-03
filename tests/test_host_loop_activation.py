@@ -27,7 +27,10 @@ from loopx.host_loop_activation import (
     normalize_agent_type,
     scheduler_command_binding_for_agent_type,
 )
-from loopx.project_prompt import render_accountable_progress_refresh_command
+from loopx.project_prompt import (
+    render_accountable_progress_refresh_command,
+    render_cli_command_prefix,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -367,7 +370,7 @@ def test_heartbeat_prompt_commands_keep_explicit_runtime_root() -> None:
         registered_agents=["runtime-agent"],
     )
 
-    command_prefix = f"loopx --runtime-root {runtime_root}"
+    command_prefix = render_cli_command_prefix(runtime_root=runtime_root)
 
     assert payload["quota_guard_command"].startswith(
         f"{command_prefix} --format json quota should-run "
@@ -385,7 +388,7 @@ def test_heartbeat_prompt_commands_keep_explicit_runtime_root() -> None:
         f"{command_prefix} heartbeat-prompt "
     )
     assert '"$HOME/.codex/loopx/registry.global.json"' not in payload["task_body"]
-    assert f"--runtime-root {runtime_root}" in payload["task_body"]
+    assert command_prefix in payload["task_body"]
 
 
 @pytest.mark.parametrize(
@@ -447,10 +450,11 @@ def test_goal_hosts_reuse_thin_dispatch_and_stay_compact() -> None:
             "preserve exact identities/effect ids",
         ):
             assert obligation in payload["task_body"]
-        # Current authority/continuation clauses fit 3,200 normalized
-        # chars on this fixed fixture. Keep a tight regression guard and the
-        # native host's separate hard cap, without shortening those obligations.
-        assert payload["interface_budget"]["budget_char_count"] <= 3_200
+        # The known first-guard choice adds 63 useful normalized characters:
+        # the largest fixed host fixture is 3,262, leaving 38 under this
+        # regression allowance. Keep the native host's hard cap separate.
+        assert "Known new-Turn choice: add `--todo-id <id>` to first guard" in payload["task_body"]
+        assert payload["interface_budget"]["budget_char_count"] <= 3_300
         assert payload["interface_budget"]["max_chars"] == 4_000
         assert payload["interface_budget"]["within_budget"] is True
 

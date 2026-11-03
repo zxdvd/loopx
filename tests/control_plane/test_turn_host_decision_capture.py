@@ -11,9 +11,12 @@ from pathlib import Path
 import pytest
 
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-from loopx.control_plane.turn_driver.decision_capture import prepare_turn_decision_capture
+from loopx.control_plane.turn_driver.decision_capture import (
+    prepare_turn_decision_capture, stage_turn_decision_capture, write_decision_capture,
+)
 from loopx.control_plane.turn_driver.journal_store import load_loopx_turn_plan_from_journal, turn_journal_path
-from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority
+from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
+from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
 
 
 def _fixture_module():
@@ -26,16 +29,25 @@ def _fixture_module():
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("first_attempt_fails", [False, True])
-def test_real_host_reads_original_capture_after_source_change(tmp_path, provider, first_attempt_fails):
+@pytest.mark.parametrize("legacy_pretty", [False, True])
+def test_real_host_reads_original_capture_after_source_change(
+    tmp_path, monkeypatch, provider, first_attempt_fails, legacy_pretty,
+):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
     f = _fixture_module()
     project, runtime, workspace, registry = f._write_fixture(tmp_path, turn_count=2)
+    state = project / ".codex/goals" / f.GOAL_ID / "ACTIVE_GOAL_STATE.md"
+    state_bytes = state.read_bytes()
     code, listed = f._run_cli(["--registry", str(registry), "--runtime-root", str(runtime),
                              "--format", "json", "todo", "list", "--goal-id", f.GOAL_ID])
-    assert code == 0
-    state = project / ".codex/goals" / f.GOAL_ID / "ACTIVE_GOAL_STATE.md"
+    assert code == 1 and listed["error_code"] == "canonical_authority_required", listed
+    assert listed["legacy_fallback_used"] is False and state.read_bytes() == state_bytes
+    # Convert the disposable fixture explicitly; ordinary reads must not
+    # recover unmigrated work from its Markdown projection.
+    summary = parse_active_state_todos(state_bytes.decode(), state_path=state, item_limit=None)
     initialize_canonical_authority(runtime, f.GOAL_ID,
         build_todo_runtime_shadow_projection(goal_id=f.GOAL_ID, handoff_mode="soft_claim",
-                                             todos=listed["todos"]),
+                                             todos=summary["agent_todos"]["items"]),
         state_path=state, provider=provider)
     executable = f._write_fake_codex(tmp_path)
     source = executable.read_text().replace("#!/usr/bin/env python3", "#!" + sys.executable)
@@ -72,9 +84,21 @@ def test_real_host_reads_original_capture_after_source_change(tmp_path, provider
     path = Path(capture["path"])
     original = path.read_bytes()
     assert path.stat().st_mode & 0o077 == 0
+    if legacy_pretty:
+        # Model an observation produced by the older writer. Recovery must
+        # preserve those original bytes rather than rewriting its layout.
+        original = (json.dumps(json.loads(original), ensure_ascii=False, indent=2) + "\n").encode()
+        path.write_bytes(original)
+    else:
+        assert original.endswith(b"\n") and b"\n" not in original[:-1]
     source_a = json.loads(original)
     assert source_a["goal_id"] == f.GOAL_ID
     assert source_a["agent_identity"]["agent_id"] == f.AGENT_ID
+    # Direct `turn` bypasses quota CLI emission. Check its actual subprocess
+    # prompt against the same original contracts, including recovery below.
+    for field in ("work_lane_contract", "execution_obligation", "automation_liveness"):
+        assert source_a[field]
+        assert request["turn_envelope"]["contract_capsule"][field] == source_a[field]
     # Change the real provider through its native CAS CLI, not the projection.
     prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
     code, current = f._run_cli([*prefix, "todo", "list", "--goal-id", f.GOAL_ID, "--todo-id", f.TODO_ID])
@@ -122,6 +146,33 @@ def test_real_host_reads_original_capture_after_source_change(tmp_path, provider
     assert not any(repeated["effects"].values())
     assert f._quota_spend_count(runtime) == 1
     assert path.read_bytes() == original
+    # Admission can run between source validation and publication. It cannot
+    # replace or silently recreate an original capture changed in that window.
+    staged = stage_turn_decision_capture(plan, journal_path=journal_path,
+                                        decision=None, existing_journal=True)
+    # Numeric lookalikes compare equal to booleans in Python, but change the
+    # original JSON observation and its typed source hash.
+    for numeric in (1, 1.0):
+        path.write_text(json.dumps({**source_a, "ok": numeric}))
+        changed = path.read_bytes()
+        with pytest.raises(ValueError, match="changed before publication"):
+            staged.publish()
+        assert path.read_bytes() == changed
+    path.write_text(json.dumps(dict(reversed(source_a.items()))))
+    assert staged.publish()["turn_envelope"]["detail_ref"] == detail
+    path.write_bytes(original)
+    path.write_text(json.dumps({**source_a, "reason": "changed during admission"}))
+    changed = path.read_bytes()
+    with pytest.raises(ValueError, match="changed before publication"):
+        staged.publish()
+    assert path.read_bytes() == changed
+    path.unlink()
+    with pytest.raises(ValueError, match="missing"):
+        staged.publish()
+    assert not path.exists()
+    path.write_bytes(original)
+    assert staged.publish()["turn_envelope"]["detail_ref"] == detail
+    assert path.read_bytes() == original
     # Corrupt/missing evidence cannot be replaced by the caller's new guard.
     path.write_text(json.dumps({**source_a, "reason": "wrong original"}))
     with pytest.raises((ValueError, RuntimeError), match="original observation"):
@@ -135,3 +186,22 @@ def test_real_host_reads_original_capture_after_source_change(tmp_path, provider
     with pytest.raises(ValueError, match="no original decision capture"):
         prepare_turn_decision_capture(legacy, journal_path=journal_path,
                                       decision=source_a, existing_journal=True)
+
+
+@pytest.mark.parametrize("caller", ["native", "quota"])
+def test_capture_compacts_layout_without_changing_values(tmp_path, caller):
+    from loopx.cli_commands.quota_capture import capture_decision
+
+    payload = {"ok": True, "context": {"text": '保留 two  spaces\nnew line\tand "quotes"',
+        "values": [True, False, None, -0.0, 1.25], "nested": {"stop": "Do not publish."}}}
+    path = tmp_path / "decision.json"
+    if caller == "quota":
+        capture_decision(tmp_path, payload)
+    else:
+        write_decision_capture(path, payload)
+    raw = path.read_bytes()
+    assert json.loads(raw) == payload
+    assert raw.endswith(b"\n") and b"\n" not in raw[:-1]
+    assert "保留".encode() in raw
+    assert b"two  spaces" in raw and b"\\nnew line\\t" in raw
+    assert len(raw) < len((json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode())

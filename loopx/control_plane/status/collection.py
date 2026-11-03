@@ -9,7 +9,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..agents.execution_facts import collect_agent_execution_facts
-from ..coordination.local_authority import CanonicalTodoSnapshot
+from ..coordination.local_authority import (
+    CanonicalTodoSnapshot,
+    LocalCoordinationAuthorityUnavailable,
+)
 from ..goals.acceptance_observation import attach_goal_acceptance_observations
 from ..goals.artifact_lifecycle import attach_goal_artifact_lifecycle_projections
 from ..goals.contract_health import project_contract_health_for_goal
@@ -20,6 +23,7 @@ from ..goals.activation import (
 )
 from ..runtime.runtime_projection_route import (
     collect_runtime_projection_route_diagnostics,
+    resolve_goal_source_runtime_route,
 )
 from ..projection_envelope_facts import seal_projection_envelope, source_fact
 from ..quota.blocked_retry import overlay_status_turn_retries
@@ -84,7 +88,14 @@ def collect_status(
     activation_state_filter: GoalActivationState | str | None = None,
     agent_lane_id: str | None = None,
     allow_missing_registry: bool = False,
+    include_presentation_projections: bool = True,
 ) -> dict[str, Any]:
+    """Collect the status read model.
+
+    ``include_presentation_projections=False`` omits the runtime-wide
+    ``promotion_gate`` and per-item ``goal_channel_projection``, which only the
+    status/dashboard presentations read; decision callers such as quota use it.
+    """
     display_limit = max(0, limit)
     control_plane_limit = max(
         display_limit,
@@ -127,10 +138,28 @@ def collect_status(
     )
     history = history_collection.status_history
     history_read_at = now_utc_iso()
-    todo_snapshot = CanonicalTodoSnapshot()
+    source_snapshots: dict[Path, bytes | None] = {}
+
+    def canonical_runtime_for_goal(current_goal_id: str) -> Path:
+        try:
+            route = resolve_goal_source_runtime_route(
+                registry_path=registry_path, goal_id=current_goal_id,
+                runtime_root_override=runtime_root_override, registry=registry,
+                source_snapshots=source_snapshots,
+            )
+        except (OSError, ValueError) as error:
+            raise LocalCoordinationAuthorityUnavailable(
+                "Canonical Todo source route is unavailable",
+                code="canonical_todo_contract_diagnostics_unavailable",
+                payload={"goal_id": current_goal_id, "write_admitted": False,
+                         "legacy_fallback_used": False},
+            ) from error
+        return Path(route["source_runtime_root"])
+
+    todo_snapshot = CanonicalTodoSnapshot(runtime_root_for_goal=canonical_runtime_for_goal)
     contract = context.check_contract(
         registry_path=registry_path,
-        runtime_root_override=str(runtime_root),
+        runtime_root_override=runtime_root_override,
         scan_roots=[],
         limit=limit,
         allow_missing_registry=allow_missing_registry,
@@ -157,6 +186,7 @@ def collect_status(
         events_for_goal=rollout_events.events_for_goal,
         current_registry=registry,
         registry_path=registry_path,
+        include_goal_channel_projection=include_presentation_projections,
     )
     # No later projection consumes canonical rows; release retained archive
     # data before assembling the rest of the display.
@@ -175,10 +205,14 @@ def collect_status(
         ),
         events_for_goal=rollout_events.events_for_goal,
     )
-    promotion_gate = context.build_promotion_gate(
-        registry_path=registry_path,
-        runtime_root_override=str(runtime_root),
-        registry=registry,
+    promotion_gate = (
+        context.build_promotion_gate(
+            registry_path=registry_path,
+            runtime_root_override=str(runtime_root),
+            registry=registry,
+        )
+        if include_presentation_projections
+        else None
     )
     zcode_eligibility: dict[str, list[str]] = {}
     source_goal_observer: Callable[[str, dict[str, Any] | None], None] | None = None
@@ -242,8 +276,9 @@ def collect_status(
         "global_registry": global_registry,
         "attention_queue": queue,
         **runtime_summaries,
-        "promotion_gate": promotion_gate,
     }
+    if include_presentation_projections:
+        payload["promotion_gate"] = promotion_gate
     if activation_filter is not None:
         payload["goal_projection"] = {
             "schema_version": "loopx_goal_projection_scope_v0",

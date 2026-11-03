@@ -8,7 +8,11 @@ from contextlib import contextmanager
 import hashlib
 import json
 import os
+from pathlib import Path
+from types import SimpleNamespace
+import shutil
 import sys
+import tempfile
 import threading
 import time
 from urllib.error import HTTPError
@@ -17,14 +21,37 @@ from urllib.request import Request, urlopen
 
 import pytest
 
+from tests.control_plane.host_process_fixture import write_python_host_fixture
+from tests.managed_effect_runtime_fixture import capture_disposable_effect_runtimes, stop_disposable_effect_runtimes
+from loopx.control_plane import effect_runtime
 from loopx.capabilities.benchmark_toolkit.trajectory_assessment_store import register_pack
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 from loopx.control_plane.status.goal_source import GoalSource
 from loopx.presentation.runtime_workspace import RuntimeWorkspaceServer
 
+_SYSTEM_TEMP = Path(tempfile.gettempdir())
+
 
 @pytest.fixture
-def workspace(tmp_path, monkeypatch):
+def workspace(tmp_path, monkeypatch, request):
+    if os.name == "nt":
+        # Hash-qualified job directories must also be valid CreateProcess cwd
+        # values. This HTTP fixture does not exercise the long-path contract.
+        parent = str(_SYSTEM_TEMP.resolve())
+        if not parent.startswith("\\\\?\\"):
+            parent = "\\\\?\\UNC\\" + parent[2:] if parent.startswith("\\\\") else "\\\\?\\" + parent
+        # Cleanup must still handle deeper source namespaces after a failure.
+        temporary = tempfile.TemporaryDirectory(prefix="lxra-", dir=parent)
+        request.addfinalizer(temporary.cleanup)
+        tmp_path = _SYSTEM_TEMP / Path(temporary.name).name
+    # Register before setup can start Node; pytest also runs this on pre-yield
+    # failure, before the borrowed Windows root's directory finalizer.
+    request.addfinalizer(lambda: stop_disposable_effect_runtimes(tmp_path))
+    process_temp = tmp_path / "process-tmp"
+    process_temp.mkdir()
+    for variable in ("TMPDIR", "TEMP", "TMP"):
+        monkeypatch.setenv(variable, str(process_temp))
+    monkeypatch.setattr(tempfile, "tempdir", str(process_temp))
     runtime, sources = tmp_path / "runtime", tmp_path / "sources"
     sources.mkdir()
     evidence = b"Prior question\nOnly the diagnostic was measured; native utility remains untested.\n"
@@ -43,12 +70,19 @@ def workspace(tmp_path, monkeypatch):
     mode, count = tmp_path / "mode", tmp_path / "process-count"
     mode.write_text("wait")
     output = {"assessments": [dict(episode_id="episode", metric="benefit_test", verdict="no", reason="Diagnostic measurements do not establish a native utility test.", citations=[dict(source_id="facts", first_line=2, last_line=2)])], "limitations": ["Synthetic process output, not a calibrated model assessment."]}
+    output["synthesis"] = {"summary": {"text": "A diagnostic improvement leaves native utility unresolved.", "episode_ids": ["episode"],
+                                      "citations": [dict(source_id="facts", first_line=2, last_line=2)]}, "findings": [], "next_experiments": []}
     binary = tmp_path / "bin"
     binary.mkdir()
-    provider = binary / "codex"
-    provider.write_text(f'''#!{sys.executable}
+
+    def write_provider(source):
+        return write_python_host_fixture(binary / "codex", source)
+
+    shebang = "#!python" if os.name == "nt" else f"#!{sys.executable}"
+    provider = write_provider(f'''{shebang}
 from pathlib import Path
 import json,sys,time
+sys.stdin.reconfigure(encoding='utf-8')
 prompt=sys.stdin.read()
 with Path({str(count)!r}).open('a') as stream: stream.write('started\\n')
 mode=Path({str(mode)!r}).read_text()
@@ -60,17 +94,23 @@ if 'Output language:' in prompt:
     output['episode_questions']=[{{'episode_id':'episode','question':'诊断改善是否检验了原生收益？' if zh else 'Did diagnostic improvement test native utility?'}}]
     output['assessments'][0]['reason']='只测量了诊断，尚未检验原生收益。' if zh else 'Only the diagnostic was measured; native utility was not tested.'
     output['limitations']=['合成进程输出，并非模型质量验证。' if zh else 'Synthetic process, not model quality evidence.']
+if '\\n\\ndisplay_fields:\\n' in prompt:
+    fields=json.loads(prompt.split('\\n\\ndisplay_fields:\\n')[1])
+    output['display_translations']=[{{'field_id':field['field_id'],'text':field['text']}} for field in fields]
 Path(sys.argv[sys.argv.index('-o')+1]).write_text(json.dumps(output,ensure_ascii=False),encoding='utf-8')
 print(json.dumps({{'type':'turn.completed','usage':{{'input_tokens':10,'output_tokens':2}}}}))
 ''')
-    provider.chmod(0o700)
     monkeypatch.setenv("PATH", str(binary) + os.pathsep + os.environ["PATH"])
+    selected = shutil.which("codex")
+    assert selected and Path(selected).samefile(provider), "Use only the synthetic provider"
     state, registry = tmp_path / "active.md", tmp_path / "registry.json"
     state.write_text("# Synthetic research workspace\n")
     registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{"id": goal, "repo": str(tmp_path), "state_file": "active.md"} for goal in ("research-owner", "other-owner")]}))
     before = {path: path.read_bytes() for path in (state, registry, input_path, sources / "facts.txt")}
     server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
-    server.registry_path, server.runtime_root_override, server.verbose = registry, None, False
+    server.registry_path, server.runtime_root_override, server.verbose = (
+        registry, str(tmp_path / "private-chat") if getattr(request, "param", False) else None, False
+    )
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
     base = f"http://127.0.0.1:{server.server_port}/api/chat/research-analysis"
@@ -85,11 +125,116 @@ print(json.dumps({{'type':'turn.completed','usage':{{'input_tokens':10,'output_t
 
     operation = dict(goal_id="research-owner", pack_id=pack["pack_id"], analysis_key=pack["analysis_key"])
     try:
-        yield dict(request=request, operation=operation, mode=mode, count=count, server=server, sources=sources, before=before, tmp_path=tmp_path)
+        yield dict(request=request, operation=operation, mode=mode, count=count, server=server, sources=sources, before=before, tmp_path=tmp_path,
+                   provider_source=provider.with_suffix(".py") if os.name == "nt" else provider,
+                   write_provider=write_provider)
     finally:
         server.shutdown()
         worker.join(timeout=5)
         server.server_close()
+
+
+@pytest.mark.parametrize("failure", ["registration", "provider_identity"])
+def test_workspace_setup_failure_stops_owned_runtime(tmp_path, monkeypatch, failure):
+    finalizers, runtimes = [], []
+    original = register_pack
+
+    def registered(**kwargs):
+        result = original(**kwargs)
+        root = kwargs["runtime_root"].parent
+        for locator, _ in capture_disposable_effect_runtimes(root):
+            info = effect_runtime._read_info(locator, fingerprint=None)
+            assert info is not None
+            runtimes.append((locator, info))
+        assert runtimes, "Exercise a real disposable runtime before setup fails"
+        if failure == "registration":
+            raise RuntimeError("Injected registration failure")
+        return result
+
+    monkeypatch.setitem(workspace.__wrapped__.__globals__, "register_pack", registered)
+    if failure == "provider_identity":
+        which = shutil.which
+        monkeypatch.setattr(shutil, "which", lambda command, *a, **k: None if command == "codex" else which(command, *a, **k))
+    setup = workspace.__wrapped__(tmp_path, monkeypatch, SimpleNamespace(addfinalizer=finalizers.append))
+    try:
+        with pytest.raises((RuntimeError, AssertionError), match="Injected registration failure|Use only the synthetic provider"):
+            next(setup)
+        for cleanup in reversed(finalizers):
+            cleanup()
+        for _, info in runtimes:
+            assert not effect_runtime._pid_is_alive(info["pid"]), "Setup failure left an owned runtime alive"
+    finally:
+        # Keep the regression's failing control from leaking its own process.
+        for locator, info in runtimes:
+            effect_runtime._stop_effect_runtime(locator, info, timeout=5, wait_for_process_exit=True)
+
+
+@pytest.mark.parametrize("workspace", [False, True], indirect=True)
+def test_shared_excerpts_reverify_through_http_without_dispatch(workspace, monkeypatch):
+    w = workspace
+    path = w["tmp_path"] / "input.json"
+    data = json.loads(path.read_text())
+    data["sources"].append({**data["sources"][0], "id": "prior", "first_line": 1, "text": "Prior question"})
+    data["episodes"][0]["source_ids"].append("prior")
+    path.write_text(json.dumps(data))
+    registered = register_pack(runtime_root=w["tmp_path"] / "runtime", owner_goal_id="research-owner",
+        input_path=path, source_root=w["sources"], title="Two excerpts of one artifact")
+    original = type(path).read_bytes
+    reads = []
+
+    def observed(source):
+        if source.samefile(w["sources"] / "facts.txt"):
+            reads.append(source)
+        return original(source)
+
+    monkeypatch.setattr(type(path), "read_bytes", observed)
+    view = w["request"](pack_id=registered["pack_id"])
+    assert view["pack"]["availability"] == "available"
+    # Two catalog entries plus the selected pack; each verification reads once.
+    assert len(reads) == 3 and not w["count"].exists()
+    source = w["sources"] / "facts.txt"
+    stat = source.stat()
+    source.write_bytes(original(source).replace(b"Prior", b"Other"))
+    os.utime(source, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    reads.clear()
+    changed = w["request"](pack_id=registered["pack_id"])
+    assert changed["pack"]["reason_code"] == "source_changed"
+    assert len(reads) == 3 and not w["count"].exists()
+
+
+def test_display_context_uses_registered_sources_and_the_existing_http_reader(workspace):
+    w, read = workspace, workspace["request"]
+    path = w["tmp_path"] / "input.json"
+    data = json.loads(path.read_text())
+    page = dict(ok=True, goal_id="solver-goal", total=1, next_cursor=None, items=[dict(
+        schema_version="loopx_explore_result_event_v0", event_id="record", result_id="question",
+        goal_id="solver-goal", event_kind="node", node_kind="question", recorded_at="2026-01-01T00:00:00Z",
+        title="Did the diagnostic improve utility?", summary="Native benefit remains unknown.", status="tentative")])
+    text = json.dumps(page)
+    (w["sources"] / "history.json").write_text(text)
+    data["sources"].append(dict(id="history", artifact="history.json", artifact_sha256=hashlib.sha256(text.encode()).hexdigest(), first_line=1, text=text))
+    citation = dict(source_id="facts", first_line=2, last_line=2)
+    data["display_snapshot"] = dict(schema_version="research_display_snapshot_v1", source_id="history", source_namespace="local",
+        contexts=[dict(event_id="record", field="summary", citations=[citation])])
+    path.write_text(json.dumps(data))
+    registered = register_pack(runtime_root=w["tmp_path"] / "runtime", owner_goal_id="research-owner", input_path=path,
+                               source_root=w["sources"], title="Synthetic contextual display")
+    view = read(pack_id=registered["pack_id"], output_language="zh")["pack"]
+    assert view["job"] is None and not w["count"].exists()
+    operation = dict(goal_id="research-owner", pack_id=registered["pack_id"], analysis_key=view["analysis_key"], output_language="zh")
+    w["mode"].write_text("ok")
+    assert read(body=operation)["job"]["status"] == "succeeded"
+    shown = read(pack_id=registered["pack_id"], output_language="zh")["pack"]
+    field = next(field for field in shown["result"]["display"]["fields"] if field["field"] == "summary")
+    assert field["context_citations"] == [citation]
+    query = {key: value for key, value in operation.items() if key != "goal_id"}
+    assert read(suffix="/citation", **query, **citation)["text"] == data["sources"][0]["text"]
+    for overrides in [dict(first_line=1), dict(source_id="history", first_line=1, last_line=1)]:
+        with pytest.raises(HTTPError) as denied:
+            read(suffix="/citation", **query, **{**citation, **overrides})
+        assert denied.value.code in (400, 409)
+    assert w["count"].read_text().splitlines() == ["started"]
+    assert json.loads(path.read_text()) == data
 
 
 def test_frontend_language_scopes_process_retry_cache_and_original_citations(workspace):
@@ -263,6 +408,7 @@ def test_registered_http_cancel_failure_retry_reuse_and_source_return(workspace)
     assert changed.value.code == 409
 
 
+@pytest.mark.parametrize("workspace", [False, True], indirect=True)
 def test_http_rejects_other_owner_paths_free_configuration_and_wrong_origin(workspace):
     w = workspace
     read, operation = w["request"], w["operation"]
@@ -282,6 +428,7 @@ def test_http_rejects_other_owner_paths_free_configuration_and_wrong_origin(work
     assert not w["count"].exists()
 
 
+@pytest.mark.parametrize("workspace", [False, True], indirect=True)
 def test_native_outcomes_and_bound_citations_read_over_http_without_analysis(workspace):
     w = workspace
     data = json.loads((w["tmp_path"] / "input.json").read_text())
@@ -306,6 +453,64 @@ def test_native_outcomes_and_bound_citations_read_over_http_without_analysis(wor
         w["request"](goal="other-owner", pack_id=registered["pack_id"])
 
 
+def test_explicit_native_context_reaches_process_and_changed_source_blocks_reuse(workspace):
+    w, read = workspace, workspace["request"]
+    path = w["tmp_path"] / "input.json"
+    data = json.loads(path.read_text())
+    native = {"schema_version": "trajectory_native_outcomes_v1", "scope": data["scope"],
+        "start": "2026-01-01T00:00:00Z", "end": "2026-01-01T00:04:00Z", "complete": True,
+        "metric": {"name": "error", "unit": "points", "higher_is_better": False},
+        "retained_result_id": None,
+        "comparison": {"baseline_result_id": "result-1", "retention_citation": None},
+        "samples": [{"submission_index": i, "result_id": f"result-{i}", "candidate_ref": f"candidate-{i}",
+            "valid": True, "value": value, "submitted_at": f"2026-01-01T00:0{i}:00Z",
+            "observed_at": f"2026-01-01T00:0{i}:30Z",
+            "citation": {"source_id": "facts", "first_line": 2, "last_line": 2}}
+            for i, value in enumerate((10, 9), 1)]}
+    capture = json.dumps(native)
+    native_path = w["sources"] / "native.json"
+    native_path.write_text(capture)
+    scope = dict(runtime_root=w["tmp_path"] / "runtime", owner_goal_id="research-owner",
+        input_path=path, source_root=w["sources"], native_outcomes_json="native.json")
+    # Display-only registration keeps the existing analysis identity.
+    legacy = register_pack(**scope, title="Display-only native outcomes")
+    assert legacy["analysis_key"] == w["operation"]["analysis_key"]
+    data["sources"].append(dict(id="capture", artifact="native.json",
+        artifact_sha256=hashlib.sha256(capture.encode()).hexdigest(), first_line=1, text=capture))
+    data["native_outcomes_source_id"] = "capture"
+    path.write_text(json.dumps(data))
+    registered = register_pack(**scope, title="Explicit native context", base_pack_id=legacy["pack_id"])
+    assert registered["analysis_key"] != legacy["analysis_key"]
+    before = read(pack_id=registered["pack_id"])["pack"]
+    assert before["native_outcomes"]["projection"]["retained"] is None
+    assert before["job"] is None and not w["count"].exists()
+    provider = w["provider_source"]
+    prompt_path = w["tmp_path"] / "received-prompt.txt"
+    w["write_provider"](provider.read_text(encoding="utf-8").replace("prompt=sys.stdin.read()",
+        f"prompt=sys.stdin.read()\nPath({str(prompt_path)!r}).write_text(prompt,encoding='utf-8')"))
+    operation = {**w["operation"], "pack_id": registered["pack_id"], "analysis_key": registered["analysis_key"]}
+    w["mode"].write_text("ok")
+    assert read(body=operation)["job"]["status"] == "succeeded"
+    context = json.loads(prompt_path.read_text(encoding="utf-8").split("\n\nNative outcome context:\n")[1])
+    assert context["metric"]["higher_is_better"] is False
+    assert context["best_valid"]["value"] == context["final_valid"]["value"] == 9
+    assert context["retained"] is None
+    assert context["retained_improvement"]["value"] is None
+    assert context["retained_improvement"]["final_candidate_delta"] == 1
+    assert capture not in prompt_path.read_text()
+    assert read(body=operation)["job"]["reused"]
+    read(pack_id=registered["pack_id"], output_language="en")
+    assert w["count"].read_text().splitlines() == ["started"]
+    native_path.write_text(capture + "\n")
+    historical = read(pack_id=registered["pack_id"])["pack"]
+    assert historical["result"] is not None
+    assert historical["native_outcomes"]["applicability"] == "historical"
+    with pytest.raises(HTTPError) as changed:
+        read(body=operation)
+    assert changed.value.code == 409
+    assert w["count"].read_text().splitlines() == ["started"]
+
+
 @contextmanager
 def source_analysis_workspace(w, name, *, enabled=True):
     """Synthetic source transport; actual local store, HTTP and provider process."""
@@ -315,8 +520,10 @@ def source_analysis_workspace(w, name, *, enabled=True):
         reads = 0
 
         def __init__(self):
-            super().__init__(name, name, "/registry", "/runtime", "/cli", "/python",
-                             "/bin", "local", "host", "research-owner")
+            root = w["tmp_path"]
+            super().__init__(name, name, str(root / "registry.json"), str(root / "runtime"),
+                             str(root / "source-cli"), sys.executable,
+                             str(root / "bin"), "local", "host", "research-owner")
 
         def read_status(self, goal_id=None):
             self.reads += 1
@@ -396,6 +603,79 @@ def test_source_goal_analysis_reads_cancel_retry_and_reuse_do_not_mutate_source(
         with pytest.raises(HTTPError) as changed:
             read(body=operation)
         assert changed.value.code == 409
+
+
+@pytest.mark.parametrize("registered,failed,code", [(True, True, 503), (False, False, 404)])
+def test_source_analysis_cancel_does_not_require_live_source(workspace, registered, failed, code):
+    w = workspace
+    with source_analysis_workspace(w, "offline-cancel") as s:
+        read, operation, source = s["request"], s["operation"], s["server"].source
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            running = pool.submit(read, body=operation)
+            until = time.monotonic() + 8
+            while not w["count"].exists() and time.monotonic() < until:
+                time.sleep(.05)
+            assert w["count"].exists(), "Local analysis process did not start"
+            reads = source.reads
+            source.registered, source.failed = registered, failed
+            try:
+                assert read(body=operation, suffix="/cancel")["job"]["cancel_requested"]
+                assert running.result(timeout=8)["job"]["status"] == "cancelled"
+                assert source.reads == reads, "Cancelling a local job must not read its original source"
+                for retry in (False, True):
+                    with pytest.raises(HTTPError) as denied:
+                        read(body={**operation, "retry": retry})
+                    assert denied.value.code == code
+                assert w["count"].read_text().splitlines() == ["started"]
+            finally:
+                # The same test must clean up its child when run against the
+                # defective baseline, where offline cancellation is rejected.
+                source.registered, source.failed = True, False
+                read(body=operation, suffix="/cancel")
+                running.result(timeout=8)
+        assert read()["pack"]["job"]["status"] == "cancelled"
+        for path, original in w["before"].items():
+            assert path.read_bytes() == original
+
+
+def test_source_analysis_offline_cancel_requires_pinned_job_identity(workspace):
+    w = workspace
+    with source_analysis_workspace(w, "cancel-identity") as s:
+        read, operation, source = s["request"], s["operation"], s["server"].source
+        source.failed = True
+        with pytest.raises(HTTPError):
+            read(body=operation, suffix="/cancel")
+        assert not w["count"].exists(), "Cancellation cannot create a missing local job"
+        source.failed = False
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            running = pool.submit(read, body=operation)
+            until = time.monotonic() + 8
+            while not w["count"].exists() and time.monotonic() < until:
+                time.sleep(.05)
+            assert w["count"].exists(), "Local analysis process did not start"
+            source.failed = True
+            try:
+                for namespace in (None, "0" * 64):
+                    with pytest.raises(HTTPError) as denied:
+                        read(body=operation, suffix="/cancel", namespace=namespace)
+                    assert denied.value.code == 400
+                for field, value, code in (
+                    ("goal_id", "another-goal", 404),
+                    ("pack_id", "0" * 64, 409),
+                    ("analysis_key", "0" * 64, 409),
+                ):
+                    with pytest.raises(HTTPError) as denied:
+                        read(body={**operation, field: value}, suffix="/cancel")
+                    assert denied.value.code == code
+                assert not list(s["server"].analysis_runtime_root.rglob("cancel.request"))
+                assert not running.done(), "A mismatched selector must not cancel the running job"
+                assert read(body=operation, suffix="/cancel")["job"]["cancel_requested"]
+                assert running.result(timeout=8)["job"]["status"] == "cancelled"
+                assert w["count"].read_text().splitlines() == ["started"]
+            finally:
+                source.failed = False
+                read(body=operation, suffix="/cancel")
+                running.result(timeout=8)
 
 
 def test_source_analysis_requires_exact_namespace_goal_and_live_membership(workspace):
@@ -485,3 +765,58 @@ def test_source_analysis_default_off_and_non_analysis_writes_stay_disabled(works
             with pytest.raises(HTTPError):
                 s["request"](body=body)
         assert not w["count"].exists()
+
+
+def test_synthesis_only_citation_uses_existing_reader_and_does_not_execute(workspace):
+    w, read = workspace, workspace["request"]
+    # The exact two-line synthesis citation is distinct from the metric's
+    # single-line citation. Arbitrary ranges remain unauthorized.
+    path = w["tmp_path"] / "input.json"
+    data = json.loads(path.read_text())
+    data["sources"][0].update(first_line=1, text=(w["sources"] / "facts.txt").read_text().rstrip("\n"))
+    path.write_text(json.dumps(data))
+    registered = register_pack(runtime_root=w["tmp_path"] / "runtime", owner_goal_id="research-owner", input_path=path,
+                               source_root=w["sources"], title="Synthetic grounded synthesis")
+    provider = w["provider_source"]
+    script = provider.read_text(encoding="utf-8").replace("Path(sys.argv[sys.argv.index('-o')+1]).write_text", "output['synthesis']['summary']['citations'][0]['first_line']=1\nPath(sys.argv[sys.argv.index('-o')+1]).write_text")
+    w["write_provider"](script)
+    before = read(pack_id=registered["pack_id"])["pack"]
+    assert before["job"] is None and not w["count"].exists()
+    operation = {**w["operation"], "pack_id":registered["pack_id"], "analysis_key":before["analysis_key"]}
+    w["mode"].write_text("ok")
+    assert read(body=operation)["job"]["status"] == "succeeded"
+    result = read(pack_id=registered["pack_id"])["pack"]["result"]
+    citation = result["synthesis"]["summary"]["citations"][0]
+    assert citation == dict(source_id="facts", first_line=1, last_line=2)
+    query = {key:value for key,value in operation.items() if key != "goal_id"}
+    assert read(suffix="/citation", **query, **citation)["text"] == data["sources"][0]["text"]
+    with pytest.raises(HTTPError):
+        read(suffix="/citation", **query, **{**citation,"last_line":3})
+    assert w["count"].read_text().splitlines() == ["started"]
+    assert json.loads(path.read_text()) == data
+
+
+def test_usage_turn_http_reads_registered_counter_evidence_without_analysis(workspace):
+    from tests.capabilities.test_trajectory_assessment_store import _usage_fixture
+
+    w = workspace
+    capture = w["sources"] / "usage.jsonl"
+    capture.write_text(_usage_fixture())
+    registered = register_pack(runtime_root=w["tmp_path"] / "runtime", owner_goal_id="research-owner",
+        input_path=w["tmp_path"] / "input.json", source_root=w["sources"], title="Captured Turn costs",
+        usage_jsonl="usage.jsonl", usage_session_id="solver-session")
+    query = dict(pack_id=registered["pack_id"], analysis_key=registered["analysis_key"], turn_id="b")
+    result = w["request"](suffix="/usage-turn", **query)
+    assert result["evidence_kind"] == "usage_counters"
+    assert [event["line"] for event in json.loads(result["text"])["events"]] == [3, 5, 6, 7]
+    assert not w["count"].exists(), "Reading costs must not invoke the analysis provider"
+    for invalid in [dict(query, turn_id="unknown"), dict(query, first_line="1"),
+                    dict(query, goal="other-owner"), dict(query, analysis_key="0" * 64)]:
+        with pytest.raises(HTTPError) as error:
+            w["request"](suffix="/usage-turn", **invalid)
+        assert error.value.code in {400, 409}
+    capture.write_text(capture.read_text() + "{}\n")
+    with pytest.raises(HTTPError) as error:
+        w["request"](suffix="/usage-turn", **query)
+    assert error.value.code == 409
+    assert not w["count"].exists()

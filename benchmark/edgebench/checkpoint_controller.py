@@ -90,7 +90,7 @@ def _bound_bank(folder: Path, reference: dict) -> dict:
     witnessed = _physical(folder / "manifest.sha256").read_text()
     packet = json.loads(raw)
     if (digest != reference["manifest_sha256"] or witnessed != digest or
-            packet.get("schema_version") != "sforge_judge_checkpoint_v1" or
+            packet.get("schema_version") not in {"sforge_judge_checkpoint_v1", "sforge_judge_checkpoint_v2"} or
             any(packet.get(key) != reference[key] for key in (
                 "task_id", "source_run_id", "opportunity", "incumbent"))):
         raise ValueError("Native bank bytes differ from the captured reference")
@@ -174,7 +174,13 @@ def _activation_epoch(path: Path, binding: dict, remaining: float, recover: bool
 
 
 def _activation_result(result: dict, body: dict) -> None:
-    if (set(result) != {*body, "token"} or any(result.get(k) != v for k, v in body.items())
+    relay = result.get("feedback_relay_id")
+    expected = {*body, "token"}
+    if "feedback_relay_id" in result:
+        expected.add("feedback_relay_id")
+        if not isinstance(relay, str) or not relay:
+            raise ValueError("Native activation feedback relay is invalid")
+    if (set(result) != expected or any(result.get(k) != v for k, v in body.items())
             or not isinstance(result.get("token"), str) or not result["token"]):
         raise ValueError("Native activation result differs from the original request")
 

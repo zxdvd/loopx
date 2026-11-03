@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from .hosts.codex_rollout_cursor import Reader, RolloutCursor
+from .hosts.codex_rollout_file import open_rollout
 from .control_plane.agents.host_thread_activity import (
     HostDeliveryExpectation,
     HostDeliveryScope,
@@ -64,6 +65,8 @@ def codex_homes(env: Mapping[str, str] | None = None, user_home: Path | None = N
     ``LOOPX_CODEX_HOMES`` (``os.pathsep``-separated) is used verbatim when set.
     Otherwise ``CODEX_HOME``, ``~/.codex`` and sibling ``~/.codex-*`` homes are
     searched, because Codex App installs can each keep their own home.
+    Preserve distinct path names: callers also use them as profile aliases.
+    Relative entries use the process working directory when their store is read.
     """
 
     env = os.environ if env is None else env
@@ -108,14 +111,16 @@ def _query_threads(uri: str, thread_ids: list[str]) -> dict[str, tuple[Any, Any]
 
 
 def _thread_rows(db: Path, thread_ids: list[str]) -> dict[str, tuple[Any, Any]]:
+    # Configured homes may be relative; SQLite file URIs require an absolute path.
+    uri = db.absolute().as_uri()
     try:
-        return _query_threads(f"{db.as_uri()}?mode=ro", thread_ids)
+        return _query_threads(f"{uri}?mode=ro", thread_ids)
     except sqlite3.OperationalError:
         # A WAL store whose -shm is absent cannot be read with mode=ro.
         # Without a -wal file the main file is the whole store.
         if Path(f"{db}-wal").exists():
             raise
-        return _query_threads(f"{db.as_uri()}?immutable=1", thread_ids)
+        return _query_threads(f"{uri}?immutable=1", thread_ids)
 
 
 def current_codex_execution_identity(
@@ -173,7 +178,7 @@ def _rollout_activity(
     try:
         if not path.is_file():
             return HostThreadActivity.unknown(HostThreadUnknownReason.STORE_UNAVAILABLE)
-        with path.open("rb") as handle:
+        with open_rollout(path) as handle:
             stat = os.fstat(handle.fileno())
             if Path(os.path.realpath(path)) != path or (stat.st_dev, stat.st_ino) != (path.stat().st_dev, path.stat().st_ino):
                 return HostThreadActivity.unknown(HostThreadUnknownReason.RECORD_UNRECOGNIZED)
@@ -325,8 +330,22 @@ def _installed_automation_intervals(
 
     intervals: dict[tuple[str, str, str], int] = {}
     ambiguous: set[tuple[str, str, str]] = set()
+    identities: set[tuple[int, int]] = set()
     for home in codex_homes() if homes is None else homes:
-        for path in sorted((home / "automations").glob("*/automation.toml")):
+        # Discovery retains logical profile names; read each physical store only
+        # once here so an alias cannot masquerade as a second installed heartbeat.
+        try:
+            directory = home.stat()
+            identity = (directory.st_dev, directory.st_ino)
+            if identity in identities:
+                continue
+            paths = sorted((home / "automations").glob("*/automation.toml"))
+        except OSError:
+            # A discovered home can disappear or become unreadable during the
+            # scan. Preserve healthy sources and retry this home on the next read.
+            continue
+        identities.add(identity)
+        for path in paths:
             try:
                 item = tomllib.loads(path.read_text(encoding="utf-8"))
             except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):

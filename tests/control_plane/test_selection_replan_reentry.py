@@ -3,14 +3,25 @@ import json
 import shlex
 
 import pytest
+from canonical_authority_fixture import advance_canonical_fixture_authority, read_fixture_todos
+from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 
 from test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, SELECTED_REPLAN_TODO_ID, TODO_ID,
     _configure_autonomous_replan_fixture, _configure_selected_todo_replan_fixture,
     _configure_selectable_alternative, _heartbeat_receipt_count,
-    _initialize_git_checkout, _projected_cli_args, _run_cli, _run_generated_cli,
+    _initialize_fixture_authority, _initialize_git_checkout, _projected_cli_args, _run_cli, _run_generated_cli,
     _spend_run_count, _write_fixture,
 )
+
+
+def _advance_frontier(project, runtime, operation_id):
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    advance_canonical_fixture_authority(
+        runtime, GOAL_ID, build_todo_runtime_shadow_projection(
+            goal_id=GOAL_ID, todos=read_fixture_todos(state), handoff_mode="soft_claim",
+        ), operation_id=operation_id,
+    )
 
 
 @pytest.mark.parametrize(("binding", "initial_replan"), [
@@ -21,6 +32,7 @@ def test_replan_selection_recovers_inline_or_refuses_ineligible_choice_and_settl
     _configure_selectable_alternative(project)
     if initial_replan:
         _configure_selected_todo_replan_fixture(project, registry)
+    _initialize_fixture_authority(project, runtime, provider="sqlite")
     turn = "turn-selection-preempted"
     guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
              "--agent-id", AGENT_ID, "--turn-instance-id", turn, )
@@ -42,6 +54,7 @@ def test_replan_selection_recovers_inline_or_refuses_ineligible_choice_and_settl
     else:
         _configure_autonomous_replan_fixture(project, runtime, registry)
         selected_id = TODO_ID
+    _advance_frontier(project, runtime, "fixture-frontier-after-selection")
     rc, selected = _run_cli(registry, runtime, *guard, "--todo-id", selected_id)
     selection_deferred = binding == "todo"
     expected_before_resume = 2 if selection_deferred else 1
@@ -164,29 +177,32 @@ def test_replan_selection_recovers_inline_or_refuses_ineligible_choice_and_settl
     assert _spend_run_count(runtime) == 1
 
 
-@pytest.mark.parametrize("initial_replan", [False, True])
-def test_reentry_never_replaces_retained_selection_with_recommended_todo(tmp_path, initial_replan):
+@pytest.mark.parametrize(("initial_replan", "discovery"), [(False, True), (True, True), (True, False)])
+def test_reentry_never_replaces_retained_selection_with_recommended_todo(tmp_path, initial_replan, discovery):
     project, runtime, registry = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
     if initial_replan:
         _configure_selected_todo_replan_fixture(project, registry)
+    _initialize_fixture_authority(project, runtime, provider="sqlite")
     turn = "turn-selection-recommendation-drift"
     guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
              "--agent-id", AGENT_ID, "--turn-instance-id", turn, )
-    rc, first = _run_cli(registry, runtime, *guard)
-    assert rc == 0, first
-    assert first["interaction_contract"]["cli_channel"]["selection_required"]
-    assert "settlement_identity" not in first["heartbeat_receipt"]
+    if discovery:
+        rc, first = _run_cli(registry, runtime, *guard)
+        assert rc == 0, first
+        assert first["interaction_contract"]["cli_channel"]["selection_required"]
+        assert "settlement_identity" not in first["heartbeat_receipt"]
     rc, preferences = _run_cli(
         registry, runtime, "semantic-preference", "agent", "read",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
     )
     assert rc == 0, preferences
-    assert _heartbeat_receipt_count(runtime, turn) == 1
+    assert _heartbeat_receipt_count(runtime, turn) == int(discovery)
 
     # The original explicit choice leaves the refreshed frontier while a
     # different recommended Todo becomes visible under a hard replan.
     _configure_selected_todo_replan_fixture(project, registry)
+    _advance_frontier(project, runtime, "fixture-recommendation-drift")
     retained_todo_id = "todo_chain_000000000001"
     rc, resumed = _run_cli(
         registry, runtime, *guard, "--todo-id", retained_todo_id
@@ -208,6 +224,7 @@ def test_reentry_never_replaces_retained_selection_with_recommended_todo(tmp_pat
         "reason": "autonomous_replan_preemption",
         "settlement_bound": False,
     }
+    assert _heartbeat_receipt_count(runtime, turn) == (3 if discovery else 1)
     plan = resumed["interaction_contract"]["cli_channel"]["settlement_plan"]
     assert plan["identity"] == identity
     assert all(
@@ -278,6 +295,7 @@ def test_replan_preempts_unselected_todo_guards_on_selection_reentry(tmp_path, w
     )
     registry_data["goals"][0]["coordination"]["write_scope"] = write_scope
     registry.write_text(json.dumps(registry_data) + "\n", encoding="utf-8")
+    _initialize_fixture_authority(project, runtime, provider="sqlite")
     _initialize_git_checkout(project)
 
     turn = "turn-selection-replan-workspace-guard"
@@ -319,9 +337,9 @@ def test_replan_preempts_unselected_todo_guards_on_selection_reentry(tmp_path, w
 
 
 @pytest.mark.parametrize("changed_gate", ["user_gate", "quota"])
-@pytest.mark.parametrize("inline", [True, False])
+@pytest.mark.parametrize(("inline", "discovery"), [(True, True), (False, True), (True, False)])
 def test_inline_reentry_reads_gates_changed_after_choice_receipt(
-    tmp_path, monkeypatch, capsys, changed_gate, inline,
+    tmp_path, monkeypatch, capsys, changed_gate, inline, discovery,
 ):
     from loopx.cli import main
     from loopx.cli_commands import quota as quota_cli
@@ -329,12 +347,14 @@ def test_inline_reentry_reads_gates_changed_after_choice_receipt(
 
     project, runtime, registry = _write_fixture(tmp_path)
     _configure_selected_todo_replan_fixture(project, registry)
+    _initialize_fixture_authority(project, runtime, provider="sqlite")
     turn = "turn-inline-reentry-new-gate"
     guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
              "--agent-id", AGENT_ID, "--turn-instance-id", turn,
              )
-    rc, first = _run_cli(registry, runtime, *guard)
-    assert rc == 0 and first["interaction_contract"]["cli_channel"]["selection_required"]
+    if discovery:
+        rc, first = _run_cli(registry, runtime, *guard)
+        assert rc == 0 and first["interaction_contract"]["cli_channel"]["selection_required"]
     original = quota_cli.reconcile_requested_quota_action_selection
     calls = []
 
@@ -342,9 +362,11 @@ def test_inline_reentry_reads_gates_changed_after_choice_receipt(
         result = original(*args, **kwargs)
         calls.append(kwargs["selection"].requested_todo_id)
         if len(calls) == 1:
-            assert result.rejected and result.receipt_status == "selection_retained"
+            assert result.rejected
+            assert result.receipt_status == ("selection_retained" if discovery else "replayed")
             if changed_gate == "user_gate":
-                _append_blocking_user_gate(project)
+                _append_blocking_user_gate(project, global_gate=True)
+                _advance_frontier(project, runtime, "fixture-new-user-gate")
             else:
                 data = json.loads(registry.read_text())
                 data["goals"][0]["quota"]["compute"] = 0
@@ -383,15 +405,18 @@ def test_inline_reentry_reads_gates_changed_after_choice_receipt(
     assert _spend_run_count(runtime) == 0
 
 
-def test_first_inline_result_has_matching_turn_envelope(tmp_path):
+@pytest.mark.parametrize("discovery", [False, True])
+def test_first_inline_result_has_matching_turn_envelope(tmp_path, discovery):
     project, runtime, registry = _write_fixture(tmp_path)
     _configure_selected_todo_replan_fixture(project, registry)
+    _initialize_fixture_authority(project, runtime, provider="sqlite")
     turn = "turn-inline-envelope"
     guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
              "--agent-id", AGENT_ID, "--turn-instance-id", turn,
              )
-    rc, first = _run_cli(registry, runtime, *guard)
-    assert rc == 0 and first["interaction_contract"]["cli_channel"]["selection_required"]
+    if discovery:
+        rc, first = _run_cli(registry, runtime, *guard)
+        assert rc == 0 and first["interaction_contract"]["cli_channel"]["selection_required"]
     rc, envelope = _run_cli(registry, runtime, *guard,
                             "--todo-id", SELECTED_REPLAN_TODO_ID, "--turn-envelope")
     assert rc == 0, envelope
@@ -403,5 +428,85 @@ def test_first_inline_result_has_matching_turn_envelope(tmp_path):
     binding = envelope["writeback"]["replan_settlement_contract"]["settlement_binding"]
     assert binding == {"kind": "todo", "id": SELECTED_REPLAN_TODO_ID, "cli_argument": "--todo-id"}
     assert envelope["writeback"]["spend_allowed_now"] is False
-    assert _heartbeat_receipt_count(runtime, turn) == 3
+    assert _heartbeat_receipt_count(runtime, turn) == (3 if discovery else 1)
+    assert _spend_run_count(runtime) == 0
+
+
+def test_first_reentry_does_not_overwrite_concurrently_created_receipt(tmp_path, monkeypatch, capsys):
+    from loopx.cli import main
+    from loopx.cli_commands import quota as quota_cli
+
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selected_todo_replan_fixture(project, registry)
+    _initialize_fixture_authority(project, runtime, provider="sqlite")
+    turn = "turn-first-selection-race"
+    guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+             "--agent-id", AGENT_ID, "--turn-instance-id", turn)
+    original = quota_cli.reconcile_requested_quota_action_selection
+
+    def concurrent_receipt(*args, **kwargs):
+        result = original(*args, **kwargs)
+        assert result.rejected and result.receipt is None
+        rc, competing = _run_cli(registry, runtime, *guard)
+        assert rc == 0 and competing["heartbeat_receipt"]["status"] == "committed"
+        return result
+
+    monkeypatch.setattr(quota_cli, "reconcile_requested_quota_action_selection", concurrent_receipt)
+    main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+          *guard, "--todo-id", SELECTED_REPLAN_TODO_ID])
+    result = json.loads(capsys.readouterr().out)
+    assert result["ok"] is False
+    assert "receipt appeared" in result["reason"]
+    assert _heartbeat_receipt_count(runtime, turn) == 1
+    assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_native_first_selection_publishes_only_final_bound_capture(tmp_path, monkeypatch, provider):
+    from loopx.control_plane.turn_driver.codex_context import codex_context_hook
+
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selected_todo_replan_fixture(project, registry)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    turn = "turn-native-first-selection"
+    capture = tmp_path / "capture"
+    native = tmp_path / "native"
+    native.mkdir(mode=0o700)
+    monkeypatch.setenv("CODEX_THREAD_ID", "first-selection-session")
+    monkeypatch.delenv("CODEX_ROLLOUT_TRACE_ROOT", raising=False)
+    codex_context_hook(str(native), dict(session_id="first-selection-session", cwd=str(project),
+        hook_event_name="SessionStart", source="startup"))
+    rc, presented = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", turn,
+        "--todo-id", "todo_chain_000000000001", "--context-delivery", "on",
+        "--codex-context-dir", str(native), "--decision-output-dir", str(capture),
+        "--max-page-output-bytes", "4096")
+    assert rc == 0 and presented["ok"], presented
+    assert len(json.dumps(presented, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 4096
+    original = json.loads((capture / "decision.json").read_text())
+    assert original["ok"] and original["effective_action"] == "autonomous_replan_required"
+    assert original["heartbeat_receipt"]["status"] == "committed"
+    assert original["heartbeat_receipt"]["settlement_identity"]["binding_kind"] == "autonomous_replan"
+    assert original["heartbeat_receipt"]["pending_action_selection"]["todo_id"] == "todo_chain_000000000001"
+    assert not original["interaction_contract"]["cli_channel"].get("selection_required")
+    assert _heartbeat_receipt_count(runtime, turn) == 1
+    assert _spend_run_count(runtime) == 0
+    # The bounded reference reaches the original receipt without another
+    # admission. Reading a selected section does not certify the whole input.
+    from loopx.cli import build_parser
+    from loopx.cli_commands.quota_capture import read_context_capture
+    from loopx.control_plane.turn_driver.decision_capture import CONTEXT_CAPTURE_PAGE_GUIDANCE
+
+    reader = shlex.split(presented["recovery"]["command"])[1:]
+    first = read_context_capture(build_parser().parse_args(reader))
+    assert first["ok"] and first["offset"] == 0
+    assert first["read_instruction"] == CONTEXT_CAPTURE_PAGE_GUIDANCE
+    assert len(json.dumps(first, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 4096
+    args = build_parser().parse_args(reader
+        + ["--select", "/heartbeat_receipt"])
+    read = read_context_capture(args)
+    assert read["ok"] and read["eof"]
+    assert read["sha256"] == presented["recovery"]["sha256"]
+    assert json.loads(read["content"])["selections"][0]["value"] == original["heartbeat_receipt"]
+    assert _heartbeat_receipt_count(runtime, turn) == 1
     assert _spend_run_count(runtime) == 0

@@ -1,7 +1,8 @@
+import {AlertTriangle, Check, CircleHelp, Code2, RefreshCw, RotateCcw, ShieldCheck, Trash2} from "lucide-react";
+import {ContextHelp} from "./context-help";
 import { PerformanceDiagnosisPanel } from "./performance-diagnosis-panel";
 import { UsageStatisticsSettings } from "./usage-statistics-settings";
-import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Check, Code2, RefreshCw, RotateCcw, ShieldCheck, Trash2 } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import {
   applyMachineConfiguration,
@@ -110,7 +111,10 @@ function shortRevision(value: string | undefined) {
   return value.replace(/^sha256:/, "").slice(0, 12);
 }
 
-export function MachineConfigurationSettings({ section, onChanged }: { section: "steward" | "conversation" | "other"; onChanged?: () => void }) {
+export function MachineConfigurationSettings({ section, onChanged }: {
+  section: "steward" | "conversation" | "other";
+  onChanged?: () => void;
+}) {
   const { locale, t } = useWorkspaceI18n();
   const [inspection, setInspection] = useState<MachineConfigurationInspection | null>(null);
   const [selectedCapabilityId, setSelectedCapabilityId] = useState("");
@@ -121,9 +125,11 @@ export function MachineConfigurationSettings({ section, onChanged }: { section: 
   const [previewOperation, setPreviewOperation] = useState<"upsert" | "remove">("upsert");
   const [transaction, setTransaction] = useState<MachineConfigurationTransaction | null>(null);
   const [rollbackPlan, setRollbackPlan] = useState<MachineConfigurationRollbackPlan | null>(null);
-  const [busy, setBusy] = useState<"load" | "preview" | "apply" | "rollback-preview" | "rollback" | null>("load");
+  const [busy, setBusy] = useState<"load" | "readback" | "preview" | "apply" | "rollback-preview" | "rollback" | null>("load");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [readbackPending, setReadbackPending] = useState<string | null>(null);
+  const editorGeneration = useRef(0);
 
   const capabilities = useMemo(() => orderCapabilitiesForPresentation(
     (inspection?.capability_catalog.capabilities ?? []).filter((capability) =>
@@ -157,20 +163,37 @@ export function MachineConfigurationSettings({ section, onChanged }: { section: 
       : validGuidedDraft(selected, desiredConfiguration ?? {})),
   );
 
-  async function reload() {
-    setInspection(await fetchMachineConfiguration());
+  async function retryReadback() {
+    if (busy || !readbackPending) return;
+    const generation = editorGeneration.current;
+    setBusy("readback");
+    setError(null);
+    try {
+      const next = await fetchMachineConfiguration();
+      if (generation !== editorGeneration.current) return;
+      setInspection(next);
+      setReadbackPending(null);
+      setNotice(locale === "zh-CN" ? "已重新读取当前配置。" : "Current configuration reloaded.");
+      onChanged?.();
+    } catch (cause) {
+      if (generation === editorGeneration.current) setError(cause instanceof Error ? cause.message : t("machine.loadError"));
+    } finally {
+      if (generation === editorGeneration.current) setBusy(null);
+    }
   }
 
   async function retryLoad() {
     if (busy) return;
+    const generation = editorGeneration.current;
     setBusy("load");
     setError(null);
     try {
-      await reload();
+      const next = await fetchMachineConfiguration();
+      if (generation === editorGeneration.current) setInspection(next);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t("machine.loadError"));
+      if (generation === editorGeneration.current) setError(cause instanceof Error ? cause.message : t("machine.loadError"));
     } finally {
-      setBusy(null);
+      if (generation === editorGeneration.current) setBusy(null);
     }
   }
 
@@ -190,8 +213,9 @@ export function MachineConfigurationSettings({ section, onChanged }: { section: 
     return () => { active = false; };
   }, [t]);
 
-  useEffect(() => {
-    if (!selected) return;
+  useLayoutEffect(() => {
+    editorGeneration.current++;
+    if (!selected) return () => { editorGeneration.current++; };
     const current = currentConfiguration(inspection, selected);
     const editable = projectEditableCapabilityConfiguration(
       selected.configuration_editor,
@@ -206,9 +230,19 @@ export function MachineConfigurationSettings({ section, onChanged }: { section: 
     setPreview(null);
     setPreviewOperation("upsert");
     setRollbackPlan(null);
-  }, [inspection, selectedCapabilityId, locale]);
+    setBusy(null);
+    return () => { editorGeneration.current++; };
+  }, [inspection, selectedCapabilityId, locale, section]);
+
+  useLayoutEffect(() => {
+    // A transaction and its feedback belong to the capability that was edited.
+    setTransaction(null);
+    setError(null);
+    setNotice(null);
+  }, [selected?.capability_id]);
 
   function changeDraft(key: string, value: unknown) {
+    if (busy) return;
     setDraft((current) => selected?.capability_id === "periodic_report"
       ? withReportScheduleTimezone(current, key, value)
       : selected?.capability_id === "steward_executor"
@@ -220,7 +254,7 @@ export function MachineConfigurationSettings({ section, onChanged }: { section: 
   }
 
   function changeMode(mode: EditorMode) {
-    if (!selected) return;
+    if (!selected || busy) return;
     if (mode === "json") {
       setJsonDraft(JSON.stringify(
         completeMachineConfiguration(selected, selectedCurrent, draft),
@@ -242,95 +276,145 @@ export function MachineConfigurationSettings({ section, onChanged }: { section: 
     setPreview(null);
     setPreviewOperation("upsert");
     setError(null);
+    setNotice(null);
+  }
+
+  async function setContextDelivery(mode: "off" | "on", key: "mode" | "antigravity_mode" = "mode") {
+    if (busy || !editorAvailable || selected?.capability_id !== "context_delivery" || !selected.machine_namespace) return;
+    const namespace = selected.machine_namespace;
+    const configuration = {...selected.default, ...selectedCurrent, [key]: mode};
+    const generation = editorGeneration.current;
+    setBusy("apply"); setError(null); setNotice(null);
+    try {
+      const plan = await previewMachineConfiguration(namespace, configuration);
+      if (generation !== editorGeneration.current) return;
+      await applyMachineConfiguration(namespace, configuration, plan.plan_revision);
+      if (generation !== editorGeneration.current) { onChanged?.(); return; }
+      setReadbackPending(selected.display_name);
+      const next = await fetchMachineConfiguration();
+      if (generation !== editorGeneration.current) return;
+      setInspection(next);
+      setReadbackPending(null);
+      if (next.machine_configuration?.namespaces[namespace]?.[key] !== mode) {
+        throw new Error(locale === "zh-CN" ? "保存后的配置已变化，请刷新后重试。" : "The saved configuration changed. Refresh and retry.");
+      }
+      const targetLabel = key === "antigravity_mode" ? "Antigravity" : "Codex";
+      setNotice(locale === "zh-CN" ? `${targetLabel} 偏好已保存。` : `${targetLabel} preference saved.`);
+      onChanged?.();
+    } catch (cause) {
+      if (generation === editorGeneration.current) setError(cause instanceof Error ? cause.message : t("machine.applyError"));
+    } finally { if (generation === editorGeneration.current) setBusy(null); }
   }
 
   async function createPreview() {
     if (!editorAvailable || !selected?.machine_namespace || !desiredConfiguration || !editorValid || busy) return;
+    const generation = editorGeneration.current;
     setBusy("preview");
     setError(null);
     setNotice(null);
     try {
       setPreviewOperation("upsert");
-      setPreview(await previewMachineConfiguration(selected.machine_namespace, desiredConfiguration));
+      const next = await previewMachineConfiguration(selected.machine_namespace, desiredConfiguration);
+      if (generation === editorGeneration.current) setPreview(next);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t("machine.previewError"));
+      if (generation === editorGeneration.current) setError(cause instanceof Error ? cause.message : t("machine.previewError"));
     } finally {
-      setBusy(null);
+      if (generation === editorGeneration.current) setBusy(null);
     }
   }
 
   async function createRemovalPreview() {
     if (!editorAvailable || !selected?.machine_namespace || !configured || busy) return;
+    const generation = editorGeneration.current;
     setBusy("preview");
     setError(null);
     setNotice(null);
     try {
       setPreviewOperation("remove");
-      setPreview(await previewMachineConfigurationRemoval(selected.machine_namespace));
+      const next = await previewMachineConfigurationRemoval(selected.machine_namespace);
+      if (generation === editorGeneration.current) setPreview(next);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t("machine.previewError"));
+      if (generation === editorGeneration.current) setError(cause instanceof Error ? cause.message : t("machine.previewError"));
     } finally {
-      setBusy(null);
+      if (generation === editorGeneration.current) setBusy(null);
     }
   }
 
   async function applyPreview() {
     if (!editorAvailable || !selected?.machine_namespace || !preview || busy || (previewOperation === "upsert" && !desiredConfiguration)) return;
+    const generation = editorGeneration.current;
     setBusy("apply");
     setError(null);
+    setNotice(null);
     const operation = previewOperation;
     try {
       const result = operation === "remove"
         ? await applyMachineConfigurationRemoval(selected.machine_namespace, preview.plan_revision)
         : await applyMachineConfiguration(selected.machine_namespace, desiredConfiguration!, preview.plan_revision);
+      if (generation !== editorGeneration.current) { onChanged?.(); return; }
       setTransaction(result);
       setPreview(null);
       setPreviewOperation("upsert");
       setRollbackPlan(null);
-      await reload();
+      setReadbackPending(selected.display_name);
+      const next = await fetchMachineConfiguration();
+      if (generation !== editorGeneration.current) return;
+      setInspection(next);
+      setReadbackPending(null);
       setNotice(result.status === "applied"
         ? t(operation === "remove" ? "machine.removed" : "machine.applied")
         : t("machine.unchanged"));
       onChanged?.();
     } catch (cause) {
+      if (generation !== editorGeneration.current) return;
       setPreview(null);
       setPreviewOperation("upsert");
       setError(cause instanceof Error ? cause.message : t("machine.applyError"));
     } finally {
-      setBusy(null);
+      if (generation === editorGeneration.current) setBusy(null);
     }
   }
 
   async function previewRollback() {
     if (!transaction?.transaction_id || busy) return;
+    const generation = editorGeneration.current;
     setBusy("rollback-preview");
     setError(null);
     try {
-      setRollbackPlan(await previewMachineConfigurationRollback(transaction.transaction_id));
+      const next = await previewMachineConfigurationRollback(transaction.transaction_id);
+      if (generation === editorGeneration.current) setRollbackPlan(next);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t("machine.rollbackError"));
+      if (generation === editorGeneration.current) setError(cause instanceof Error ? cause.message : t("machine.rollbackError"));
     } finally {
-      setBusy(null);
+      if (generation === editorGeneration.current) setBusy(null);
     }
   }
 
   async function applyRollback() {
     if (!transaction?.transaction_id || !rollbackPlan || busy) return;
+    const generation = editorGeneration.current;
     setBusy("rollback");
     setError(null);
+    setNotice(null);
     try {
       await applyMachineConfigurationRollback(transaction.transaction_id, rollbackPlan.plan_revision);
+      if (generation !== editorGeneration.current) { onChanged?.(); return; }
       setTransaction(null);
       setRollbackPlan(null);
       setPreview(null);
-      await reload();
+      setReadbackPending(selected?.display_name ?? t("settings.scope.machine"));
+      const next = await fetchMachineConfiguration();
+      if (generation !== editorGeneration.current) return;
+      setInspection(next);
+      setReadbackPending(null);
       setNotice(t("machine.rolledBack"));
       onChanged?.();
     } catch (cause) {
+      if (generation !== editorGeneration.current) return;
       setRollbackPlan(null);
       setError(cause instanceof Error ? cause.message : t("machine.rollbackError"));
     } finally {
-      setBusy(null);
+      if (generation === editorGeneration.current) setBusy(null);
     }
   }
 
@@ -346,7 +430,7 @@ export function MachineConfigurationSettings({ section, onChanged }: { section: 
     </section></>;
   }
   if (!selected) {
-    return <>{diagnosis}<p className="personal-capability-empty">{t("machine.capabilityEmpty")}</p></>;
+    return <>{diagnosis}<ContextHelp label={locale === "zh-CN" ? "暂无本机能力" : "No device capabilities"} icon={CircleHelp}><p className="personal-capability-empty">{t("machine.capabilityEmpty")}</p></ContextHelp></>;
   }
 
   return (
@@ -364,6 +448,14 @@ export function MachineConfigurationSettings({ section, onChanged }: { section: 
           lives in one body element so the surface keeps exactly two grid rows
           however many notices the editor needs. */}
       <div className="personal-capability-body">
+        {readbackPending ? <section className="personal-capability-recovery" role="status">
+          <AlertTriangle aria-hidden size={18} />
+          <div><strong>{locale === "zh-CN" ? "配置已写入，读回尚未确认" : "Configuration written; readback unverified"}</strong>
+            <p>{readbackPending}</p></div>
+          <button disabled={Boolean(busy)} onClick={() => void retryReadback()} type="button">
+            <RefreshCw aria-hidden size={15} />{busy === "readback" ? t("common.loading") : t("capabilities.refreshSource")}
+          </button>
+        </section> : null}
         {inspection?.status === "invalid" ? (
           <section className="personal-machine-error" data-testid="machine-invalid-repair" role="alert">
             <strong>{t("machine.invalidStoredConfiguration")}</strong>
@@ -383,9 +475,9 @@ export function MachineConfigurationSettings({ section, onChanged }: { section: 
           {selected.capability_id === "goal_storage" ? (
             <section className="personal-capability-behavior-note">
               <ShieldCheck aria-hidden size={18} />
-              <div><strong>{locale === "zh-CN" ? "仅影响此后创建的 Goal" : "Future Goals only"}</strong><p>{locale === "zh-CN"
+              <div><strong>{locale === "zh-CN" ? "仅影响此后创建的 Goal" : "Future Goals only"}</strong><ContextHelp label={locale === "zh-CN" ? "创建策略与迁移" : "Creation policy and migration"}><p>{locale === "zh-CN"
                 ? "2.0 新建 Goal 必须启用 canonical 创建，并采用所选执行策略。旧的关闭设置不会自动改变；启用后再重试创建。已有 Goal 需备份、停止写入并导入；这里不迁移已有数据，也不授予工具权限。"
-                : "2.0 requires canonical creation with the selected execution policy. An older disabled setting is not changed automatically; enable it before retrying creation. Back up, stop writers and import existing Goals separately. This setting neither migrates existing data nor grants tool permissions."}</p></div>
+                : "2.0 requires canonical creation with the selected execution policy. An older disabled setting is not changed automatically; enable it before retrying creation. Back up, stop writers and import existing Goals separately. This setting neither migrates existing data nor grants tool permissions."}</p></ContextHelp></div>
             </section>
           ) : null}
 
@@ -419,23 +511,47 @@ export function MachineConfigurationSettings({ section, onChanged }: { section: 
           {selected.capability_id === "steward_executor" ? (
             <section className="personal-capability-behavior-note">
               <ShieldCheck aria-hidden size={18} />
-              <div><strong>{locale === "zh-CN" ? "管家模型与思考深度" : "Steward model and reasoning"}</strong><p>{locale === "zh-CN"
+              <div><strong>{locale === "zh-CN" ? "管家模型与思考深度" : "Steward model and reasoning"}</strong><ContextHelp label={locale === "zh-CN" ? "管家默认值的生效范围" : "Steward default scope"}><p>{locale === "zh-CN"
                 ? "这里设置本机管家新会话的默认模型和思考深度。已有会话可能继续使用原来的分配；配置成功不代表正在运行的会话已切换。"
-                : "Choose the model and reasoning effort for new steward sessions on this machine. Existing sessions may retain their earlier allocation; saving a default does not switch a running session."}</p></div>
+                : "Choose the model and reasoning effort for new steward sessions on this machine. Existing sessions may retain their earlier allocation; saving a default does not switch a running session."}</p></ContextHelp></div>
             </section>
           ) : null}
 
           {selected.capability_id === "pull_request_review" ? (
             <section className="personal-capability-behavior-note">
               <ShieldCheck aria-hidden size={18} />
-              <div><strong>{locale === "zh-CN" ? "只改变队列排序" : "Queue ordering only"}</strong><p>{locale === "zh-CN"
+              <div><strong>{locale === "zh-CN" ? "只改变队列排序" : "Queue ordering only"}</strong><ContextHelp label={locale === "zh-CN" ? "PR 队列顺序" : "PR queue order"}><p>{locale === "zh-CN"
                 ? "默认先审阅其他开发者的 PR；选择 owner-first 才会优先当前已认证审阅者自己的 PR。此配置不会发布 review、写 Todo、push 或 merge。"
-                : "The default reviews other developers' PRs first; choose owner-first only when the authenticated reviewer's own PRs should lead. This setting never posts a review, writes Todos, pushes, or merges."}</p></div>
+                : "The default reviews other developers' PRs first; choose owner-first only when the authenticated reviewer's own PRs should lead. This setting never posts a review, writes Todos, pushes, or merges."}</p></ContextHelp></div>
             </section>
           ) : null}
 
-          {editorAvailable ? <>{editorMode === "json" || !selected.configuration_editor.fields.some((field) => field.key === "enabled" && field.input_kind === "boolean") ? <div className="personal-capability-editor-mode">
-            <button onClick={() => changeMode(editorMode === "guided" ? "json" : "guided")} type="button">
+          {selected.capability_id === "context_delivery" ? <section aria-label={locale === "zh-CN" ? "使用差分上下文的应用" : "Applications using differential context"} className="personal-capability-field-summary">
+            <div className="personal-capability-fields"><label className="is-boolean">
+              <span>Codex</span>
+              <input aria-label={locale === "zh-CN" ? "在 Codex 中使用差分上下文" : "Use differential context in Codex"}
+                type="checkbox" role="switch" checked={(selectedCurrent?.mode ?? selected.default?.mode) === "on"} disabled={Boolean(busy) || !editorAvailable}
+                onChange={(event) => void setContextDelivery(event.target.checked ? "on" : "off", "mode")} />
+            </label><label className="is-boolean">
+              <span>Antigravity</span>
+              <input aria-label={locale === "zh-CN" ? "在 Antigravity 中渐进读取管家历史" : "Use progressive manager history in Antigravity"}
+                type="checkbox" role="switch" checked={(selectedCurrent?.antigravity_mode ?? selected.default?.antigravity_mode ?? "on") === "on"} disabled={Boolean(busy) || !editorAvailable}
+                onChange={(event) => void setContextDelivery(event.target.checked ? "on" : "off", "antigravity_mode")} />
+            </label></div>
+            <p role="status">{(selectedCurrent?.mode ?? selected.default?.mode) === "on"
+              ? selectedCurrent
+                ? locale === "zh-CN" ? "已开启；原生初始化与实际使用尚未验证。" : "On; native setup and use unverified."
+                : locale === "zh-CN" ? "默认开启；原生初始化与实际使用尚未验证。" : "Default on; native setup and use unverified."
+              : locale === "zh-CN" ? "Codex 已关闭。" : "Off for Codex."}</p>
+            <p role="status">{(selectedCurrent?.antigravity_mode ?? selected.default?.antigravity_mode ?? "on") === "on"
+              ? locale === "zh-CN" ? "Antigravity 管家历史渐进读取已开启。" : "Antigravity progressive manager history is on."
+              : locale === "zh-CN" ? "Antigravity 已关闭。" : "Off for Antigravity."}</p>
+            <ContextHelp label={locale === "zh-CN" ? "Codex 与 Antigravity 支持范围与生效条件" : "Codex and Antigravity support and activation requirements"}><p>{locale === "zh-CN"
+              ? "Codex（mode）与 Antigravity（antigravity_mode）独立控制：受支持的 POSIX Codex App／SSH 和 benchmark 心跳默认开启差分，已保存的关闭继续生效，benchmark trial 可单独显式关闭；强能力 Antigravity 管家默认开启私有快照的交付历史渐进读取，关闭时保持完整内联。其他应用和平台保留完整交付；显式开启遇到未知或冲突跑法会报错。保存偏好不代表当前会话已采用差分。宿主就绪且旧上下文完整时才使用差分，否则完整恢复；私有存储与会话隔离自动管理。"
+              : "Codex (mode) and Antigravity (antigravity_mode) are controlled independently: supported POSIX Codex App/SSH and benchmark heartbeats default on (saved off is preserved; benchmark trials can disable it independently), while trusted-owner Antigravity manager turns default on for progressive private-capture history reads and keep full inline input when off. Other applications and platforms retain full delivery. Explicit on rejects unknown or conflicting modes. Saving a preference does not establish current-session adoption. Delta needs a ready host and complete retained context; otherwise full context is restored. Private storage and session isolation are automatic."}</p></ContextHelp>
+          </section> : null}
+          {editorAvailable && selected.capability_id !== "context_delivery" ? <>{editorMode === "json" || !selected.configuration_editor.fields.some((field) => field.key === "enabled" && field.input_kind === "boolean") ? <div className="personal-capability-editor-mode">
+            <button disabled={Boolean(busy)} onClick={() => changeMode(editorMode === "guided" ? "json" : "guided")} type="button">
               <Code2 aria-hidden size={14} />{t(editorMode === "guided" ? "machine.editJson" : "machine.backToForm")}
             </button>
           </div> : null}
@@ -446,13 +562,13 @@ export function MachineConfigurationSettings({ section, onChanged }: { section: 
                 advancedKeys={selected.capability_id === "todo_replan_cadence" ? ["planning_horizon_goal"] : []}
                 omitKeys={selected.capability_id === "steward_executor" && draft.selection_policy !== "flexible" ? ["eligible_endpoints"] : []}
                 onChange={changeDraft} value={draft}
-                enabledAction={<button className="personal-capability-edit-json" onClick={() => changeMode("json")} type="button"><Code2 aria-hidden size={14} />{t("machine.editJson")}</button>} />
+                enabledAction={<button className="personal-capability-edit-json" disabled={Boolean(busy)} onClick={() => changeMode("json")} type="button"><Code2 aria-hidden size={14} />{t("machine.editJson")}</button>} />
               {!editorValid ? <p className="personal-machine-validation" role="alert">{t("machine.requiredFields")}</p> : null}
             </section>
           ) : (
             <label className="personal-capability-json-editor" htmlFor="machine-configuration-json">
               <span>{t("machine.jsonConfiguration")}</span>
-              <textarea aria-describedby="machine-configuration-json-help" disabled={Boolean(busy)} id="machine-configuration-json" onChange={(event) => { setJsonDraft(event.target.value); setPreview(null); setError(null); }} rows={12} spellCheck={false} value={jsonDraft} />
+              <textarea aria-describedby="machine-configuration-json-help" disabled={Boolean(busy)} id="machine-configuration-json" onChange={(event) => { setJsonDraft(event.target.value); setPreview(null); setError(null); setNotice(null); }} rows={12} spellCheck={false} value={jsonDraft} />
               <small id="machine-configuration-json-help">{t("machine.jsonConfigurationHelp")}</small>
               {!parsedJsonDraft ? <span className="personal-machine-validation" role="alert">{t("machine.jsonInvalid")}</span> : null}
             </label>
@@ -483,7 +599,7 @@ export function MachineConfigurationSettings({ section, onChanged }: { section: 
             </section>
           ) : null}
 
-          {editorAvailable ? <footer className="personal-capability-actions">
+          {editorAvailable && selected.capability_id !== "context_delivery" ? <footer className="personal-capability-actions">
             {configured ? <button className="is-danger" disabled={Boolean(busy)} onClick={() => void createRemovalPreview()} type="button"><Trash2 aria-hidden size={15} />{t("machine.previewRemoval")}</button> : null}
             <button disabled={Boolean(busy) || !editorValid} onClick={() => void createPreview()} type="button">{busy === "preview" ? t("common.loading") : t("machine.previewChanges")}</button>
             <button className="is-primary" disabled={Boolean(busy) || !preview} onClick={() => void applyPreview()} type="button">{busy === "apply" ? t("common.loading") : t("machine.applyPreview")}</button>

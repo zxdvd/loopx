@@ -169,6 +169,18 @@ def test_dsh_turn_plan_uses_the_headless_outer_controller_context() -> None:
     }
 
 
+def test_app_server_turn_retains_agent_session_and_names_its_actual_host() -> None:
+    payload = build_loopx_turn_plan(_envelope(), host="codex-app-server",
+        execution_mode="isolated-headless", session_scope="agent",
+        session_binding={"schema_version": LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION,
+            "goal_id": "fixture-goal", "agent_id": "codex-fixture"})
+    assert payload["ok"] and payload["session"]["action"] == "resume"
+    assert payload["host"]["kind"] == "codex-app-server"
+    assert payload["scheduler_execution_context"]["host_surface"] == "codex_app_server"
+    assert payload["scheduler_execution_context"]["scheduler_owner"] == "outer_controller"
+    assert payload["scheduler_execution_context"]["codex_app_applicability"] == "not_applicable"
+
+
 def _adaptive_envelope() -> dict[str, object]:
     envelope = _envelope()
     envelope["task_orchestration_contract"] = {
@@ -1280,8 +1292,42 @@ def test_turn_plan_keeps_todoless_replan_for_controller(effective_action: str) -
     assert payload["turn_envelope"] == envelope
 
 
+@pytest.mark.parametrize("hold", [None, "should_run", "must_attempt", "signature", "obligation", "business",
+                                  "missing_binding", "identity", "turn"])
+def test_signed_governance_can_run_while_normal_delivery_remains_withheld(hold):
+    from loopx.control_plane.quota.settlement import build_turn_scoped_cli_settlement_plan
+    obligation = "replan-" + "a" * 16
+    settlement = build_turn_scoped_cli_settlement_plan(goal_id="fixture-goal", agent_id="codex-fixture",
+        replan_obligation_id=obligation, turn_instance_id="fixture.replan", command_prefix="loopx",
+        scoped_cli_args="", lifecycle_actor_args="").as_dict()
+    decision = {"ok": True, "goal_id": "fixture-goal", "agent_id": "codex-fixture", "decision": "run",
+        "should_run": hold != "should_run", "effective_action": "normal_run" if hold == "business" else "autonomous_replan_required",
+        "replan_action_packet": {"schema_version": "replan_action_packet_v0", "decision": "replan_required", "obligation_id": obligation},
+        "interaction_contract": {"schema_version": "loopx_interaction_contract_v0", "mode": "autonomous_replan",
+            "user_channel": {"action_required": False, "notify": "DONT_NOTIFY"},
+            "agent_channel": {"must_attempt": hold != "must_attempt", "delivery_allowed": False, "quiet_noop_allowed": False},
+            "cli_channel": {"spend_after_validation": True, "settlement_plan": settlement}}}
+    if hold == "missing_binding":
+        del decision["interaction_contract"]["cli_channel"]["settlement_plan"]
+    if hold == "identity":
+        settlement["identity"]["agent_id"] = "different-agent"
+    envelope = build_turn_envelope(decision)
+    if hold == "signature":
+        envelope["action_signature"]["matches"] = False
+    if hold == "obligation":
+        envelope["replan_action_packet"]["obligation_id"] = "replan-" + "b" * 16
+    plan = build_loopx_turn_plan(envelope, host="codex-app-server", execution_mode="isolated-headless",
+        session_scope="agent", turn_instance_id="different-turn" if hold == "turn" else "fixture.replan")
+    assert plan["route"]["would_invoke_host"] is (hold is None)
+    assert plan["route"]["selected_todo"] is None
+    assert not any(plan["effects"].values())
+    if hold is None:
+        assert plan["route"]["kind"] == "replan_required"
+        assert plan["transaction"]["settlement_plan"]["identity"]["replan_obligation_id"] == obligation
+
+
 @pytest.mark.parametrize("invalid_signature", [False, True])
-def test_turn_plan_missing_todo_does_not_bypass_contract_errors(
+def test_turn_plan_without_todo_requires_signature_and_scoped_binding(
     invalid_signature: bool,
 ) -> None:
     envelope = _envelope(
@@ -1294,9 +1340,13 @@ def test_turn_plan_missing_todo_does_not_bypass_contract_errors(
         envelope, host="generic-cli", execution_mode="isolated-headless",
     )
 
-    assert payload["ok"] is False
-    assert payload["route"]["kind"] == "contract_error"
+    assert payload["ok"] is (not invalid_signature)
+    assert payload["route"]["kind"] == ("contract_error" if invalid_signature else "blocked")
     assert payload["route"]["would_invoke_host"] is False
+    assert payload["route"]["host_invocation_allowed"] is False
+    assert payload["session"]["action"] == "none"
+    assert payload["transaction"]["status"] == "not_applicable"
+    assert not any(payload["effects"].values())
 
 
 def test_turn_plan_preserves_safe_bypass_when_user_action_is_visible() -> None:
@@ -1590,13 +1640,16 @@ def test_quota_cli_codex_app_profile_is_explicit_and_applicable(
                 "loopx-turn-fixture",
                 "--agent-id",
                 "codex-fixture",
+                # Inspect the raw scheduler contract, independent of native presentation.
+                "--context-delivery",
+                "off",
                 *profile_args,
             ]
         )
 
     payload = json.loads(output.getvalue())
-    hint = payload["scheduler_hint"]
     assert exit_code == 0, payload
+    hint = payload["scheduler_hint"]
     assert "execution_context" not in hint
     assert "execution_phase" not in hint
     assert hint["codex_app"]["applicability"] == "applicable"
@@ -2631,9 +2684,9 @@ def test_promoted_turn_completion_replays_after_commit_before_journal_crash(
     assert resumed_exit_code == 0, json.dumps(resumed, indent=2)
     assert resumed["status"] == "committed"
     assert resumed["effects"]["host_invoked"] is False
-    assert committed_results[1]["status"] == "done"
-    assert committed_results[1]["provider_status"] == "replayed"
-    assert committed_results[1]["idempotent_replay"] is True
+    # The exact canonical completion is read back after the lost response.
+    # Reissuing completion would carry a lease already retired by its commit.
+    assert len(committed_results) == 1
     assert _turn_journal(runtime)["writeback"]["completion"] == {
         "todo_id": "todo_fixture0001",
         "continuation": "active_goal",

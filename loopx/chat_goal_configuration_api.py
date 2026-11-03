@@ -115,9 +115,13 @@ def _explore_harness_options(config: Mapping[str, Any]) -> dict[str, Any]:
         raise TypeError("Explore composition mode and scope must be strings")
     if "mode" in config and "enabled" in config:
         raise ValueError("Use Explore mode or the legacy enabled flag, not both")
+    mode_options: dict[str, Any] = {}
+    if "mode" in config:
+        mode_options["explore_mode"] = config["mode"]
+    elif "enabled" in config:
+        mode_options["explore_harness_enabled"] = _boolean_configuration("explore_harness", config, "enabled")
     return {
-        **({"explore_mode": config["mode"]} if "mode" in config else {
-            "explore_harness_enabled": _boolean_configuration("explore_harness", config, "enabled")}),
+        **mode_options,
         "explore_harness_profile": profile,
         "clear_explore_harness_profile": profile is None,
         "explore_composition_mode": composition_mode or "disabled",
@@ -190,6 +194,8 @@ def _goal_capability_options(
     """Translate one validated UI contract into configure-goal options."""
 
     if configuration is None:
+        if capability_id == "explore_harness":
+            return {"clear_explore_configuration": True}
         if capability_id == "goal_capability_organization":
             return {"clear_capability_improvement_configuration": True}
         if capability_id == "periodic_report":
@@ -226,7 +232,7 @@ def _goal_capability_options(
         "local_authority_shadow": {"enabled"},
         "coordination_runtime_shadow": {"enabled"},
         "lark_kanban_heartbeat_sync": {"enabled"},
-        "periodic_report": {"enabled", "profile_preset", "route_ref", "timezone", "schedule"},
+        "periodic_report": {"enabled", "profile_preset", "route_ref", "timezone", "schedule", "task"},
         "reward_memory": {"config_path", "enabled_agents", "agent_id", "enabled"},
     }
     if capability_id not in allowed:
@@ -266,7 +272,9 @@ def _goal_capability_options(
         return {option: cadence["count"], **horizon, **({"execution_stride_strategy": cadence["stride_strategy"]}
             if "stride_strategy" in cadence else {})}
     if capability_id == "periodic_report":
-        return {"periodic_report_configuration": config}
+        from .capabilities.periodic_report.goal_configuration import normalize_configuration
+        # Validate the payload before the Session guard reads native sources.
+        return {"periodic_report_configuration": normalize_configuration(config)}
     if capability_id == "reward_memory":
         config_path = config.get("config_path")
         if config_path is not None and not isinstance(config_path, str):
@@ -617,6 +625,7 @@ class GoalConfigurationRequestMixin:
         desired_public: Mapping[str, Any],
         goal_id: str,
         plan: Mapping[str, Any],
+        after_verified_apply: Callable[[], None] | None = None,
     ) -> None:
         try:
             readback_public = self._read_public_goal_configuration(goal_id)
@@ -625,25 +634,27 @@ class GoalConfigurationRequestMixin:
                 capability_id, readback_configuration, desired_configuration, applied
             )
         except Exception:
-            if capability_id != "reward_memory" or not applied.get("written"):
+            if not applied.get("written"):
                 raise
             self._send_partial_write_receipt(
-                applied={**applied, "error": "Memory configuration was written, but current readback is unavailable.",
+                applied={**applied, "error": "Configuration was written, but current readback is unavailable.",
                     "recommended_action": "Reload the current Goal configuration before previewing another change."},
                 capability_id=capability_id, desired_configuration=desired_configuration,
                 desired_public=desired_public, goal_id=goal_id, plan=plan,
             )
             return
         if not readback_verified:
-            if capability_id == "reward_memory" and applied.get("written"):
+            if applied.get("written"):
                 self._send_partial_write_receipt(
-                    applied={**applied, "error": "Configuration was written, but the memory binding readback did not verify.",
-                        "recommended_action": "Reload the current Goal configuration and inspect the binding before previewing another change."},
+                    applied={**applied, "error": "Configuration was written, but current readback did not verify.",
+                        "recommended_action": "Reload the current Goal configuration before previewing another change."},
                     capability_id=capability_id, desired_configuration=desired_configuration,
                     desired_public=desired_public, goal_id=goal_id, plan=plan,
                 )
                 return
             raise RuntimeError("Goal configuration readback did not verify")
+        if after_verified_apply is not None:
+            after_verified_apply()
         self._send_json(
             {
                 "ok": True,
@@ -669,60 +680,67 @@ class GoalConfigurationRequestMixin:
             )
             options = _goal_capability_options(capability_id, configuration)
             machine_namespaces = self._goal_configuration_machine_namespaces()
-            current_public, desired_public, plan, desired_configuration = (
-                self._prepare_goal_configuration_plan(
-                    goal_id=goal_id,
-                    capability_id=capability_id,
-                    machine_namespaces=machine_namespaces,
-                    options=options,
+            from contextlib import nullcontext
+            from .capabilities.native_chat.steward_reports import session_report_configuration_guard
+            controller = getattr(self.server, "runtime_controller", None)
+            guard = (session_report_configuration_guard(controller, goal_id, configuration)
+                if capability_id == "periodic_report" and controller is not None else nullcontext())
+            with guard as after_verified_apply:
+                current_public, desired_public, plan, desired_configuration = (
+                    self._prepare_goal_configuration_plan(
+                        goal_id=goal_id,
+                        capability_id=capability_id,
+                        machine_namespaces=machine_namespaces,
+                        options=options,
+                    )
                 )
-            )
-            if not execute:
-                plan["capability_catalog"] = desired_public["capability_catalog"]
-                self._send_json(plan, status=201)
-                return
-            require_expected_configuration_plan_revision(
-                expected_plan_revision=expected_revision,
-                actual_plan_revision=str(plan["plan_revision"]),
-                subject="Goal configuration",
-            )
-            applied = self._goal_configuration_writer()(
-                registry_path=self.server.registry_path,
-                goal_id=goal_id,
-                runtime_root_override=getattr(
-                    self.server, "runtime_root_override", None
-                ),
-                execute=True,
-                expected_goal_configuration_revision=current_public["revision"],
-                codex_home_override=getattr(
-                    getattr(self.server, "runtime_controller", None),
-                    "codex_home",
-                    None,
-                ),
-                codex_host_capacity_planner=plan_codex_subagent_capacity,
-                codex_host_capacity_applier=apply_codex_subagent_capacity,
-                **options,
-            )
-            if not applied.get("ok"):
-                if not (applied.get("written") and applied.get("partial_write")):
-                    raise RuntimeError("Goal configuration apply did not verify")
-                self._send_partial_write_receipt(
+                if not execute:
+                    plan["capability_catalog"] = desired_public["capability_catalog"]
+                    self._send_json(plan, status=201)
+                    return
+                require_expected_configuration_plan_revision(
+                    expected_plan_revision=expected_revision,
+                    actual_plan_revision=str(plan["plan_revision"]),
+                    subject="Goal configuration",
+                )
+                applied = self._goal_configuration_writer()(
+                    registry_path=self.server.registry_path,
+                    goal_id=goal_id,
+                    runtime_root_override=getattr(
+                        self.server, "runtime_root_override", None
+                    ),
+                    execute=True,
+                    expected_goal_configuration_revision=current_public["revision"],
+                    codex_home_override=getattr(
+                        getattr(self.server, "runtime_controller", None),
+                        "codex_home",
+                        None,
+                    ),
+                    codex_host_capacity_planner=plan_codex_subagent_capacity,
+                    codex_host_capacity_applier=apply_codex_subagent_capacity,
+                    **options,
+                )
+                if not applied.get("ok"):
+                    if not (applied.get("written") and applied.get("partial_write")):
+                        raise RuntimeError("Goal configuration apply did not verify")
+                    self._send_partial_write_receipt(
+                        applied=applied,
+                        capability_id=capability_id,
+                        desired_configuration=desired_configuration,
+                        desired_public=desired_public,
+                        goal_id=goal_id,
+                        plan=plan,
+                    )
+                    return
+                self._send_applied_goal_configuration(
                     applied=applied,
                     capability_id=capability_id,
                     desired_configuration=desired_configuration,
                     desired_public=desired_public,
                     goal_id=goal_id,
                     plan=plan,
+                    after_verified_apply=after_verified_apply,
                 )
-                return
-            self._send_applied_goal_configuration(
-                applied=applied,
-                capability_id=capability_id,
-                desired_configuration=desired_configuration,
-                desired_public=desired_public,
-                goal_id=goal_id,
-                plan=plan,
-            )
         except (TypeError, ValueError) as exc:
             stale = "preview again" in str(exc)
             self._send_error(

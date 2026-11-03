@@ -460,9 +460,11 @@ fn service_supervisor_reuses_matching_replaces_stale_and_rejects_foreign() {
             stale_executable.to_string_lossy().as_ref(),
             port,
         );
-        if confirmed {
+        if confirmed && !cfg!(target_os = "macos") {
             result.expect("replace a confirmed but unresponsive LoopX service");
         } else {
+            // On macOS even a matching Chat command needs Core's original
+            // manager and accepted-work proof. A fixture socket grants none.
             assert!(result.is_err());
             assert!(silent
                 .try_wait()
@@ -484,6 +486,123 @@ fn pending_service_label_names_one_service_and_the_concurrent_set() {
     assert_eq!(ServiceKind::pending_label(&[ServiceKind::Chat]), "chat");
     assert_eq!(ServiceKind::pending_label(&SERVICE_KINDS), "local");
     assert_eq!(ServiceKind::pending_label(&[]), "local");
+}
+
+#[test]
+fn chat_activation_receipts_preserve_busy_unknown_and_exit_status() {
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
+    #[cfg(windows)]
+    use std::os::windows::process::ExitStatusExt;
+    let output = |payload: serde_json::Value, succeeded| {
+        Some(std::process::Output {
+            status: std::process::ExitStatus::from_raw(if succeeded { 0 } else { 256 }),
+            stdout: serde_json::to_vec(&payload).unwrap(),
+            stderr: Vec::new(),
+        })
+    };
+    let good = serde_json::json!({"schema_version":"loopx_runtime_service_activation_v1",
+        "service":"chat","ok":true,"status":"restart_requested","readiness_verified":false});
+    assert!(managed_chat_activation_result(output(good.clone(), true)).is_ok());
+    assert!(managed_chat_activation_result(output(good.clone(), false)).is_err());
+    for (reason, expected) in [
+        ("chat_work_pending", "chat_work_pending"),
+        ("chat_state_unverified", "chat_state_unverified"),
+        ("private diagnostic", "chat_state_unverified"),
+    ] {
+        let receipt = serde_json::json!({"schema_version":"loopx_runtime_service_activation_v1",
+            "service":"chat","ok":false,"status":"deferred","reason":reason});
+        assert_eq!(
+            managed_chat_activation_result(output(receipt, false))
+                .unwrap_err()
+                .to_string(),
+            expected
+        );
+    }
+    for (key, value) in [
+        ("schema_version", "unknown"),
+        ("service", "status"),
+        ("status", "unknown"),
+    ] {
+        let mut receipt = good.clone();
+        receipt[key] = value.into();
+        assert_eq!(
+            managed_chat_activation_result(output(receipt, true))
+                .unwrap_err()
+                .to_string(),
+            "chat_service_unverified"
+        );
+    }
+    assert!(managed_chat_activation_result(None).is_err());
+}
+
+#[test]
+fn chat_readiness_retains_identity_and_state_checks() {
+    let identity = serde_json::json!({"source_revision":"current"});
+    let ready = serde_json::json!({"ok":true,"schema_version":"loopx_chat_readiness_v1",
+        "state":"ready","runtime_identity":identity});
+    let response = |body: &serde_json::Value| format!("HTTP/1.1 200 OK\r\n\r\n{body}");
+    assert_eq!(
+        classify_response(ServiceKind::Chat, &response(&ready), Some(&identity)),
+        Probe::Matching
+    );
+    assert_eq!(
+        classify_response(
+            ServiceKind::Chat,
+            &response(&ready),
+            Some(&serde_json::json!({"source_revision":"other"}))
+        ),
+        Probe::Stale
+    );
+    for state in [serde_json::Value::Null, "unknown".into(), false.into()] {
+        let mut invalid = ready.clone();
+        invalid["state"] = state;
+        assert_eq!(
+            classify_response(ServiceKind::Chat, &response(&invalid), Some(&identity)),
+            Probe::Foreign
+        );
+    }
+}
+
+#[test]
+fn legacy_chat_readiness_uses_the_original_capabilities_fallback() {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let identity = serde_json::json!({"source_revision":"current"});
+    let expected = identity.clone();
+    let responder = thread::spawn(move || {
+        for path in ["/api/chat/readiness", "/api/chat/capabilities"] {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut bytes = Vec::new();
+            while !bytes.ends_with(b"\r\n\r\n") {
+                let mut buffer = [0; 512];
+                let read = stream.read(&mut buffer).unwrap();
+                assert!(read > 0);
+                bytes.extend_from_slice(&buffer[..read]);
+            }
+            assert!(String::from_utf8(bytes)
+                .unwrap()
+                .starts_with(&format!("GET {path} HTTP/1.1")));
+            let response = if path.ends_with("readiness") {
+                "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into()
+            } else {
+                let body = serde_json::json!({"ok":true,"schema_version":"loopx_chat_capabilities_v1","runtime_identity":identity}).to_string();
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+            };
+            stream.write_all(response.as_bytes()).unwrap();
+        }
+    });
+    assert_eq!(
+        probe_on_port(ServiceKind::Chat, port, Some(&expected)),
+        Probe::Matching
+    );
+    responder.join().unwrap();
 }
 
 #[test]
@@ -670,7 +789,7 @@ fn exit_private_service(root: &Path, kind: ServiceKind, services: &mut ServiceSe
 
 #[cfg(unix)]
 #[test]
-fn exited_private_children_recover_individually_with_the_frozen_identity() {
+fn exited_owned_children_recover_individually_with_the_frozen_identity() {
     let _fixture = PRIVATE_RECOVERY_FIXTURE.lock().unwrap();
     let (root, runtime, endpoints) = private_recovery_fixture();
     let mut services = ServiceSet::start(&runtime, &endpoints, |_| {}).unwrap();
@@ -689,10 +808,12 @@ fn exited_private_children_recover_individually_with_the_frozen_identity() {
         services.last_recovery_attempt = None;
         let mut development = endpoints;
         development.isolated = false;
-        assert!(!services
+        // Ownership, rather than private/shared mode, authorizes recovery.
+        // Keep ephemeral fixture ports so this cannot touch machine services.
+        assert!(services
             .recover_exited(&development, Instant::now())
             .unwrap());
-        assert!(services.recover_exited(&endpoints, Instant::now()).unwrap());
+        assert!(!services.recover_exited(&endpoints, Instant::now()).unwrap());
         assert_ne!(
             services
                 .owned
@@ -836,4 +957,30 @@ fn private_recovery_cannot_start_an_unowned_or_development_service() {
     assert!(!services
         .recover_exited(&ServiceEndpoints::allocate(false).unwrap(), Instant::now())
         .unwrap());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn declared_machine_source_remains_authoritative_while_unloaded() {
+    let root = tempfile::tempdir().unwrap();
+    assert!(!platform_managed_service_declared(
+        Some(root.path().as_os_str()),
+        ServiceKind::Chat
+    ));
+    let launch_agents = root.path().join("Library/LaunchAgents");
+    fs::create_dir_all(&launch_agents).unwrap();
+    // Even a damaged declaration must not admit a different empty Chat store.
+    fs::write(
+        launch_agents.join("com.loopx.chat.plist"),
+        b"damaged declaration",
+    )
+    .unwrap();
+    assert!(platform_managed_service_declared(
+        Some(root.path().as_os_str()),
+        ServiceKind::Chat
+    ));
+    assert!(!platform_managed_service_declared(
+        Some(root.path().as_os_str()),
+        ServiceKind::Status
+    ));
 }

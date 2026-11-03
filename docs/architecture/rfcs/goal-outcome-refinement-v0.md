@@ -127,6 +127,17 @@ cannot acknowledge a later revision. Old configured verification becomes stale
 against a changed objective. A successor lifetime cannot inherit its
 predecessor's objective implicitly.
 
+`goal-acceptance inspect` and the Goal settings acceptance read include current
+Agent registration from the resolved source registry. The existing TS objective
+projector joins those observations with the retained revision cohort and adoption
+records. A later registered peer appears pending before it adopts. Inspection
+does not persist registration or adoption, change the objective digest/provider
+revision, or authorize execution. Provider-only reads without current registration
+facts retain their historical projection.
+Registered `@` aliases use the same pending/adopted lifecycle. Once an objective
+record contains such an alias, a code rollback must retain a compatible ID reader;
+do not delete revision or adoption history to make an older reader accept it.
+
 Revisions are exceptional direction changes, not per-Turn maintenance. Ordinary
 progress, Todo/route changes, diagnostic feedback and wording polish do not
 justify a new shared objective. Agents reuse a pending proposal for the same
@@ -284,6 +295,19 @@ native `refine_outcome` call. Unchanged work needs no extra call, round trip or
 review record. This is sequential composition: refinement commits before the
 normal writeback. If writeback fails, its returned refinement receipt identifies
 what committed; retry the identical operation rather than assuming rollback.
+
+An enabled due Stride review also binds the delivered context, including these
+outcome facts. For a changed milestone, refine first, re-enter the same Turn's
+guard, read its current facts and author the complete decision before ordinary
+writeback. Do not silently rebind a stale decision. Batched dry-run now uses the
+acceptance owner's prospective contract, so it detects the same basis mismatch
+as execution without committing a refinement, run or spend. Execution retains
+its sequential contract and partial-effect receipt; recover an already applied
+refinement by its original operation, then reassess against fresh context.
+Ordinary batching, unchanged work and the exact-context gate remain unchanged.
+Real File/SQLite CLI cases cover preview, stale refusal, fresh-context recovery,
+retained requirements and single-debit replay. This is source qualification,
+not installed adoption, general atomicity or a model-efficiency claim.
 
 | Event | Default action | Existing mechanism |
 | --- | --- | --- |

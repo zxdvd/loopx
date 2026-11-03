@@ -1,34 +1,28 @@
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 from collections.abc import Callable, Mapping
+from importlib import import_module
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
-from .quota_capture import bind_capture_selection_transport, capture_decision, handoff_decision, prepare_decision_capture
+from .quota_presentation import (
+    _project_quota_cli_payload as _project_quota_cli_payload,
+    _quota_renderer as _quota_renderer,
+)
+from .quota_capture import (
+    bind_capture_selection_transport, budgeted_settlement_result, capture_decision, handoff_decision,
+    handle_native_context_command, handle_replan_view, prepare_quota_capture, native_context_capture_view,
+    native_context_activation, model_context_reference,
+)
+from ..control_plane.turn_driver.decision_capture import (
+    project_captured_context,
+)
 from ..usage_goal import observe_quota_result
 
-from ..capabilities.explore.composition_frontier import (
-    project_live_explore_composition_frontier,
-)
-from ..capabilities.periodic_report.pending_intent import (
-    periodic_report_pending_intent_interaction_hook,
-)
-from ..capabilities.repository_change_window import (
-    repository_delivery_interaction_hook,
-)
-from ..control_plane.effect_runtime import EffectRuntimeRejected
-from ..control_plane.capability_hooks import InteractionProjectionHookRegistration
-from ..control_plane.goals.first_party_host_admission import (
-    capture_first_party_host_goal_ref,
-)
-from ..control_plane.goals.source_session_registry_state import exact_goal_ref
-from ..control_plane.quota.cli_projection import (
-    compact_quota_monitor_poll_cli_payload,
-    compact_quota_plan_cli_payload,
-    compact_quota_should_run_cli_payload,
-)
-from ..control_plane.quota.effective_action import EffectiveAction
+from ..control_plane.coordination.local_authority import CanonicalAuthorityRequired
 from ..control_plane.quota.effect_program import SettlementIdentity
 from ..control_plane.quota.error_codes import (
     CloseoutQueryUnavailableError,
@@ -42,63 +36,6 @@ from ..control_plane.quota.heartbeat_receipt import (
     find_heartbeat_receipt,
     heartbeat_receipt_view,
 )
-from ..control_plane.quota.live_decision import build_live_quota_should_run_decision
-from ..control_plane.quota.monitor_poll import find_quota_monitor_poll_turn
-from ..control_plane.quota.settlement_cli import (
-    attach_spend_settlement_result,
-    quota_rollout_details,
-    quota_rollout_replan_obligation_id,
-    quota_rollout_todo_id,
-    reconcile_existing_heartbeat_receipt_for_turn,
-    render_existing_heartbeat_receipt_payload,
-)
-from ..control_plane.quota.turn_envelope import build_turn_envelope
-from ..presentation.renderers.quota_event_markdown import (
-    render_quota_monitor_poll_markdown,
-    render_quota_slot_preview_markdown,
-)
-from ..presentation.renderers.quota_markdown import (
-    render_quota_markdown,
-    render_quota_scheduler_ack_markdown,
-    render_quota_scheduler_failure_markdown,
-    render_quota_should_run_markdown,
-)
-from ..presentation.renderers.turn_envelope_markdown import (
-    render_turn_envelope_markdown,
-)
-from ..quota import (
-    build_quota_plan,
-    record_quota_monitor_poll,
-    spend_quota_slot,
-    void_quota_slot,
-)
-from ..status import collect_status
-from ..upgrade import resolve_codex_app_automation_rrule
-from .lark_inbox import (
-    build_lark_operator_inbox_urgency_projector,
-    dispatch_goal_lark_turn_start_hooks,
-)
-from .quota_action_selection import (
-    RequestedQuotaActionSelection,
-    commit_requested_action_selection,
-    load_requested_quota_action_selection,
-    inline_action_selection_reentry_args,
-    reconcile_requested_quota_action_selection,
-)
-from .quota_context import (
-    QuotaCommandContext,
-    prepare_quota_command_context,
-    validate_quota_command_context_request,
-)
-from .quota_failure_report import (
-    QUOTA_EVENT_KINDS,
-    quota_decision_transport_failure_payload,
-    quota_failure_payload,
-    quota_validation_failure_payload,
-    should_log_quota,
-)
-from .quota_host_poll import attach_host_poll_receipt
-from .quota_monitor_poll import record_quota_monitor_poll_for_cli
 from .quota_registration import (
     register_quota_command as register_quota_command,  # noqa: PLC0414
 )
@@ -106,7 +43,100 @@ from .quota_reward_memory import (
     attach_reward_memory_ingest_after_spend,
     attach_reward_memory_recall_after_should_run,
 )
-from .quota_scheduler_followup import build_scheduler_followup_payload
+
+if TYPE_CHECKING:
+    from .quota_action_selection import RequestedQuotaActionSelection
+    from .quota_context import QuotaCommandContext
+
+# Native context and replan-view routes return before any authority read, so
+# authority, decision, and capability owners load on first use. Call sites
+# resolve them through ``_export`` so module-level patches stay effective.
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    name: (module, name)
+    for module, names in {
+        "loopx.capabilities.explore.composition_frontier": (
+            "project_live_explore_composition_frontier",
+        ),
+        "loopx.capabilities.periodic_report.pending_intent": (
+            "periodic_report_pending_intent_interaction_hook",
+        ),
+        "loopx.capabilities.repository_change_window": (
+            "repository_delivery_interaction_hook",
+        ),
+        "loopx.control_plane.quota.live_decision": (
+            "build_live_quota_should_run_decision",
+        ),
+        "loopx.control_plane.quota.monitor_poll": ("find_quota_monitor_poll_turn",),
+        "loopx.control_plane.quota.settlement_cli": (
+            "attach_spend_settlement_result",
+            "quota_rollout_details",
+            "quota_rollout_replan_obligation_id",
+            "quota_rollout_todo_id",
+            "reconcile_existing_heartbeat_receipt_for_turn",
+            "render_existing_heartbeat_receipt_payload",
+        ),
+        "loopx.quota": (
+            "build_quota_plan",
+            "record_quota_monitor_poll",
+            "spend_quota_slot",
+            "void_quota_slot",
+        ),
+        "loopx.status": ("collect_status",),
+        "loopx.upgrade": ("resolve_codex_app_automation_rrule",),
+        "loopx.cli_commands.lark_inbox": (
+            "build_lark_operator_inbox_urgency_projector",
+        ),
+        "loopx.cli_commands.quota_action_selection": (
+            "commit_requested_action_selection",
+            "load_requested_quota_action_selection",
+            "inline_action_selection_reentry_args",
+            "reconcile_requested_quota_action_selection",
+        ),
+        "loopx.cli_commands.quota_context": (
+            "prepare_quota_command_context",
+            "validate_quota_command_context_request",
+        ),
+        "loopx.cli_commands.quota_failure_report": (
+            "QUOTA_EVENT_KINDS",
+            "captured_quota_failure_view",
+            "quota_decision_transport_failure_payload",
+            "quota_failure_payload",
+            "quota_validation_failure_payload",
+            "should_log_quota",
+        ),
+        "loopx.cli_commands.quota_host_poll": ("attach_host_poll_receipt",),
+        "loopx.cli_commands.quota_monitor_poll": (
+            "record_quota_monitor_poll_for_cli",
+            "recover_quota_monitor_poll_for_cli",
+        ),
+        "loopx.cli_commands.quota_scheduler_followup": (
+            "build_scheduler_followup_payload",
+        ),
+    }.items()
+    for name in names
+}
+_LAZY_EXPORTS["_record_automatic_heartbeat_stall"] = (
+    "loopx.cli_commands.quota_monitor_poll",
+    "record_automatic_heartbeat_stall",
+)
+
+
+def __getattr__(name: str) -> Any:
+    owner = _LAZY_EXPORTS.get(name)
+    if owner is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(owner[0]), owner[1])
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_LAZY_EXPORTS))
+
+
+def _export(name: str) -> Any:
+    return getattr(sys.modules[__name__], name)
+
 
 PrintPayload = Callable[
     [dict[str, object], str, Callable[[dict[str, object]], str]],
@@ -127,6 +157,8 @@ def _quota_goal_ref(
         getattr(args, "goal_instance_id", None) or ""
     ).strip()
     if goal_instance_id:
+        from ..control_plane.goals.source_session_registry_state import exact_goal_ref
+
         return exact_goal_ref(goal_id, goal_instance_id)
     if args.quota_command not in {
         "should-run",
@@ -138,6 +170,10 @@ def _quota_goal_ref(
         "void-slot",
     }:
         return None
+    from ..control_plane.goals.first_party_host_admission import (
+        capture_first_party_host_goal_ref,
+    )
+
     return capture_first_party_host_goal_ref(
         registry_path=registry_path,
         goal_id=goal_id,
@@ -171,122 +207,6 @@ def _effective_spend_turn_instance_id(
     return payload_turn_id
 
 
-def _quota_renderer(
-    args: argparse.Namespace,
-) -> Callable[[dict[str, object]], str]:
-    command = args.quota_command
-    if bool(getattr(args, "turn_envelope", False)):
-        return render_turn_envelope_markdown
-    return {
-        "should-run": render_quota_should_run_markdown,
-        "monitor-poll": render_quota_monitor_poll_markdown,
-        "scheduler-ack": render_quota_scheduler_ack_markdown,
-        "scheduler-ack-current": render_quota_scheduler_ack_markdown,
-        "scheduler-fail-current": render_quota_scheduler_failure_markdown,
-        "spend-slot": render_quota_slot_preview_markdown,
-        "void-slot": render_quota_slot_preview_markdown,
-    }.get(command, render_quota_markdown)
-
-
-def _record_automatic_heartbeat_stall(
-    payload: dict[str, object],
-    status_payload: dict[str, object],
-    args: argparse.Namespace,
-    *,
-    registry_path: Path,
-    runtime_root_arg: str | None,
-    context: QuotaCommandContext,
-    interaction_projection_hooks: tuple[InteractionProjectionHookRegistration, ...],
-    turn_start_hook_dispatch: Mapping[str, object] | None,
-    action_selection: RequestedQuotaActionSelection,
-    cache_metadata: object,
-    goal_ref: Mapping[str, object] | None,
-) -> tuple[dict[str, object], dict[str, object], object, str]:
-    """Commit and reproject the automatic no-spend heartbeat observation."""
-
-    turn_id = context.heartbeat_turn_id
-    if turn_id is None:
-        return payload, status_payload, cache_metadata, "not_applicable"
-    existing_stall = find_quota_monitor_poll_turn(
-        context.runtime_root,
-        goal_id=args.goal_id,
-        agent_id=args.agent_id,
-        turn_instance_id=turn_id,
-        goal_ref=goal_ref,
-    )
-    if (
-        payload.get("effective_action")
-        != EffectiveAction.MONITOR_QUIET_SKIP.value
-        and existing_stall is None
-    ):
-        return payload, status_payload, cache_metadata, "not_applicable"
-    poll = record_quota_monitor_poll(
-        status_payload,
-        goal_id=args.goal_id,
-        registry_path=registry_path,
-        execute=True,
-        source="heartbeat",
-        agent_id=args.agent_id,
-        available_capabilities=args.available_capabilities,
-        turn_instance_id=turn_id,
-        goal_ref=goal_ref,
-        scheduler_execution_context=context.scheduler_context,
-        operator_inbox_urgency_projector=context.operator_inbox_urgency_projector,
-        bounded_research_frontier_projector=project_live_explore_composition_frontier,
-    )
-    if not poll.get("ok"):
-        raise RuntimeError(
-            "heartbeat stall observation writeback failed: "
-            f"{poll.get('reason') or 'missing follow-up quota decision'}"
-        )
-    reloaded = collect_status(
-        registry_path=registry_path,
-        runtime_root_override=runtime_root_arg,
-        limit=context.status_limit,
-        goal_id=context.status_goal_id,
-        available_capabilities=args.available_capabilities,
-    )
-    rebuilt = build_live_quota_should_run_decision(
-        reloaded,
-        goal_id=args.goal_id,
-        agent_id=args.agent_id,
-        available_capabilities=args.available_capabilities,
-        include_scheduler_detail="scheduler" in context.detail_sections,
-        include_agent_todo_detail=(
-            "agent-todos" in context.detail_sections
-            and not bool(getattr(args, "turn_envelope", False))
-        ),
-        codex_app_current_rrule=args.app_automation_current_rrule,
-        registry_path=registry_path,
-        runtime_root=context.runtime_root,
-        host_observation_resolver=resolve_codex_app_automation_rrule,
-        scheduler_execution_context=context.scheduler_context,
-        operator_inbox_urgency_projector=context.operator_inbox_urgency_projector,
-        bounded_research_frontier_projector=project_live_explore_composition_frontier,
-        receipt_bound_todo_id=action_selection.receipt_bound_todo_id,
-        receipt_bound_replan_obligation_id=(
-            action_selection.receipt_bound_replan_obligation_id
-        ),
-        retained_action_selection_todo_id=(
-            action_selection.retained_todo_id_for_decision
-        ),
-        turn_instance_id=turn_id,
-        interaction_projection_hooks=interaction_projection_hooks,
-        turn_start_hook_dispatch=turn_start_hook_dispatch,
-        goal_ref=goal_ref,
-    )
-    rebuilt["heartbeat_stall_writeback"] = {
-        "turn_instance_id": turn_id,
-        "status": "replayed" if poll.get("replayed") else "appended",
-        "generated_at": poll.get("generated_at"),
-    }
-    return (
-        rebuilt,
-        reloaded,
-        None,
-        "replayed" if poll.get("replayed") else "appended",
-    )
-
 
 def _dispatch_quota_turn_start_hooks(
     args: argparse.Namespace,
@@ -294,9 +214,11 @@ def _dispatch_quota_turn_start_hooks(
     registry_path: Path,
     runtime_root_arg: str | None,
 ) -> tuple[dict[str, object] | None, bool]:
-    validate_quota_command_context_request(args)
+    _export("validate_quota_command_context_request")(args)
     if args.quota_command != "should-run":
         return None, False
+    from .lark_inbox import dispatch_goal_lark_turn_start_hooks
+
     dispatch = dispatch_goal_lark_turn_start_hooks(
         registry_path=registry_path,
         runtime_root_arg=runtime_root_arg,
@@ -364,13 +286,13 @@ def _prepare_quota_command_execution(
         registry_path=registry_path,
         runtime_root_arg=runtime_root_arg,
     )
-    context = prepare_quota_command_context(
+    context = _export("prepare_quota_command_context")(
         args,
         registry_path=registry_path,
         runtime_root_arg=runtime_root_arg,
-        status_collector=collect_status,
+        status_collector=_export("collect_status"),
         operator_inbox_urgency_projector_factory=(
-            build_lark_operator_inbox_urgency_projector
+            _export("build_lark_operator_inbox_urgency_projector")
         ),
         force_projection_refresh=turn_start_mutated,
     )
@@ -385,48 +307,6 @@ def _attach_turn_start_hook_dispatch(
         payload["turn_start_capability_hook_dispatch"] = {
             key: value for key, value in dispatch.items() if key != "contexts"
         }
-def _project_quota_cli_payload(
-    payload: dict[str, object],
-    args: argparse.Namespace,
-    detail_sections: frozenset[str],
-    scheduler_context: object,
-    *,
-    captured_decision_path: str | None = None,
-) -> dict[str, object]:
-    """Project already-decided facts; preserve typed failures on envelope rejection.
-
-    The envelope is an additive hot-path view over a decided payload. A typed
-    validation/failure payload has no interaction contract to project, so a
-    renderer rejection keeps the typed diagnostic itself (with the skip reason)
-    instead of masking it with a crash (issue #3687).
-    """
-    if not bool(getattr(args, "turn_envelope", False)):
-        if args.quota_command in {"status", "plan"}:
-            return compact_quota_plan_cli_payload(payload, detail_sections=detail_sections)
-        if args.quota_command == "should-run":
-            return compact_quota_should_run_cli_payload(
-                payload,
-                include_todo_summary_detail="agent-todos" in detail_sections,
-                include_user_todo_summary_detail="user-todos" in detail_sections,
-                include_goal_boundary_detail="goal-boundary" in detail_sections,
-                include_vision_detail="vision" in detail_sections,
-            )
-        if args.quota_command == "monitor-poll":
-            return compact_quota_monitor_poll_cli_payload(
-                payload, include_decision_detail="decisions" in detail_sections,
-            )
-        return payload
-    try:
-        return build_turn_envelope(
-            payload,
-            scheduler_execution_context=scheduler_context,
-            captured_decision_path=captured_decision_path,
-        )
-    except EffectRuntimeRejected as envelope_error:
-        degraded = dict(payload)
-        degraded["turn_envelope_skipped"] = str(envelope_error)[:200]
-        return degraded
-
 
 def _emit_quota_result(
     payload: dict[str, object],
@@ -443,12 +323,13 @@ def _emit_quota_result(
     """Capture the full decision before projecting and printing the CLI view."""
     # Compose optional capability guidance after recovery has chosen the plan,
     # before capture/compaction. The quota decision owner stays capability-neutral.
-    from ..capabilities.explore.turn_context import project_settlement_attachment
-
     cli = (payload.get("interaction_contract") or {}).get("cli_channel")
     if isinstance(cli, dict) and isinstance(cli.get("settlement_plan"), Mapping):
+        from ..capabilities.explore.turn_context import project_settlement_attachment
+
         cli["settlement_plan"] = project_settlement_attachment(
             cli["settlement_plan"], registry_path=registry_path,
+            runtime_root=context.runtime_root if context is not None else None,
         )
     if context is not None:
         observe_quota_result(
@@ -456,20 +337,71 @@ def _emit_quota_result(
             turn_id=_effective_spend_turn_instance_id(payload, heartbeat_turn_id=heartbeat_turn_id),
             started_at=usage_quota_started,
         )
+    if (args.quota_command == "spend-slot" and args.format == "json" and context is not None
+            and getattr(args, "max_page_output_bytes", None) is not None):
+        try:
+            view = budgeted_settlement_result(payload, runtime_root=context.runtime_root,
+                output_bytes=args.max_page_output_bytes)
+        except QuotaDecisionTransportError as exc:
+            # Transport failure cannot replace an already evaluated refusal or
+            # committed receipt. Preserve unknown controls as well as identity;
+            # only the bulky diagnostic snapshots are omitted on this fallback.
+            view = {key: value for key, value in payload.items() if key not in ("before", "after")}
+            view["result_delivery_error"] = {"error_code": exc.error_code, "reason": str(exc),
+                "recommended_action": "Preserve the original result controls and Turn identity. "
+                    "Repair capture privacy or remove --max-page-output-bytes and read back the "
+                    "same operation; do not repeat admission or assume it did not commit.",
+                "omitted_diagnostics": [key for key in ("before", "after") if key in payload]}
+            print_payload(view, args.format, _quota_renderer(args, failure=True))
+            return 1
+        print_payload(view, args.format, _quota_renderer(args, failure=payload.get("ok") is not True))
+        return 0 if payload.get("ok") is True else 1
+    try:
+        context_delivery_enabled = native_context_activation(args)["enabled"]
+    except QuotaCommandValidationError:
+        if payload.get("ok") is True:
+            raise
+        # Preserve the original validation error when activation itself failed.
+        context_delivery_enabled = False
     bind_capture_selection_transport(payload, args)
+    delivery_request = None
+    decision_identity = ("", "")
+    if capture_directory is not None and payload.get("replan_action_packet"):
+        from ..command_invocation import current_loopx_cli_argv
+
+        payload = {**payload, "replan_read_path": str(capture_directory / "decision.json"),
+            "replan_read_argv": current_loopx_cli_argv()}
+    if args.quota_command == "should-run" and context is not None:
+        # Capture the one liveness observation with the decision that produced
+        # it. Presentation and evidence recovery must not record it again.
+        _export("attach_host_poll_receipt")(
+            context.status_payload, args, payload, registry_path=registry_path,
+        )
     try:
         capture_decision(capture_directory, payload)
+        if (payload.get("ok") is False and context_delivery_enabled and capture_directory
+                and args.format == "json" and not getattr(args, "defer_context_presentation", False)):
+            print_payload(_export("captured_quota_failure_view")(payload, capture_directory=capture_directory,
+                max_page_output_bytes=getattr(args, "max_page_output_bytes", None)),
+                args.format, _quota_renderer(args, failure=True))
+            return 1
         if payload.get("ok") is True:
-            handoff_decision(capture_directory, getattr(args, "decision_handoff_socket", None))
+            delivery_request = handoff_decision(capture_directory, getattr(args, "decision_handoff_socket", None), context_delivery_enabled)
     except QuotaDecisionTransportError as exc:
         # The guard already ran. Report that typed fact with the durable receipt
         # and saved decision, never a new collection failure that could replace
         # the capture (an inline reentry runs inside the caller's guard).
-        failure = quota_decision_transport_failure_payload(
+        failure = _export("quota_decision_transport_failure_payload")(
             args, payload, exc, capture_directory=capture_directory,
         )
-        print_payload(failure, args.format, _quota_renderer(args))
+        print_payload(failure, args.format, _quota_renderer(args, failure=True))
         return 1
+    if (delivery_request is not None or getattr(args, "codex_context_dir", None)
+            or getattr(args, "codex_context_root", None)):
+        agent = payload.get("agent_identity")
+        decision_identity = (str(payload.get("goal_id") or ""),
+            str(agent.get("agent_id") or "") if isinstance(agent, Mapping) else str(args.agent_id or ""))
+    captured_payload = payload
     payload = _project_quota_cli_payload(
         payload, args, detail_sections,
         context.scheduler_context if context is not None else None,
@@ -477,15 +409,127 @@ def _emit_quota_result(
             str(capture_directory / "decision.json") if capture_directory is not None else None
         ),
     )
-    if args.quota_command == "should-run" and context is not None:
-        attach_host_poll_receipt(
-            context.status_payload,
-            args,
-            payload,
-            registry_path=registry_path,
+    if args.quota_command == "should-run" and "host_poll_receipt" in captured_payload:
+        # Legacy envelope presentation omits this source field. Preserve its
+        # existing visible receipt by copying the observation, not polling.
+        payload["host_poll_receipt"] = captured_payload["host_poll_receipt"]
+    succeeded = bool(payload.get("ok"))
+    # Handoff releases the immutable original before any presentation. Native
+    # actual-input observation owns its projection when explicitly selected;
+    # never wrap one context-delivery wire in a second projection.
+    native_context = context_delivery_enabled and bool(getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None))
+    deferred_context = getattr(args, "defer_context_presentation", False)
+    if (not deferred_context and args.format == "json" and succeeded and delivery_request is not None and not native_context
+            and context_delivery_enabled):
+        payload = project_captured_context(payload, directory=capture_directory,
+            request=delivery_request[0], capture_id=delivery_request[1],
+            goal_id=decision_identity[0], agent_id=decision_identity[1],
+            surface="turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet")
+    if (not deferred_context and args.format == "json" and succeeded and capture_directory
+            and native_context):
+        import hashlib
+        from ..control_plane.turn_driver.codex_context import (
+            NativeContextSessionUnavailable, codex_context_directory, project_codex_context,
         )
-    print_payload(payload, args.format, _quota_renderer(args))
-    return 0 if payload.get("ok") else 1
+
+        try:
+            capture_id = hashlib.sha256((capture_directory / "decision.json").read_bytes()).hexdigest()
+            try:
+                directory = codex_context_directory(directory=args.codex_context_dir,
+                    root=getattr(args, "codex_context_root", None), create=True)
+            except NativeContextSessionUnavailable:
+                # A declared host may not have initialized its native session.
+                # Deliver this complete capture without a session journal or
+                # baseline claim; do not repeat the already-committed guard.
+                directory = None
+            payload = project_codex_context(payload, directory=directory,
+                capture_directory=capture_directory, goal_id=decision_identity[0], agent_id=decision_identity[1],
+                surface="turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet",
+                capture_id=capture_id, continuity_generation=getattr(args, "_context_delivery_generation", None))
+            recovery = payload.get("recovery")
+            # Without a prepared native projection, the view adapter publishes
+            # this complete CLI view and its reader commands as current recovery.
+            # The original authority decision remains separately captured.
+            payload = native_context_capture_view(payload, capture_directory, context_directory=directory,
+                metadata={"capture_sha256": capture_id, **({"recovery": recovery} if recovery is not None else {})},
+                max_page_output_bytes=getattr(args, "max_page_output_bytes", None))
+            payload = model_context_reference(payload)
+        except (QuotaDecisionTransportError, OSError, ValueError) as exc:
+            if not isinstance(exc, QuotaDecisionTransportError):
+                exc = QuotaDecisionTransportError(
+                    "Current context recovery could not be prepared. Read the saved "
+                    "original decision and receipt; do not rerun admission."
+                )
+            # The original receipt survives even when the selected presentation
+            # is a Turn envelope without the quota packet's receipt fields.
+            failure = _export("quota_decision_transport_failure_payload")(
+                args, captured_payload, exc, capture_directory=capture_directory,
+            )
+            print_payload(failure, args.format, _quota_renderer(args, failure=True))
+            return 1
+    print_payload(payload, args.format, _quota_renderer(args, failure=not succeeded))
+    return 0 if succeeded else 1
+
+
+def _record_non_guard_quota_event(
+    payload: dict[str, Any], args: argparse.Namespace, *, registry_path: Path,
+    runtime_root_arg: str | None, context: QuotaCommandContext | None, goal_ref: dict[str, str] | None,
+    rollout_todo_id: str | None, rollout_replan_obligation_id: str | None,
+    spend_turn_instance_id: str | None, rollout_details: dict[str, Any],
+    append_cli_rollout_event: RolloutEventAppender,
+) -> None:
+    """Record the CLI event before settlement readback and optional memory ingest."""
+    append_cli_rollout_event(
+        payload,
+        registry_path=registry_path,
+        runtime_root_arg=runtime_root_arg,
+        event_kind=_export("QUOTA_EVENT_KINDS")[args.quota_command],
+        goal_ref=goal_ref,
+        agent_id=args.agent_id,
+        todo_id=rollout_todo_id,
+        run_id=(
+            spend_turn_instance_id
+            if args.quota_command == "spend-slot"
+            else None
+        ),
+        status=str(
+            payload.get("effective_action")
+            or payload.get("decision")
+            or payload.get("mode")
+            or args.quota_command
+        ),
+        summary=(
+            f"quota {args.quota_command} decision="
+            f"{payload.get('decision') or payload.get('mode')} "
+            f"state={payload.get('state') or ''}"
+        ),
+        details=rollout_details,
+        allow_failed=args.quota_command == "should-run",
+    )
+    if args.quota_command == "spend-slot" and spend_turn_instance_id:
+        assert context is not None  # A settlement requires a prepared authority context.
+        _export("attach_spend_settlement_result")(
+            payload,
+            runtime_root=context.runtime_root,
+            goal_id=args.goal_id,
+            agent_id=args.agent_id,
+            todo_id=rollout_todo_id,
+            turn_instance_id=spend_turn_instance_id,
+            replan_obligation_id=rollout_replan_obligation_id,
+            goal_ref=goal_ref,
+        )
+        attach_reward_memory_ingest_after_spend(
+            payload,
+            execute=bool(args.execute),
+            runtime_root=context.runtime_root,
+            registry_path=registry_path,
+            goal_id=args.goal_id,
+            agent_id=args.agent_id,
+            todo_id=rollout_todo_id,
+            turn_instance_id=spend_turn_instance_id,
+            replan_obligation_id=rollout_replan_obligation_id,
+            goal_ref=goal_ref,
+        )
 
 
 def handle_quota_command(
@@ -496,7 +540,14 @@ def handle_quota_command(
     print_payload: PrintPayload,
     append_cli_rollout_event: RolloutEventAppender,
     capture_directory: Path | None = None,
+    retained_action_selection_todo_id: str | None = None,
 ) -> int:
+    native_result = handle_native_context_command(args, print_payload=print_payload,
+        registry_path=registry_path, runtime_root_arg=runtime_root_arg)
+    if native_result is not None:
+        return native_result
+    if args.quota_command == "replan-view":
+        return handle_replan_view(args, print_payload)
     usage_quota_started = time.time_ns() // 1_000_000
     heartbeat_turn_id: str | None = None
     heartbeat_receipt_existing: dict[str, object] | None = None
@@ -511,13 +562,7 @@ def handle_quota_command(
     context: QuotaCommandContext | None = None
     goal_ref: dict[str, str] | None = None
     try:
-        if capture_directory is None and (
-            getattr(args, "decision_output_dir", None) is not None
-            or getattr(args, "decision_output_root", None) is not None
-            or getattr(args, "decision_handoff_socket", None) is not None
-        ):
-            validate_quota_command_context_request(args)
-            capture_directory = prepare_decision_capture(args)
+        capture_directory = prepare_quota_capture(args, capture_directory)
         goal_ref, turn_start_hook_dispatch, context = (
             _prepare_quota_command_execution(
                 args,
@@ -548,25 +593,27 @@ def handle_quota_command(
         )
         if args.quota_command == "should-run":
             interaction_projection_hooks = (
-                repository_delivery_interaction_hook(repo_path=Path.cwd()),
-                periodic_report_pending_intent_interaction_hook(
+                _export("repository_delivery_interaction_hook")(repo_path=Path.cwd()),
+                _export("periodic_report_pending_intent_interaction_hook")(
                     registry_path=registry_path,
                     runtime_root=runtime_root,
                     goal_id=args.goal_id,
                     agent_id=args.agent_id,
                 ),
             )
-            action_selection = load_requested_quota_action_selection(
+            action_selection = _export("load_requested_quota_action_selection")(
                 args,
                 runtime_root=runtime_root,
                 turn_instance_id=heartbeat_turn_id,
                 goal_ref=goal_ref,
+                retained_todo_id=retained_action_selection_todo_id,
             )
             heartbeat_receipt_existing = action_selection.receipt
-            payload = build_live_quota_should_run_decision(
+            payload = _export("build_live_quota_should_run_decision")(
                 status_payload,
                 goal_id=args.goal_id,
                 agent_id=args.agent_id,
+                inline_goal_source=native_context_activation(args)["enabled"],
                 available_capabilities=args.available_capabilities,
                 include_scheduler_detail="scheduler" in detail_sections,
                 include_agent_todo_detail=(
@@ -576,11 +623,11 @@ def handle_quota_command(
                 codex_app_current_rrule=args.app_automation_current_rrule,
                 registry_path=registry_path,
                 runtime_root=runtime_root,
-                host_observation_resolver=resolve_codex_app_automation_rrule,
+                host_observation_resolver=_export("resolve_codex_app_automation_rrule"),
                 scheduler_execution_context=scheduler_context,
                 operator_inbox_urgency_projector=operator_inbox_urgency_projector,
                 bounded_research_frontier_projector=(
-                    project_live_explore_composition_frontier
+                    _export("project_live_explore_composition_frontier")
                 ),
                 receipt_bound_todo_id=action_selection.receipt_bound_todo_id,
                 requested_action_todo_id=(
@@ -595,11 +642,15 @@ def handle_quota_command(
                 turn_instance_id=heartbeat_turn_id,
                 interaction_projection_hooks=interaction_projection_hooks,
                 turn_start_hook_dispatch=turn_start_hook_dispatch,
+                context_navigation=(
+                    native_context_activation(args)["enabled"]
+                    and not bool(getattr(args, "turn_envelope", False))
+                ),
                 goal_ref=goal_ref,
             )
             _attach_turn_start_hook_dispatch(payload, turn_start_hook_dispatch)
             action_selection_preflight = (
-                reconcile_requested_quota_action_selection(
+                _export("reconcile_requested_quota_action_selection")(
                     payload,
                     args,
                     registry_path=registry_path,
@@ -610,7 +661,7 @@ def handle_quota_command(
             )
             action_selection_preflight_failed = action_selection_preflight.rejected
             if action_selection_preflight.rejected:
-                reentry_args = inline_action_selection_reentry_args(
+                reentry_args = _export("inline_action_selection_reentry_args")(
                     payload, args, selection=action_selection,
                     preflight=action_selection_preflight,
                     turn_instance_id=heartbeat_turn_id,
@@ -623,6 +674,10 @@ def handle_quota_command(
                         print_payload=print_payload,
                         append_cli_rollout_event=append_cli_rollout_event,
                         capture_directory=capture_directory,
+                        retained_action_selection_todo_id=(
+                            action_selection.requested_todo_id
+                            if action_selection_preflight.receipt is None else None
+                        ),
                     )
                 heartbeat_receipt_existing = action_selection_preflight.receipt
                 heartbeat_receipt_existing_status = (
@@ -641,7 +696,7 @@ def handle_quota_command(
                         heartbeat_receipt_existing_appended,
                         heartbeat_stall_observation,
                         heartbeat_receipt_ready,
-                    ) = reconcile_existing_heartbeat_receipt_for_turn(
+                    ) = _export("reconcile_existing_heartbeat_receipt_for_turn")(
                         payload,
                         args,
                         runtime_root=runtime_root,
@@ -655,7 +710,7 @@ def handle_quota_command(
                         status_payload,
                         cache_metadata,
                         heartbeat_stall_observation,
-                    ) = _record_automatic_heartbeat_stall(
+                    ) = _export("_record_automatic_heartbeat_stall")(
                         payload,
                         status_payload,
                         args,
@@ -667,10 +722,15 @@ def handle_quota_command(
                         action_selection=action_selection,
                         cache_metadata=cache_metadata,
                         goal_ref=goal_ref,
+                        find_monitor_poll_turn=_export("find_quota_monitor_poll_turn"),
+                        monitor_poll_recorder=_export("record_quota_monitor_poll"),
+                        status_collector=_export("collect_status"),
+                        decision_builder=_export("build_live_quota_should_run_decision"),
+                        host_observation_resolver=_export("resolve_codex_app_automation_rrule"),
                     )
                     heartbeat_receipt_ready = True
         elif args.quota_command == "monitor-poll":
-            payload = record_quota_monitor_poll_for_cli(
+            payload = _export("record_quota_monitor_poll_for_cli")(
                 args,
                 status_payload=status_payload,
                 registry_path=registry_path,
@@ -679,13 +739,14 @@ def handle_quota_command(
                 scheduler_execution_context=scheduler_context,
                 operator_inbox_urgency_projector=operator_inbox_urgency_projector,
                 goal_ref=goal_ref,
-                monitor_poll_recorder=record_quota_monitor_poll,
-                status_reloader=lambda: collect_status(
+                monitor_poll_recorder=_export("record_quota_monitor_poll"),
+                status_reloader=lambda: _export("collect_status")(
                     registry_path=registry_path,
                     runtime_root_override=runtime_root_arg,
                     limit=status_limit,
                     goal_id=status_goal_id,
                     available_capabilities=args.available_capabilities,
+                    include_presentation_projections=False,
                 ),
             )
         elif args.quota_command in {
@@ -693,7 +754,7 @@ def handle_quota_command(
             "scheduler-ack-current",
             "scheduler-fail-current",
         }:
-            payload = build_scheduler_followup_payload(
+            payload = _export("build_scheduler_followup_payload")(
                 status_payload,
                 args,
                 registry_path=registry_path,
@@ -704,7 +765,7 @@ def handle_quota_command(
                 goal_ref=goal_ref,
             )
         elif args.quota_command == "spend-slot":
-            payload = spend_quota_slot(
+            payload = _export("spend_quota_slot")(
                 status_payload,
                 goal_id=args.goal_id,
                 slots=args.slots,
@@ -721,7 +782,7 @@ def handle_quota_command(
                 goal_ref=goal_ref,
             )
         elif args.quota_command == "void-slot":
-            payload = void_quota_slot(
+            payload = _export("void_quota_slot")(
                 status_payload,
                 goal_id=args.goal_id,
                 voided_run_generated_at=args.void_generated_at,
@@ -734,12 +795,17 @@ def handle_quota_command(
                 goal_ref=goal_ref,
             )
         else:
-            payload = build_quota_plan(status_payload, mode=args.quota_command)
+            payload = _export("build_quota_plan")(status_payload, mode=args.quota_command)
         if cache_metadata:
             payload["status_projection_cache"] = cache_metadata
+    except CanonicalAuthorityRequired as exc:
+        payload = _export("recover_quota_monitor_poll_for_cli")(
+            args, registry_path=registry_path, runtime_root_arg=runtime_root_arg,
+            error=exc, goal_ref_loader=lambda: _quota_goal_ref(args, registry_path=registry_path),
+        )
     except QuotaCommandValidationError as exc:
         # Only typed CLI validation diagnostics are public-safe by contract.
-        payload = quota_validation_failure_payload(
+        payload = _export("quota_validation_failure_payload")(
             args,
             exc,
             registry_path=registry_path,
@@ -751,20 +817,20 @@ def handle_quota_command(
         # guard and the identity diagnostic instead of calling it failed IO.
         if isinstance(exc, HeartbeatReceiptIdentityConflictError):
             action_selection_preflight_failed = True
-        payload = quota_failure_payload(
+        payload = _export("quota_failure_payload")(
             args,
             registry_path=registry_path,
             runtime_root_arg=runtime_root_arg,
             error=exc,
         )
-    if should_log_quota(args.quota_command, payload):
+    if _export("should_log_quota")(args.quota_command, payload):
         spend_turn_instance_id = _effective_spend_turn_instance_id(
             payload,
             heartbeat_turn_id=heartbeat_turn_id,
         )
-        rollout_todo_id = quota_rollout_todo_id(payload, args)
-        rollout_replan_obligation_id = quota_rollout_replan_obligation_id(payload, args)
-        rollout_details = quota_rollout_details(
+        rollout_todo_id = _export("quota_rollout_todo_id")(payload, args)
+        rollout_replan_obligation_id = _export("quota_rollout_replan_obligation_id")(payload, args)
+        rollout_details = _export("quota_rollout_details")(
             payload,
             args,
             todo_id=rollout_todo_id,
@@ -773,7 +839,7 @@ def handle_quota_command(
         if heartbeat_turn_id and args.quota_command == "should-run":
             if action_selection_preflight_failed or closeout_query_unavailable:
                 if heartbeat_receipt_existing:
-                    render_existing_heartbeat_receipt_payload(
+                    _export("render_existing_heartbeat_receipt_payload")(
                         payload,
                         receipt=heartbeat_receipt_existing,
                         turn_instance_id=heartbeat_turn_id,
@@ -798,14 +864,14 @@ def handle_quota_command(
                     ),
                 )
             elif heartbeat_receipt_existing:
-                render_existing_heartbeat_receipt_payload(
+                _export("render_existing_heartbeat_receipt_payload")(
                     payload,
                     receipt=heartbeat_receipt_existing,
                     turn_instance_id=heartbeat_turn_id,
                     status=heartbeat_receipt_existing_status,
                     appended=heartbeat_receipt_existing_appended,
                 )
-                commit_requested_action_selection(
+                _export("commit_requested_action_selection")(
                     payload,
                     requested_todo_id=(
                         action_selection.requested_todo_id
@@ -884,7 +950,7 @@ def handle_quota_command(
                         if rollout_event.get("appended")
                         else "replayed",
                     )
-                    commit_requested_action_selection(
+                    _export("commit_requested_action_selection")(
                         payload,
                         requested_todo_id=(
                             action_selection.requested_todo_id
@@ -903,56 +969,14 @@ def handle_quota_command(
                         ),
                     )
         else:
-            append_cli_rollout_event(
-                payload,
-                registry_path=registry_path,
-                runtime_root_arg=runtime_root_arg,
-                event_kind=QUOTA_EVENT_KINDS[args.quota_command],
-                goal_ref=goal_ref,
-                agent_id=args.agent_id,
-                todo_id=rollout_todo_id,
-                run_id=(
-                    spend_turn_instance_id
-                    if args.quota_command == "spend-slot"
-                    else None
-                ),
-                status=str(
-                    payload.get("effective_action")
-                    or payload.get("decision")
-                    or payload.get("mode")
-                    or args.quota_command
-                ),
-                summary=(
-                    f"quota {args.quota_command} decision="
-                    f"{payload.get('decision') or payload.get('mode')} "
-                    f"state={payload.get('state') or ''}"
-                ),
-                details=rollout_details,
-                allow_failed=args.quota_command == "should-run",
+            _record_non_guard_quota_event(
+                payload, args, registry_path=registry_path,
+                runtime_root_arg=runtime_root_arg, context=context, goal_ref=goal_ref,
+                rollout_todo_id=rollout_todo_id,
+                rollout_replan_obligation_id=rollout_replan_obligation_id,
+                spend_turn_instance_id=spend_turn_instance_id, rollout_details=rollout_details,
+                append_cli_rollout_event=append_cli_rollout_event,
             )
-            if args.quota_command == "spend-slot" and spend_turn_instance_id:
-                attach_spend_settlement_result(
-                    payload,
-                    runtime_root=runtime_root,
-                    goal_id=args.goal_id,
-                    agent_id=args.agent_id,
-                    todo_id=rollout_todo_id,
-                    turn_instance_id=spend_turn_instance_id,
-                    replan_obligation_id=rollout_replan_obligation_id,
-                    goal_ref=goal_ref,
-                )
-                attach_reward_memory_ingest_after_spend(
-                    payload,
-                    execute=bool(args.execute),
-                    runtime_root=runtime_root,
-                    registry_path=registry_path,
-                    goal_id=args.goal_id,
-                    agent_id=args.agent_id,
-                    todo_id=rollout_todo_id,
-                    turn_instance_id=spend_turn_instance_id,
-                    replan_obligation_id=rollout_replan_obligation_id,
-                    goal_ref=goal_ref,
-                )
     attach_reward_memory_recall_after_should_run(
         payload,
         quota_command=args.quota_command,

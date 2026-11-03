@@ -177,7 +177,7 @@ assert.match(timeline, /t\("timeline\.waitingConfirmation"\)/, "Historical gated
 assert.match(timeline, /gatedItems\.length/, "The compact Gate summary exposes the pending count");
 assert.match(timeline, /Boolean\(item\.run\.sessionId\)/, "Running count requires a discovered execution Session");
 assert.match(timeline, /Boolean\(item\.run\.canInterrupt\)/, "Running count requires an active interruptible turn");
-assert.match(page, /accept="image\/png,image\/jpeg,image\/webp,image\/gif"/, "Composer accepts bounded image types");
+assert.match(page, /accept="image\/png,image\/jpeg,image\/webp,image\/gif,\.md,\.txt"/, "Composer accepts bounded image types");
 assert.match(page, /imageInputRef\.current\?\.click\(\)/, "Attachment button explicitly opens the native file chooser");
 assert.match(page, /onDrop=\{\(event\)/, "Composer accepts dragged image files");
 assert.match(page, /onPaste=\{[^}]*handleComposerPaste/s, "Composer accepts pasted clipboard images");
@@ -252,7 +252,10 @@ assert.match(drawer, /event\.key === "Tab"/, "Drawer traps keyboard focus");
 assert.match(shell, /event\.key !== "Tab"/, "Mobile Goal navigation traps keyboard focus");
 assert.match(shell, /restoreFocusRef\.current\?\.focus\(\)/, "Mobile Goal navigation restores focus on close");
 assert.match(shell, /aria-modal=\{mobileSidebarOpen \? true : undefined\}/, "Mobile Goal navigation exposes modal semantics");
-assert.match(shell, /inert=\{mobileSidebarOpen \|\| undefined\}/, "Mobile Goal navigation removes background content from keyboard navigation");
+assert.match(shell, /inert=\{mobileSidebarOpen \|\| drawerOverlay \|\| undefined\}/, "Mobile Goal navigation and the narrow Task inspector remove background content from keyboard navigation");
+assert.match(drawer, /useDrawerOverlay\(drawerRef, selection\.kind === "todo"\)/, "The Task inspector derives modality from the rendered overlay");
+assert.match(drawer, /aria-modal=\{selection\.kind === "todo" \? taskInspectorModal \|\| undefined : true\}/, "Only the narrow Task inspector becomes modal");
+assert.match(drawer, /document\.querySelector\("dialog\[open\]:modal"\)/, "Escape leaves a modal dialog in control before the Task inspector");
 assert.doesNotMatch(timeline, /<div aria-live="polite" className="personal-channel-timeline">/, "The full timeline is not a live region");
 assert.match(timeline, /className="personal-live-region"/, "Timeline has a dedicated live region");
 assert.match(drawer, /t\("drawer\.correctionTextarea", \{ agent:[\s\S]*goal:[\s\S]*run:/, "Correction label includes its scoped context");
@@ -697,6 +700,11 @@ for (const key of ["suggestions.openDecisions", "suggestions.explainBlocked", "s
 const router = source("../../router.tsx");
 assert.match(page, /const WorkspaceSettingsPage = lazy\(\(\) => import\("\.\/workspace-settings-page"\)/, "Settings load on demand");
 assert.doesNotMatch(page, /^import \{ WorkspaceSettingsPage \}/m, "No eager import undoes the boundary");
+const machineConfigurationSettings = source("./machine-configuration-settings.tsx");
+assert.doesNotMatch(machineConfigurationSettings, /DshHostReadiness|dsh-host-readiness/,
+  "Steward settings do not expose DSH or managed-host topology");
+assert.doesNotMatch(machineConfigurationSettings, /goals = \[\]|onOpenProviderSettings/,
+  "Steward settings consume only machine configuration capabilities");
 assert.match(page, /^import \{ GoalTeamResults \} from "\.\/goal-team-results";/m, "Team results load eagerly so their single list request keeps its timing");
 for (const route of ["./views/frontstage-developer-page", "./views/benchmark-study-page", "./features/personal-workspace/answer-report-page"]) {
   assert.match(router, new RegExp(`lazy\\(\\(\\) => import\\("${route.replace(/[./]/g, (ch) => `\\${ch}`)}"\\)`), `${route} loads on demand`);

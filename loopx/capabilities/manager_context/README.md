@@ -1,5 +1,12 @@
 # Manager context delivery
 
+For a fixed-window periodic-report input, the original scoped read tool also
+supports `view=report_source`. It batches the existing local evidence readers
+and exposes a frozen, revision-bound paged snapshot. Original audience checks
+apply to every page; the snapshot grants no execution or publication authority.
+See [portfolio report sources](../../../docs/product/periodic-reports.md#authorized-portfolio-source)
+for coverage limits and the separate generation/delivery acceptance.
+
 Built-in capability for original intent delivery and receiver-owned replanning.
 The `manager-inbox` CLI uses the shared selected-command dispatcher and one
 executable-revision scope per command. It retains the existing handler and
@@ -26,6 +33,47 @@ Missing policy, missing source, a wrong sender or malformed scope grants nothing
 Keep the policy private (0600); do not commit it. A read grant without a sender
 grant is insufficient. This does not grant remote delivery, evidence reads,
 worker launch, Todo/lease changes or protected operations.
+
+### Several recipients in one conversation Turn
+
+`context_handoff` retains the single-request object and also accepts an array
+of up to 32 `{goal_id, agent_id, brief, execution_binding_id?}` objects. Each
+array entry needs its own complete `collaboration_brief_v0`; the exact Goal/Agent
+pair must be unique. An empty array means no handoff. Invalid syntax rejects the
+whole envelope before effects. This is targeted delivery, not a broadcast list
+or a team assignment. The model resolves every recipient from current authorized
+responsibilities and work; it must not make one recipient relay a multi-party
+question just because the transport formerly admitted one object.
+
+The host uses the same per-recipient source policy, Goal lifetime fence, inbox,
+request identity and original-conversation return. Live authorization is checked
+for each entry; cancellation or revocation can therefore leave a partial result.
+Successful entries appear in `context_handoff_receipts`, refusals in
+`context_handoff_failures`, and each independent execution selection in
+`context_executions`. There is no all-or-nothing transaction or new scheduler.
+Retrying the same source/recipient reuses its original request, including after
+a lost answer; it does not resend completed effects or reset a receiver's work.
+
+The conversation renders each recipient's own brief, controls, read/adoption and
+return state. One conclusion cannot settle the remaining recipients. Each reply
+returns to the original source through the existing outbox; a peer does not gain
+access to another recipient's private reply. A batch grants no Todo, lease,
+priority, worker launch, protected operation or extra audience access. Existing
+single-request receipts and callers remain readable without migration. Model
+recipient selection, real worker completion, installed App and provider delivery
+still need their respective qualification; deterministic transport tests alone
+do not establish them.
+
+In the conversation, read each recipient card separately: a delivered inbox
+request is not receiver adoption, and adoption is not a returned conclusion.
+Expand **View delegation details** for that recipient's brief and existing
+request controls. The desktop example keeps both recipients visible; the narrow
+example shows a selected brief with vertical scrolling. These are synthetic
+packaged-browser examples, not evidence of installed or real-model completion.
+
+![One request, two independent recipient cards](../../../docs/assets/personal-workspace/multi-recipient/conversation.png)
+
+![Recipient detail in the narrow conversation](../../../docs/assets/personal-workspace/multi-recipient/recipient-detail.png)
 
 ### Executing already bound work
 
@@ -150,6 +198,13 @@ awaiting explicit requester consumption. The same read model is returned by
 private agenda contains current-purpose excerpts and explicit links, not source
 transcripts, result bodies or receiver rationale.
 
+Outgoing requests to an original project conversation use the same typed address
+reader as explicit peer returns. The agenda retains that conversation recipient
+and its current revision without inventing a Goal/Agent receiver. A changed
+requester or missing/conflicting original return route keeps coverage incomplete.
+Reading a result does not consume it, and observing the agenda never dispatches
+work or acknowledges a request.
+
 Each item names its request, receiving/source Agent where recorded, current
 revision, related Todo ids and the remaining receipt step. Counts are request
 records (`count_unit=request`), not distinct tasks: follow-up requests can link
@@ -168,10 +223,52 @@ Goal visibility are checked before and after reading. Original-Chat delivery
 and explicit peer-return consumption remain different receipt paths. The list
 does not mark reads, accept work, start an Agent or certify an overall outcome.
 Unreadable/missing sources and incomplete scans keep counts visibly partial.
+Within one inventory read, requests sharing an exact Goal lifetime reuse its
+held guard in batches of at most 12 requests, independently of the response
+window size. Every request retains its own lock,
+source/Turn read, grant and typed receipt/lifecycle checks; each new batch
+observes the current Goal lifetime. Core linked-work IO runs after those guards
+are released. This reduces repeated fence IO without caching authorization
+between requests or pages; pagination and search still scan the bounded history.
+The pure conversation-identity projection is reused only while the complete
+host Session facts are identical within that read. Changed facts are classified
+again; live provider, grant, receipt and closing-source checks are not cached.
+
+When the typed lifecycle proves a matching original source/route but finds a
+conflicting handoff receipt, coverage includes at most 12 diagnostic
+request/Goal/Agent identities. This is a refusal readback, not a readable brief,
+cancellation or completion. The App's warning glyph exposes that cause on demand;
+other unreadable sources remain unknown. Refresh rechecks the original owners;
+the read neither repairs historical receipts nor grants execution/return authority.
+Pages default to 12 rows. An explicit `limit` of 1–48 lets the App refresh up to
+four already loaded pages with one verified scan; larger loaded views use more
+bounded windows. Refresh publishes only matching snapshots. No cross-request
+content/authorization cache is added; this does not qualify a faster initial read.
+
+For native-bound steward inventory, one fresh provider selection supplies both
+Session validation and Goal visibility at each opening/closing check. The read
+still revalidates before returning content; no observation is cached between
+checks or requests. Custom scope resolvers keep their existing validation path.
 
 管家标题栏提供常驻委派入口，按接收方查看待跟进请求，并可展开当前交办内容、关联
 工作和原对话。同一来源的较早会话不会因重开会话而丢失；其它用户、来源、群聊和
 项目会话不混入。结论已回传与成果已验收不是同一事实，历史记录仍可回看。
+同一次读取中，相同 Goal 实例按至多一页大小复用持有中的生命周期锁；逐请求锁、
+来源与 Turn 读回、授权及 typed 回执检查保留，每批重新观察当前实例。关联 Core 工作
+在释放这些锁后读取，不跨请求或分页缓存授权；分页与搜索仍扫描有界历史。
+同一次读取中，完整宿主 Session 字段相同时复用纯身份分类；字段变化即重新分类，
+provider、授权、回执及结束时的来源检查仍实时执行。
+
+来源与原路匹配但发送回执冲突时，保留不完整计数，以警示小符号按需提供至多 12 条
+具体请求身份和原因；不展示未获读取资格的交办正文，不推定已取消或完成。刷新重新
+核验原 owner，不修改历史回执，也不解除执行或返回权限；其它读取缺口继续保持未知。
+默认每页 12 条；显式 `limit`（1–48）让刷新在一次核验中读取至多四个已加载页，更长列表
+分批读取，快照一致后一起展示。生命周期/请求锁每批仍至多 12 条，不随响应窗口扩大。
+不新增跨请求内容或授权缓存，也不据此宣称首次读取已提速。
+
+原生绑定管家的每次读取，在开始和结束时各验证一次 provider 身份，同一检查点的
+会话和 Goal 范围复用该次选择；检查点及请求之间不缓存权限。自定义范围解析器沿用
+原验证路径。
 
 The automatic agenda is a partial read (`read_complete=false`): it cannot fulfill
 the full Inbox read or replace its requirements. Before acting, read the current
@@ -366,11 +463,17 @@ The page does not expose host addresses or read host stores; `view=agent_route`
 remains the exact-identity, current-observation path. A registration or binding
 does not prove presence, execution readiness or delivery authority.
 
-Repeated role names alone do not require an owner question. The conversation's
-explicit identity corrections, established assignment, project and declared
-responsibilities guide recipient selection; binding metadata can support that
-context but cannot override an explicit identity or grant. Preserve both Goal
-and Agent identity. Forwarded requests retain their original speaker/addressee
+Repeated role names alone do not require an owner question. Resolve the subject,
+project, purpose and destination before matching a role alias or Agent id.
+Compare plausible recipients by conversation, current work and responsibilities;
+when the user refers to recent research, inspect relevant recent deliveries.
+A previous send proves delivery, not subject ownership: recheck a challenged
+route rather than preserving an earlier mistake. Explicit identity corrections
+take precedence; binding metadata cannot override them or a grant. Preserve both
+Goal and Agent identity. Correcting delivery does not retract an old misroute:
+reuse verified receipts and send only a still-needed bounded ownership correction
+through the existing path. Never claim cancellation or adoption from delivery.
+Forwarded requests retain their original speaker/addressee
 in the existing collaboration brief rather than redefining every “you” as the
 receiver. Clarify only competing interpretations that still change the action.
 
@@ -519,8 +622,9 @@ before the last position. Peer results retain their separate consumption flow
 and are not paginated by this cursor. `status --offset/--limit` remains separate.
 
 After `acknowledge`, the request remains visible until the answer obligation is
-resolved. `pending.items` retains its existing receipt-only semantics: it stops
-including a request once its conclusion exists. The separate unfinished agenda
+resolved. `pending.items` describes the current reply obligation: an ordinary
+conclusion resolves it, while an explicitly reported remainder keeps it open.
+Neither case certifies fulfillment of the user's requirements. The unfinished agenda
 keeps undelivered conclusions visible, and keeps peer work until the requester
 explicitly consumes the current result. The worker uses `link` for canonical Todo/evidence lineage
 and `report` to publish the answer intended for the original audience:
@@ -598,6 +702,13 @@ evidence records; requested detail and material gaps remain in the answer.
 This is authoring guidance, not a summary service or a delivery-time rewrite,
 and does not certify the quality of a receiver's result.
 
+For a legacy v1 request, `manager-inbox report --request-revision 1` is equivalent
+to omitting the revision. It publishes the receiver's original result without
+creating request-control state or granting correction authority; other explicit
+revisions are rejected. An `--update-id` still requires an initial conclusion.
+This compatibility does not replay an earlier failed command or relax original
+delivery proof, audience, immutable-result or unknown-effect checks.
+
 For longer work, `--phase decision` optionally returns a meaningful intermediate
 update. A ready conclusion supersedes an unsent intermediate update. Do not send
 one notification per poll, quote private deliberation, or claim an implementation
@@ -605,6 +716,46 @@ request finished merely because a plan exists. A research-direction request can
 conclude with the adopted/rejected planning decision; deferred or blocked work
 must explain the concrete condition and next action. Completion of this exchange
 is separate from completion of the receiving Goal.
+
+A partial conclusion can return a useful result while explicitly retaining work
+on this request. Use the existing result publication, without creating a Todo:
+
+```sh
+loopx manager-inbox report --goal-id research --agent-id worker \
+  --request-id <id> --reply-text 'The implementation is ready; installed validation remains.' \
+  --remaining-work 'Validate the repair in the isolated installed package.' \
+  --resume-when 'The isolated package is available to the receiving Agent.'
+```
+
+MCP uses `return_result(..., remaining_work={"summary": "...", "resume_when": "..."})`.
+Both fields are required, each at most 600 Unicode characters; the rendered reply
+still fits the existing 20,000-character budget. They belong to the receiver's
+immutable result for its exact request revision. They do not transfer ownership,
+schedule execution or create a second completion state. The receiver retains the
+remainder under its existing authority; linked Todo status cannot resolve it.
+`resume_when` here describes a condition, unlike a typed Todo scheduler rule.
+
+The pending Inbox, Turn agenda and App delegation reader retain this request
+after the partial reply is delivered or consumed. The original conversation and
+provider reply also show the remainder and continuation condition. Queued replies
+remain distinct from delivered ones. A peer can consume the partial result once
+and still await the final result. Other requests sharing the same Todo retain
+their independent scope. Source correction and cancellation keep their existing
+request-control rules; an old revision's remainder cannot settle a newer request.
+
+When the remaining scope is actually resolved, append a conclusion using a stable
+`--update-id` and omit `--remaining-work`/`--resume-when`. This resolves the reply
+obligation after normal return processing, not independent acceptance. Retry with
+the same text and remainder: changing either under a committed result key is a
+conflict. Valid unmarked legacy results retain their ordinary reply state and
+unknown fulfillment qualification; unreadable or conflicting result chains stay
+unavailable. This path does not batch-close old work.
+Before rolling back to a reader without remainder support, stop new partial
+publications and reconcile the retained result chains with the compatible
+reader. Do not rewrite their receipts or treat an older reader's empty queue as
+fulfilled work. No installation, host wake or permission change is implied.
+普通短答仍可直接返回，无需创建任务；阶段结果保留原负责人和具体续接条件，
+不能用 Todo done、回传或送达替代原要求的验收。
 
 If a returned blocker or draft is followed by a materially changed fact, append
 a conclusion with a stable `--update-id`; do not replace the first conclusion or
@@ -658,10 +809,20 @@ read-only verification. A matching message advances the original delivery to
 message, or verified mismatch becomes `explicit_unverified`. CLI, Manager read,
 and Chat expose the same public-safe state and reason without returning the
 provider locator. The Lark adapter keeps locator interpretation and provider
-readback; `manager-context` remains the sole result/delivery writer. The typed
-`control_plane/collaboration/return_delivery.ts` boundary owns provider-neutral
-attempt validation and verification classification; Python retains file-lock,
-persistence and adapter orchestration only.
+readback. The existing `control_plane/collaboration/return_delivery.ts` owner now
+performs delivery admission, state transitions, backoff and atomic delivery-receipt
+writes for exact-instance and legacy routes. It reuses the request, result and
+Goal-lifetime owners. Python observes original Chat/authority facts, holds the
+existing Host fences and invokes the actual transcript/provider adapters.
+
+The obsolete Python exact/legacy delivery coordinators and attempt-normalization
+RPC are removed. The shared transaction accepts bounded scan hints, rechecks each
+selected receipt under its mutation lock, and uses source/revision and exact
+admission-token fences before persistence. Attempt-aware providers persist their
+acceptance checkpoint before verification continues; it is not deferred to a final callback.
+The same stored request/result/route identities and public delivery readback remain.
+This retires this delivery orchestration family, not Inbox acceptance, source grants,
+all Python IO or installed/live-provider qualification.
 
 Unclassified readback exceptions retain the saved attempt and retry with backoff;
 their wording never establishes revoked authority or a missing route. Adapters

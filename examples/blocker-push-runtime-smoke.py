@@ -62,7 +62,7 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path, Path]:
     registry.write_text(
         json.dumps(
             {
-                "runtime_root": str(runtime_root),
+                "common_runtime_root": str(runtime_root),
                 "goals": [
                     {
                         "id": GOAL_ID,
@@ -89,6 +89,8 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path, Path]:
         encoding="utf-8",
     )
     append_state_refreshed_run(runtime_root)
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+    import_fixture_authority(registry, GOAL_ID, provider="sqlite")
     return registry, runtime_root, project, state_file
 
 
@@ -218,7 +220,7 @@ def main() -> int:
         # current compact sentence instead of the retired per-shell phrasing.
         assert "reuse the value on retries" in compact_prompt, prompt
         assert "obey projected replan/stop, never wake counts" in compact_prompt, prompt
-        assert "re-enter guard." in compact_prompt, prompt
+        assert "re-enter as instructed, do/verify authorized work." in compact_prompt, prompt
         assert "2 stalls->replan" not in compact_prompt, prompt
         assert "Exact monitor settlement=no refresh/spend" in compact_prompt, prompt
         assert "Admitted work: settlement_plan even if artifacts unchanged" in compact_prompt, prompt

@@ -516,6 +516,7 @@ export const typedActionsScenario = {
         return {
           closeHeight: close?.height ?? 0,
           closeTopInset: close ? close.top - header.top : 0,
+          closeBottomInset: close ? header.bottom - close.bottom : 0,
           closeWidth: close?.width ?? 0,
           headerHeight: header.height,
           paddingTop: Number.parseFloat(style.paddingTop),
@@ -524,8 +525,11 @@ export const typedActionsScenario = {
       if (drawerHeaderVisual.closeHeight < 44 || drawerHeaderVisual.closeWidth < 44) {
         throw new Error(`Goal drawer close control is below the 44px target: ${JSON.stringify(drawerHeaderVisual)}`);
       }
-      if (drawerHeaderVisual.headerHeight < 84 || drawerHeaderVisual.paddingTop < 18 || drawerHeaderVisual.closeTopInset < 18) {
-        throw new Error(`Goal drawer header is still pinned too close to the top edge: ${JSON.stringify(drawerHeaderVisual)}`);
+      // Goal details use the compact header adopted with the readable Goal
+      // inspector. Preserve its 44px target and breathing room on both edges.
+      if (drawerHeaderVisual.headerHeight < 68 || drawerHeaderVisual.paddingTop < 12
+        || drawerHeaderVisual.closeTopInset < 12 || drawerHeaderVisual.closeBottomInset < 12) {
+        throw new Error(`Goal drawer header clips or crowds its close control: ${JSON.stringify(drawerHeaderVisual)}`);
       }
       const goalDrawerOrder = await page.locator(".personal-drawer-body").evaluate((element) => {
         const lark = element.querySelector(".personal-goal-notification");
@@ -752,6 +756,7 @@ export const typedActionsScenario = {
       if (englishMonitorShortcut?.normalized_parameters.target !== "Check the current Goal for blockers, progress, and new outputs") throw new Error(`English scheduled-check shortcut did not fall back to the localized default check target: ${JSON.stringify(englishMonitorShortcut?.normalized_parameters)}`);
       if (api.durableWriteCount !== writesBeforeEnglishMonitorShortcut) throw new Error("English scheduled-check shortcut wrote durable state before confirmation");
       await page.getByRole("button", { name: "Close", exact: true }).click();
+      await page.locator(".personal-composer-tools > summary").click();
       await page.getByRole("button", { name: "Configure scheduled check" }).click();
       const englishScheduleForm = page.getByRole("dialog", { name: "Configure scheduled check", exact: true });
       const previewsBeforeEnglishCalendarSchedule = api.actionPreviews.length;
@@ -993,7 +998,10 @@ export const typedActionsScenario = {
       await page.getByRole('button', { name: '列表', exact: true }).click();
       await assertDeferredTask();
       const listHistory = page.locator('[data-goal-panel="tasks"]').getByTestId('completed-task-lane');
-      await listHistory.getByRole('button', { name: '已完成', exact: false }).click();
+      // Selecting a completed task opens its history. Switching to the list
+      // preserves that expansion instead of requiring another toggle.
+      const completedToggle = listHistory.getByRole('button', { name: '已完成', exact: false });
+      assert.equal(await completedToggle.getAttribute('aria-expanded'), 'true');
       await listHistory.getByText('4087', { exact: true }).waitFor();
       await listHistory.getByText('Completed A', { exact: true }).waitFor();
       await listHistory.locator('.personal-task-lane-scroll').evaluate(element => { element.scrollTop = element.scrollHeight; });
@@ -1021,6 +1029,8 @@ export const typedActionsScenario = {
         throw new Error(`Work-Agent filter did not consistently filter task cards: ${filteredText}`);
       }
       const runtimeSelector = page.getByRole("combobox", { name: "选择聊天 Runtime" });
+      if (await runtimeSelector.count()) throw new Error("Tasks view exposed a Chat executor without its composer");
+      await page.getByRole("button", { name: "对话", exact: true }).click();
       if (!await runtimeSelector.count()) throw new Error("Chat runtime selector is not explicitly labelled independently from work-Agent lanes");
       await goalButton.click();
       await tasksTab.click();
@@ -1151,6 +1161,7 @@ export const typedActionsScenario = {
       await page.getByRole("region", {name:"资料召回",exact:true}).waitFor({state:"visible"});
       await page.locator(".personal-capability-list").getByRole("button", { name: "已退役的 Authority 观测" }).click();
       const retiredDetail = page.locator(".personal-capability-detail");
+      await retiredDetail.getByRole("button", {name: "只读能力", exact: true}).click();
       await retiredDetail.getByText(/--clear-local-authority-shadow/).waitFor();
       if (await retiredDetail.getByRole("checkbox").count()
           || await retiredDetail.getByRole("button", { name: "预览变更", exact: true }).count()) {
@@ -1162,7 +1173,7 @@ export const typedActionsScenario = {
       await page.screenshot({ path: resolve(outputDir, "retired-observation-settings-mobile.png"), fullPage: false, animations: "disabled" });
       await page.setViewportSize(desktopViewport);
       await page.locator(".personal-capability-list").getByRole("button", { name: "周期报告" }).click();
-      for (const label of [/^启用$/u, /^报告 Profile/u, /^Goal Channel 路由/u, /^时区/u]) {
+      for (const label of [/^启用$/u, /^报告 Profile/u, /^报告接收会话/u, /^时区/u]) {
         await page.getByLabel(label).waitFor({ state: "visible" });
       }
       await page.screenshot({ path: resolve(outputDir, "goal-capability-zh-cn.png"), fullPage: false, animations: "disabled" });
@@ -1709,9 +1720,10 @@ export const typedActionsScenario = {
 
       const previewCountBeforeAnalysis = api.actionPreviews.length;
       const turnCountBeforeAnalysis = api.turnRequests.length;
-      await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Tasks|任务)$/ }).click();
       await composer.fill("做一次只读分析：判断刚刚新增的 Todo 是否与当前 Goal 一致，并在当前 Chat 返回两点理由。不要修改状态。");
       await page.getByRole("button", { name: "发送", exact: true }).click();
+      await page.locator(".personal-message-pending").waitFor({state: "hidden"});
+      await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Tasks|任务)$/ }).click();
       const taskConversationReceipt = page.getByRole("region", { name: "最近对话" });
       await taskConversationReceipt.getByText("对话有新回复", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
       await taskConversationReceipt.getByRole("button", { name: "转为任务草稿", exact: true }).waitFor({ state: "visible" });
@@ -1735,7 +1747,8 @@ export const typedActionsScenario = {
       const taskDraftForm = page.getByRole("dialog", {name: "创建任务", exact: true});
       if (!(await taskDraftForm.getByLabel("任务内容", {exact: true}).inputValue())) throw new Error("Task form lost the reply");
       await taskDraftForm.getByLabel("任务内容", {exact: true}).fill(`${"长".repeat(200)}\n\n${"文".repeat(201)}`);
-      await taskDraftForm.getByRole("status").waitFor();
+      await taskDraftForm.getByRole("status").filter({hasText: /任务内容 \d+\/400/}).waitFor();
+      assert.equal(await taskDraftForm.getByRole("status", {name: "合计保存字数", exact: true}).innerText(), "402 / 400");
       if (!(await taskDraftForm.getByRole("button", {name: "检查配置"}).isDisabled())) throw new Error("Over-limit task text reached preview");
       await taskDraftForm.getByRole("button", {name: "取消", exact: true}).click();
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
@@ -1944,9 +1957,11 @@ export const typedActionsScenario = {
         await page.getByRole("button", { name: "关闭", exact: true }).click();
       }
       api.nextActionPreviewDelayMs = 900;
+      await goalNavigation.getByRole("button", { name: /^(Chat|对话)$/ }).click();
       const conversationRuntime = page.getByRole("combobox", { name: "选择聊天 Runtime" });
       const conversationAgentId = await conversationRuntime.getAttribute("data-value");
       if (conversationAgentId !== "codex") throw new Error(`Quick Todo actor fixture requires the selected Codex Runtime, got ${conversationAgentId}`);
+      await goalNavigation.getByRole("button", { name: /^(Tasks|任务)$/ }).click();
       const claimedTask = taskCards.filter({ hasText: "Monitor ArcticDB #3179 LoopX comment" });
       const unassignedTask = taskCards.filter({ hasText: "todo todo_1596c3a678bb" });
       if (await claimedTask.count() !== 1 || await unassignedTask.count() !== 1) {
@@ -2012,9 +2027,9 @@ export const typedActionsScenario = {
       if (monitorShortcut?.normalized_parameters.target !== "检查当前 Goal 的阻塞、进度与新产出") throw new Error(`定时检查快捷方式未回落到本地化默认检查目标：${JSON.stringify(monitorShortcut?.normalized_parameters)}`);
       if (api.durableWriteCount !== writesBeforeMonitorShortcut) throw new Error("定时检查快捷方式在确认前写入了持久状态");
       await page.getByRole("button", { name: "关闭", exact: true }).click();
-      if (await page.locator(".personal-composer-tools").getAttribute("open") === null) {
-        throw new Error("Closing a configuration draft lost the open shortcut menu across composer folding");
-      }
+      // Selecting a shortcut dismisses the shared action menu. Reopen it for
+      // the next draft, as with the English configuration journey above.
+      await page.locator(".personal-composer-tools > summary").click();
       await page.getByRole("button", {name: "配置定时检查"}).click();
       const monitorForm = page.getByRole("dialog", {name: "配置定时检查", exact: true});
       const previewsBeforeUnsupportedSchedule = api.actionPreviews.length;

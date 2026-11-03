@@ -45,7 +45,7 @@ files; arbitrary caller-declared artifacts remain private and are not privacy
 certified. A new destination is required; capture never overwrites a point.
 
 Artifact operations use the existing private local snapshot transport for full
-inventories and retained metadata above the ordinary 2 MiB Effect wire limit.
+inventories and retained metadata above the ordinary [8 MiB Effect wire limit](canonical-snapshot-pagination.md#shared-rpc-byte-budget).
 The existing 64 MiB local snapshot bound and original operation deadlines still
 apply. No witness is truncated, no capture is enabled implicitly, and a lost
 capture response must be reconciled under its original identity before another
@@ -131,6 +131,16 @@ Read the destination Todo and `explore turn-context`, obtain current work
 admission and inspect the next accepted replan. A useful readback cites retained
 evidence, explains the next complete experiment and later checks its outcome.
 Restoring files or accepting a structured review alone proves no research gain.
+
+For a restored benchmark conversation, recapture also requires a settled,
+checkpoint-linked current review and a completed destination Codex conversation
+turn. That conversation turn is not a benchmark evaluation. A successor Todo
+can be a valid replan outcome without satisfying this recovery check. When the
+current guard offers original-Turn closeout, include
+`checkpoint:<capture-digest>` in `agent_vision.path_delta.evidence_refs` in that
+writeback and finish its settlement. If the Turn has ended, carry the unresolved
+review to the next admitted replan; do not replay or rebind historical Turns.
+Normal research cadence resumes only after the existing recovery gate passes.
 
 ## Default bank rotation
 

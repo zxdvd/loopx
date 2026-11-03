@@ -161,6 +161,15 @@ export const conversationActivityScenario = {
       live.write(event(5, "answer.delta", { text: "\n\n" + "公开资料与待核实事项。\n\n".repeat(80) }));
       await page.getByText("公开资料与待核实事项。", { exact: true }).first().waitFor();
       const scroller = page.locator(".personal-channel-scroll");
+      // A responsive resize can leave scrollTop at zero before the follow
+      // frame runs. Start at a real end position so the next step moves up.
+      const startingPosition = await scroller.evaluate(node => {
+        node.scrollTop = node.scrollHeight;
+        node.dispatchEvent(new Event("scroll"));
+        return { top: node.scrollTop, remaining: node.scrollHeight - node.scrollTop - node.clientHeight };
+      });
+      assert.ok(startingPosition.top > 0 && startingPosition.remaining < 64,
+        "Exercise upward reading from the scrollable end, not an already-zero position");
       await scroller.evaluate(node => { node.scrollTop = 0; node.dispatchEvent(new Event("scroll")); });
       await page.getByRole("button", { name: "回到最新消息 ↓", exact: true }).waitFor();
       live.write(event(6, "answer.delta", { text: "新增证据已经到达。" }));
@@ -168,7 +177,7 @@ export const conversationActivityScenario = {
       assert.ok(await scroller.evaluate(node => node.scrollTop < 10), "new output preserves upward reading position");
       await page.getByRole("button", { name: "回到最新消息 ↓", exact: true }).click();
       assert.ok(await scroller.evaluate(node => node.scrollHeight - node.scrollTop - node.clientHeight < 64));
-      assert.equal(await page.locator(".personal-composer-tools").count(), 0, "conversation removes redundant suggestion strip");
+      assert.equal(await page.locator(".personal-composer-tools-panel").count(), 0, "conversation removes redundant suggestion strip");
 
       let interrupts = 0;
       const rejectThenMismatch = async route => {

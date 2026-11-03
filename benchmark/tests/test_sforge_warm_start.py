@@ -68,13 +68,20 @@ def test_native_skills_backup_never_overwrites_an_earlier_attempt(tmp_path):
 
 
 @pytest.fixture
-def point(tmp_path):
+def point(tmp_path, request):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "candidate").write_text("retained candidate")
     (workspace / "candidate").chmod(0o600)
     config = tmp_path / "config.toml"
-    config.write_text("[features]\ngoals = false\n")
+    if getattr(request, "param", None) in {"gateway", "gateway-on"}:
+        from benchmark.runtime.codex import Execution, codex_settings
+        config.write_text(codex_settings(execution=Execution(context="resume",
+            context_delivery="on" if request.param == "gateway-on" else "off"),
+            workspace=workspace, model="original", effort="high",
+            base_url="http://gateway:4001/v1", wire_api="responses"))
+    else:
+        config.write_text('model="original"\nmodel_reasoning_effort="high"\n[features]\ngoals = false\n')
     context = tmp_path / "context.json"
     context.write_text(json.dumps({"snapshot": {"todos": [{"todo_id": "source-todo"}]}}))
     components = [{"id": "workspace", "source_path": str(workspace)},
@@ -174,8 +181,14 @@ def test_restore_replaces_image_files_preserves_modes_and_refuses_second_attempt
     assert workspace.with_name("workspace.before-checkpoint").is_dir()
 
 
-def test_staging_preserves_sealed_modes(point, monkeypatch, tmp_path):
+@pytest.mark.parametrize("model_transition", [False, True])
+def test_staging_preserves_sealed_modes(point, monkeypatch, tmp_path, model_transition):
     start, workspace = point
+    if model_transition:
+        destination = tmp_path / "destination.toml"
+        destination.write_text(start.config.read_text().replace('"original"', '"next"')
+                               .replace('"high"', '"max"'))
+        start = replace(start, destination_config=destination)
     control = tmp_path / "control"
     control.mkdir()
     monkeypatch.setattr(warm, "_CONTROL", str(control))
@@ -194,6 +207,93 @@ def test_staging_preserves_sealed_modes(point, monkeypatch, tmp_path):
         "expected_sha256": start.sha256})
     declaration = json.loads((control / "warm-start.json").read_bytes())
     assert declaration["deadline_epoch"] == start.deadline_epoch
+    if model_transition:
+        assert (control / "restored-model-config.toml").read_bytes() == destination.read_bytes()
+        assert declaration["destination_config"] == str(control / "restored-model-config.toml")
+        assert (control / "restored-config.toml").read_bytes() == start.config.read_bytes()
+    else:
+        assert "destination_config" not in declaration
+
+
+@pytest.mark.parametrize("point,context_delivery", [("gateway", "off"), ("gateway-on", "on")], indirect=["point"])
+@pytest.mark.parametrize("model_transition", [False, True])
+def test_fresh_gateway_stages_exact_first_worker_settings(point, monkeypatch, tmp_path,
+                                                        model_transition, context_delivery):
+    from benchmark.runtime.codex import Execution, prepare_codex_home
+
+    start, workspace = point
+    model, effort = "original", "high"
+    requested = start.config.read_bytes()
+    if model_transition:
+        target = tmp_path / "model.toml"
+        requested = requested.replace(b'"original"', b'"next"').replace(b'"high"', b'"max"')
+        target.write_bytes(requested)
+        start = replace(start, destination_config=target)
+        model, effort = "next", "max"
+    effective = requested.replace(b':4001/', b':4002/')
+    control = tmp_path / "control"
+    control.mkdir()
+    monkeypatch.setattr(warm, "_CONTROL", str(control))
+    class Environment:
+        async def upload_dir(self, source, target):
+            shutil.copytree(source, target)
+        async def upload_file(self, source, target):
+            shutil.copyfile(source, target)
+        async def exec(self, *args, **kwargs):
+            return SimpleNamespace(return_code=0)
+    source_bytes = start.config.read_bytes()
+    asyncio.run(start.stage(Environment(), str(workspace), effective_config=effective,
+        provider_base_url="http://gateway:4002/v1"))
+    declaration = json.loads((control / "warm-start.json").read_bytes())
+    destination = control / "restored-model-config.toml"
+    assert declaration["provider_base_url"] == "http://gateway:4002/v1"
+    assert destination.read_bytes() == effective
+    assert start.config.read_bytes() == source_bytes
+    assert declaration["deadline_epoch"] == start.deadline_epoch
+    # The native fork installs these destination bytes. The first ordinary
+    # worker must accept them and still refuse a later within-trial redirect.
+    home, skills = tmp_path / "receiver-home", tmp_path / "installed-skills"
+    home.mkdir()
+    skills.mkdir()
+    (home / "config.toml").write_bytes(effective)
+    args = dict(home=home, execution=Execution(context="resume", context_delivery=context_delivery), workspace=workspace,
+        model=model, effort=effort, base_url="http://gateway:4002/v1",
+        api_key="synthetic", wire_api="responses", skills=skills)
+    old_receiver = tmp_path / "unrebound-home"
+    old_receiver.mkdir()
+    (old_receiver / "config.toml").write_bytes(requested)
+    with pytest.raises(ValueError, match="settings changed within a trial"):
+        prepare_codex_home(**{**args, "home": old_receiver})
+    assert (old_receiver / "config.toml").read_bytes() == requested
+    prepare_codex_home(**args)
+    with pytest.raises(ValueError, match="settings changed within a trial"):
+        prepare_codex_home(**{**args, "base_url": "http://gateway:4003/v1"})
+
+
+@pytest.mark.parametrize("point", ["gateway"], indirect=True)
+@pytest.mark.parametrize("old,new", [(b'"original"', b'"undeclared"'),
+    (b'wire_api = "responses"', b'wire_api = "chat"'),
+    (b'web_search = "disabled"', b'web_search = "live"')])
+def test_rendered_route_cannot_change_declared_launch_before_staging(point, old, new):
+    start, workspace = point
+    effective = start.config.read_bytes().replace(b':4001/', b':4002/').replace(old, new)
+    class NoEffects:
+        def __getattr__(self, name):
+            pytest.fail("invalid configuration must reject before staging")
+    with pytest.raises(ValueError):
+        asyncio.run(start.stage(NoEffects(), str(workspace), effective_config=effective,
+            provider_base_url="http://gateway:4002/v1"))
+
+
+@pytest.mark.parametrize("point", ["gateway"], indirect=True)
+def test_unchanged_render_cannot_hide_a_different_declared_host_route(point):
+    start, workspace = point
+    class NoEffects:
+        def __getattr__(self, name):
+            pytest.fail("a mismatched Host route must reject before staging")
+    with pytest.raises(ValueError, match="current Host route"):
+        asyncio.run(start.stage(NoEffects(), str(workspace),
+            effective_config=start.config.read_bytes(), provider_base_url="http://gateway:4002/v1"))
 
 
 def test_normal_cadence_requires_accepted_current_replan_and_is_applied_once(tmp_path, monkeypatch):

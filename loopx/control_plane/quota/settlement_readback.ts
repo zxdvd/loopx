@@ -11,7 +11,7 @@ import {
   effectIdsMatch,
   settlementBindReduce,
   settlementFailed,
-  settlementIdentity,
+  executionRequestSubject, settlementIdentity,
   settlementIdentityPayload,
   settlementPure,
   settlementReceipt,
@@ -34,6 +34,8 @@ import {
 import {
   isBoundedBlockedRetry,
   isAcceptedBlockedReplanWriteback,
+  isUnqualifiedBlockedReplanWriteback,
+  qualifySettlementHistory,
   isCommittedMonitorPollEffect,
   isAcceptedProgressWriteback,
   isAcceptedReplanWriteback,
@@ -496,8 +498,13 @@ export function projectSemanticReplanGuard(
 ): JsonObject {
   const hasCapability = ["semantic_replan_capability_id", "semantic_replan_gap_id", "semantic_replan_frontier_revision"]
     .some(field => Object.hasOwn(receiptDetails, field));
+  const hasReview = ["semantic_replan_review_kind", "semantic_replan_review_stop_condition"]
+    .some(field => Object.hasOwn(receiptDetails, field));
+  if (hasCapability && hasReview) throw new EffectRuntimeRequestError(
+    "a review source cannot replace a capability guard", "malformed_settlement_state");
   if (!Object.hasOwn(receiptDetails, "semantic_replan_obligation_id")) {
     if (hasCapability) throw new EffectRuntimeRequestError("a capability guard requires a selected obligation", "malformed_settlement_state");
+    if (hasReview) throw new EffectRuntimeRequestError("a review source requires a selected obligation", "malformed_settlement_state");
     return {
       schema_version: SEMANTIC_REPLAN_GUARD_SCHEMA,
       scope: "legacy_unscoped",
@@ -507,6 +514,7 @@ export function projectSemanticReplanGuard(
   const rawObligationId = receiptDetails.semantic_replan_obligation_id;
   if (rawObligationId === "" || rawObligationId === null) {
     if (hasCapability) throw new EffectRuntimeRequestError("a capability guard requires a selected obligation", "malformed_settlement_state");
+    if (hasReview) throw new EffectRuntimeRequestError("a review source requires a selected obligation", "malformed_settlement_state");
     return {
       schema_version: SEMANTIC_REPLAN_GUARD_SCHEMA,
       scope: "turn_guard",
@@ -520,10 +528,15 @@ export function projectSemanticReplanGuard(
       "malformed_settlement_state",
     );
   }
+  const reviewKind = hasReview ? requireNonEmptyString(receiptDetails.semantic_replan_review_kind, "receipt review kind") : null;
+  const stop = hasReview ? requireNonEmptyString(receiptDetails.semantic_replan_review_stop_condition, "receipt review stop condition") : null;
+  if (stop && stop.length > 240) throw new EffectRuntimeRequestError(
+    "receipt review stop condition exceeds scalar metadata bounds", "malformed_settlement_state");
   return {
     schema_version: SEMANTIC_REPLAN_GUARD_SCHEMA,
     scope: "turn_guard",
     selected_obligation_id: selectedObligationId,
+    ...(hasReview ? {selected_review_source: {kind: reviewKind, stop_condition: stop}} : {}),
     ...(hasCapability ? {
       selected_capability_guard: decodeCapabilityGuard({schema_version: "semantic_replan_capability_guard_v0",
         capability_id: receiptDetails.semantic_replan_capability_id, gap_id: receiptDetails.semantic_replan_gap_id,
@@ -563,7 +576,7 @@ function findWriteback(
     isTurnScopedSettlementOutcome(
       run.delivery_outcome,
       run.progress_observation,
-      identity.todo_id ?? identity.replan_obligation_id,
+      identity.todo_id ?? identity.replan_obligation_id ?? (identity.request_subject ? identity.binding_id : null),
     )
   ) ?? null;
 }
@@ -840,6 +853,15 @@ function resolveIdentity(
     request.replan_obligation_id,
   );
   let turnInstanceId = request.turn_instance_id;
+  let requestSubject = null;
+  if (!todoId && !replanObligationId && agentId && turnInstanceId) {
+    try {
+      const original = effectiveHeartbeatReceipt(events, {goal_id: request.goal_id, agent_id: agentId, turn_instance_id: turnInstanceId});
+      requestSubject = executionRequestSubject(original ? heartbeatReceiptFactFromEvent(original).request_subject : null);
+    } catch (error) {
+      return failedIdentity((error as Error).message, "identity_mismatch");
+    }
+  }
   if (request.infer_turn_instance_id) {
     if (
       !agentId ||
@@ -882,7 +904,7 @@ function resolveIdentity(
     const fact = heartbeatReceiptFactFromEvent(guard);
     const originalTodoId = normalizeTodoId(fact.todo_id);
     const originalReplanId = normalizeReplanObligationId(fact.replan_obligation_id);
-    if (!originalTodoId && !originalReplanId) {
+    if (!originalTodoId && !originalReplanId && !requestSubject) {
       return failedIdentity("the original Turn guard has no settlement binding", "receipt_unbound");
     }
     if ((request.todo_id !== null && (todoId === null || todoId !== originalTodoId)) ||
@@ -893,7 +915,7 @@ function resolveIdentity(
     todoId = originalTodoId;
     replanObligationId = originalReplanId;
   }
-  if (!agentId || !turnInstanceId || Boolean(todoId) === Boolean(replanObligationId)) {
+  if (!agentId || !turnInstanceId || [todoId, replanObligationId, requestSubject].filter(Boolean).length !== 1) {
     return failedIdentity(
       "turn-scoped settlement requires agent_id, turn_instance_id, and exactly one todo_id or replan_obligation_id",
       "invalid_identity",
@@ -904,7 +926,7 @@ function resolveIdentity(
     agent_id: agentId,
     todo_id: todoId,
     turn_instance_id: turnInstanceId,
-    replan_obligation_id: replanObligationId,
+    replan_obligation_id: replanObligationId, request_subject: requestSubject,
   });
   let receiptEvent: JsonObject | null;
   try {
@@ -923,7 +945,7 @@ function resolveIdentity(
   const receiptReplanObligationId = normalizeReplanObligationId(
     receiptDetails.replan_obligation_id,
   );
-  if (receiptTodoId === null && receiptReplanObligationId === null) {
+  if (receiptTodoId === null && receiptReplanObligationId === null && heartbeatReceiptFactFromEvent(receiptEvent).request_subject == null) {
     // A same-turn guard that ran before any work item was chosen commits a
     // receipt with no settlement binding, and the documented wake order (guard,
     // then select) produces exactly that state. This read model never binds --
@@ -1083,20 +1105,34 @@ function owedPriorTurnFromSnapshot(
     turnInstanceId,
   );
   for (const selected of candidates) {
-    const missingReceipts = missingCloseoutReceipts(readQuotaSettlementFromRequest(
-      {
-        ...request,
+    // A committed monitor poll is its own exact no-spend closeout. This is the
+    // same acceptance rule the next-Turn preflight applies; using only the
+    // advancement writeback/spend chain here incorrectly made every later
+    // Turn wait forever on a monitor that had already settled.
+    const monitorPoll = selected.binding_kind === "todo"
+      ? committedMonitorPollFromSnapshot(snapshot, {
+        goal_id: request.goal_id,
         agent_id: agentId,
-        ...candidateReadbackBinding(selected),
-        infer_turn_instance_id: false,
-        allow_unbound_binding: false,
-        resolve_original_binding: false,
-        refresh_retry: null,
-        heartbeat_reentry_guard: null,
-      },
-      snapshot,
-      false,
-    ));
+        turn_instance_id: selected.prior_turn_instance_id,
+        todo_id: selected.binding_id,
+      }, request.owner)
+      : null;
+    const missingReceipts = monitorPoll === null
+      ? missingCloseoutReceipts(readQuotaSettlementFromRequest(
+        {
+          ...request,
+          agent_id: agentId,
+          ...candidateReadbackBinding(selected),
+          infer_turn_instance_id: false,
+          allow_unbound_binding: false,
+          resolve_original_binding: false,
+          refresh_retry: null,
+          heartbeat_reentry_guard: null,
+        },
+        snapshot,
+        false,
+      ))
+      : null;
     if (missingReceipts !== null) {
       return { ...selected, missing_receipts: missingReceipts };
     }
@@ -1161,6 +1197,7 @@ function readQuotaSettlementFromRequest(
     todo_id: optionalString(identityResult.value.todo_id),
     turn_instance_id: String(identityResult.value.turn_instance_id),
     replan_obligation_id: optionalString(identityResult.value.replan_obligation_id),
+    request_subject: executionRequestSubject(identityResult.value.request_subject),
   });
   const events = indexedEvents(
     snapshot,
@@ -1285,6 +1322,9 @@ function readQuotaSettlementFromRequest(
       run.goal_id === identity.goal_id && run.agent_id === identity.agent_id &&
       (jsonObject(run.agent_vision) !== null || jsonObject(run.vision_checkpoint)?.required === true)
     ),
+    writeback.failure === null && spendRun === null && spendEvent === null &&
+      semanticReplanGuard.selected_obligation_id === identity.replan_obligation_id &&
+      isUnqualifiedBlockedReplanWriteback(writebackRun, identity),
   );
   // A non-material poll need not appear as findWriteback's advancement run.
   // Its exact committed observation still fences an incompatible unavailable
@@ -1327,7 +1367,7 @@ function readQuotaSettlementFromRequest(
       receiptDetails.should_run === true && receiptDetails.delivery_allowed === false,
     native_child_admission: nativeChildReportAdmission(
       receiptDetails, heartbeatReceipt.status, identity.effect_id, replayPhase,
-      closeoutStarted,
+      closeoutStarted, normalizeReplanObligationId(semanticReplanGuard.selected_obligation_id),
     ),
     ...(request.heartbeat_reentry_guard === null ? {} : {
       heartbeat_reentry_qualification: heartbeatWorkRequalification(heartbeatReceipt,
@@ -1368,6 +1408,13 @@ export function readQuotaSettlementForAdmittedOwnerFromSnapshot(
 }
 
 export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
+  if (jsonObject(value)?.schema_version === "loopx_quota_history_qualification_request_v0") {
+    const input = jsonObject(value)!, runs = input.runs, observedAt = input.observed_at;
+    if (!Array.isArray(runs) || (observedAt != null && typeof observedAt !== "string")) {
+      throw new EffectRuntimeRequestError("history qualification requires Run facts and an optional observation clock");
+    }
+    return qualifySettlementHistory(runs, typeof observedAt === "string" ? observedAt : null);
+  }
   if (jsonObject(value)?.schema_version === RECEIPT_BOUND_WAIT_REQUEST_SCHEMA) {
     return projectReceiptBoundWait(value);
   }

@@ -5,7 +5,7 @@
 | 状态 | 已接受 |
 | 替代 / 关闭 | 无 |
 | 日期 | 2026-08-08 |
-| 最近规范性修订 | 2026-10-01 |
+| 最近规范性修订 | 2026-10-27 |
 | 作者 | LoopX maintainers |
 | 范围 | 公开控制面文档、packet 合同、重构方向、测试策略 |
 
@@ -323,8 +323,21 @@ R5 短包投影也完整保留已有 CLI 结算计划，包括 effect identity�
 
 #### Heartbeat 与 TurnEnvelope 收敛
 
-沿用既有 M7.4 与 roadmap S2/S3/S6/S8，统一 heartbeat 和 Turn host 消费的
-**执行事实**，宿主效果的所有权仍分别保留。现有大 quota packet 与小 TurnEnvelope
+沿用既有 M7.4 与 roadmap S2/S3/S6/S8，把 heartbeat 和 Turn 执行统一为
+**一份受治理工作契约**，显式保留宿主效果所有权。[Controller/executor RFC](controller-executor-unified-contract-v0.zh-CN.md)
+拥有完整 schema/消费者迁移和可选模型会话分工：以同一 schema、full/delta 交付及不可变
+恢复替代长期 quota/Turn 视图。这不宣称 cutover 已交付。已准入 Todo 随后等待定时、PR 或能力时，
+typed receipt owner 保留原回写与结算路径；即使工作已 deferred 或等待已到期，重入也
+只投影原收尾，不恢复业务执行、不选择后继、不创建重试时钟。恢复复用原回执中的正向
+工作准入和精确结算绑定；工作区修复本身没有业务结果，须先经同轮正常 guard 对精确
+同一 Todo 的新鲜选择重新准入。没有该选择的宽泛兼容标志不能把原结算绑定变成工作
+准入。原语义重规划轮次仍保留该决策，不会被误当成已有业务结果。真实 File/SQLite CLI 验证
+返回命令、拒绝换绑、一次回写与扣额、初始重规划及已结算重放。此源码路径修复不代表
+安装宿主采用或完整成本验收。
+显式选择的 CLI 程序现通过共享 invocation transport 保留到生成的工作选择、必读、
+调度及结算/恢复命令。默认路由不变；选择程序不新增准入或执行权限。候选安装和
+接收者实际采用仍须与命令路由资格分别验收。
+现有大 quota packet 与小 TurnEnvelope
 都不是仅凭大小就合理的目标形态。可选 memory 参与事实现进入一个有界、签名覆盖的
 envelope 投影，Codex CLI 保持关闭隔离；这不代表安装态 heartbeat/App 或模型收益
 已验收。
@@ -458,8 +471,441 @@ live 模型结果、App 采用或以下三项收敛验收完成。
 | Todo | 可观察结果与决定性验收 |
 |---|---|
 | 核对 heartbeat 与 TurnEnvelope 的执行和上下文要求 | 同一捕获的权威决策保留 actor/Goal/Todo、必读全文、claim/lease、选择、replan/收尾、带条件结算和 scheduler 所有权。删除渲染分支前列明遗漏与重复事实。覆盖可选能力关闭、仅 recall、仅 ingest、绑定失效和 provider 失败；私有详情只经有权限的引用访问。 |
-| 在真实宿主 renderer 采用同一 typed 投影 | heartbeat full/thin 与 Turn host 消费同一执行事实及同 Turn 捕获/详情入口；显式保留通知和 scheduler 的宿主传输。真实 File/SQLite CLI 与打包 Codex App 覆盖重入、来源丢失、必读前拒绝、迟到结果、backoff 和一次结算；补读不触发第二次准入。最后调用方迁移后才退役旧投影。 |
+| 在真实宿主入口采用统一契约 | heartbeat full/thin 与 Turn host 消费同一 schema 及同 Turn 捕获/详情入口，不长期保留分格式的语义视图；显式保留通知和 scheduler 的宿主传输。真实 File/SQLite CLI 与打包 Codex App 覆盖重入、来源丢失、必读前拒绝、迟到结果、backoff 和一次结算；补读不触发第二次准入。最后调用方迁移后才退役旧投影。 |
 | 核验上下文形态及迁移默认 | 将相同的正常、replan、等待/恢复与可选能力负载同时对照当前完整和短包路径，测量载荷/model token、详情 IO、延迟、资源增长、遗漏、决策与结果质量。数据丢失、重复效果、身份和结算错误保持硬约束；保留受支持的已保存 prompt/回执与可逆 rollout，根据证据再改预算或默认。 |
+
+**上下文成本与投影融合：下一实现切片**
+
+现有完整来源交付修复了要求遗漏，但共享 `work_context` 并不意味着两种传输已经紧凑。
+改变默认值前，先用同次捕获的数据对照两条生产投影。区分包字节与模型输入，以及操作者/
+控制面轨迹与 solver 轨迹；操作者收到大包，不能证明 solver 消费了那个包。初次返回、
+截断后的恢复和必要详情读取应合计，缓存输入仍占上下文；历史上漏要求的短输入不能作为
+效率基线。
+
+下一切片继续归属上文已有三个融合验收流：
+
+1. **以完整首包、后续子树增量作为融合目标。** 优先优化 benchmark case 内 solver 实际
+   消费的普通 `quota should-run` 输入，实验操作者/控制面对话及个人维护包为次要项。
+   共享投影首次完整交付，支持温态复用时只交付精确变化子树。Solver 保留产品入口，
+   两种旧 packet 格式共同迁入统一契约。
+   包内去重和冷启动缩减作为配套；连续做小清理不能替代重复输入路径的验收。存储 capture
+   缩小或 import 清理不能证明模型输入节省。
+2. **跨宿主使用同一契约、同一交付机制。** 扩展已有 typed interaction/work-context owner，
+   同时生成完整和增量上下文，用统一 schema 替代 quota 与 TurnEnvelope 输出 schema；
+   旧 decoder 只服务具名迁移 reader 和历史回执 replay。不同宿主外层包装不构成不同契约
+   视图。保留原始捕获、required-source 校验、调用、选择、结算与详情入口；Python 保留来源 IO，host 保留效果执行和上下文连续性
+   观察。不新增独立准入服务、diff daemon 或 Python 上下文决策 owner。刻画调用方并在采用后
+   删除被替代投影。输出释放前的 host 传输 ACK 既不证明模型完整收到了内容，也不证明其仍被
+   保留。现有 capture/handoff 是接入位置，并非已经实现的连续性契约。
+3. **保留完整当前权限事实与冷启动要求。** 每次响应重新给出身份、动作、准入、范围/审批/停止
+   条件、取消、选择、claim/lease、未完成必读及结算/scheduler 义务。注册的完整来源及 packet
+   投影可以精确复用，当前控制结果即使字节未变也完整交付。复用的要求正文仍具有完整约束力，包括其中
+   的文字停止条件；它不是摘要或可选背景。重建后的上下文保留全部原始
+   要求。先在结构化 owner 理清混合 Todo 历史和验收解释，再改变必读范围；时间、owner、状态、
+   标题、长度均不能证明过时。把必读正文放到引用后再全读回来不是节省，替换累计备注是状态
+   变化而不是交付压缩。
+4. **自动全量回退，不增加人工 gate。** host 显式提供此前完整交付投影的上下文连续性依据，
+   绑定 Goal/Agent、消费 session 与 context epoch、投影版本、来源 capture 及投影 digest。
+   仅有文件、匹配 hash 或历史回执不够。compaction、reset、不能证明连续性的重启、输出截断、
+   损坏、身份/版本不匹配或保留状态未知，自动选择完整当前投影。不引入审批、确认问询、
+   第二次 quota 准入或扣额；已有真实停止和来源不可用规则继续生效。
+
+**已接受的增量交付设计（待实现）。** 一期须同时包含共享投影、benchmark solver 与
+产品化 Codex App 两个调用场景及各自的全量回退；单独增加 diff helper 不构成交付。
+
+| 边界 | 提议行为 |
+|---|---|
+| 基线归属 | host 跟踪模型输入的完整交付和上下文连续性；typed 投影核验所提供的绑定并计算 delta，不能从磁盘推断保留状态。不支持的 host 继续全量交付，不要求模型自行声明“仍然记得”。 |
+| 完整捕获 | 保留不可变的当前完整决策，供审计、签名与同次捕获恢复。delta 只是展示，不成为新的权威存储，也不用于修改 Goal 状态。 |
+| 增量单位 | 精确比较注册的完整 JSON 子树，保留标量类型、缺失与 null、空值及完整字符串。数组按精确摘要所绑定的基线索引编辑，并表达长度变化；索引只是传输坐标，不是推测的实体身份。重排须精确恢复，若全量更小则选全量。不忽略时间戳/revision，也不从正文猜等价性。使用分层变化树表达完整值、对象变化/删除及数组项目/长度，避免重复长路径前缀。 |
+| 消费恢复 | 基线缺失/不匹配、跳过/乱序 delta 或输出截断，从原始 capture 返回完整当前投影，不重新准入。丢失的 delta 不能确认为下一基线；完整交付后重设基线，以全量刷新限制增量祖先链，避免无限累积 patch。执行前仍核验来源新鲜度与权限；展示恢复不能重新授权过时或已取消的决策。 |
+| CLI 采用 | 保持普通 quota 入口和现有 capture/detail 路径；能观察活跃模型上下文的 host 在传输边界提供可选基线绑定。没有连续性观察者的裸 CLI 返回全量，不能静默信任上次输出文件。具体参数/wire 形式在调用方刻画后确定，不新增命令族。 |
+| Turn 采用 | 消费同一完整/增量上下文 owner，同时保留 Turn 签名和外层 executor 效果归属。host 独占的结算执行与手动 CLI agent 的可执行结算义务仍有区别。 |
+| 表示选择 | 计入绑定和删除元数据后，只有更小才发送 delta，否则发送全量。不为字节目标截断值或改变来源选择。 |
+
+以下按 surface 区分的绑定描述现有交付/迁移契约；对应 reader 活跃时仍必须遵守。
+Controller/executor 提案的 C1–C9 替换两种输出格式；历史 capture 保留原版本，
+不能借用新 schema 基线。
+
+**来源与变化边界。** 共享的 `context_delivery_v1` 展示覆盖完整 quota packet、
+完整 Turn envelope 及其公共 work context。surface 纳入既有 Goal/Agent/session/epoch/
+capture 绑定，不同展示不能借用彼此基线。扩展的是展示，不改变准入、持久化或结算 authority。
+注册的完整 packet 投影可精确复用未变子树，未知根字段仍每轮完整交付。
+
+当前身份、动作、准入、范围/批准/停止条件、取消、claim、来源健康、待完成读取、quota
+及 scheduler 事实仍每轮给出。结算身份、命令、步骤顺序、条件和附件要求也保持当前完整。
+静态前置说明、编写 schema 和可选附件 guidance 可精确复用；温态 wire 未重发，不减弱
+它们的约束力。既有 vision audit 的说明适用相同规则，当前判断仍每轮给出。这些控制 owner
+内的未知字段保留每轮交付。delta 不再重复携带另一份相同的当前控制字段。
+
+work context 保留注册的完整 Goal 叙述、canonical 验收正文和选定 Todo 文字/备注。
+Explore owner 注册精确证据、guidance 和编写元数据；编排 gate、分支选择、分页、当前
+来源 revision 和未知字段继续每轮交付。来源解释、上下文读取指令以及 Todo read-model
+字段名描述可复用，不删除实际 Todo 字段、当前 revision 或来源依据。未知或混合来源若无
+合格 split 则完整交付；来源身份不明确或读取不完整时选全量。变更字符串仍完整替换，包含
+迟到约束；不忽略证据状态或时间戳。
+
+此前仅正文 split、变化数组整段替换及逐叶重复路径是初步实现，不是效率目标的上限。
+当前 codec 将必发字段直接放进同一分层变化树，其余部分计算精确变化。数组增删、重排、
+重复值和 null 都针对该精确基线做结构转换，不模糊匹配。owner 校验预期变化树并重建
+不可变完整目标后才交付；即使其余 patch 能重建正确，漏掉未变的当前控制字段仍会被拒绝。
+损坏、丢失、基线不匹配或更贵的 delta 自动采用同 capture 全量表示。
+
+比较计入冷启动全量 envelope、绑定、必发控制、变化树元数据、变化值及恢复读取。
+狭窄正文比例不能代表整包复用；假定基线保留的离线字节结果仍不证明真实 solver 输入节省
+或模型成果。准备/恢复继续使用既有 projection RPC，两种传输共用同一个 TS codec，
+Python 仅作薄 adapter；生产 host 采用验收继续保留。
+
+**首个真实调用方与压缩竞态。** 当前原生 Codex CLI session adapter 只观察会话身份，
+capture/handoff 的 release 发生在 stdout 交付之前，两者都不提供所需的模型输入连续性
+证明。读取保存的原生历史，或在模型请求发出后才观察到 compaction，也已经太迟。因此首个
+调用方需要在现有 host 的模型输入组装边界接入 adapter，具备下列性质后才启用增量：
+
+1. compaction、裁剪、restore、fork 或连续性未知时使 context epoch 失效，并观察完整输出
+   交付，而不是文件创建。
+2. 候选展示绑定原始 capture 与预期基线。在提交模型输入前，置于同一顺序边界内再次核对
+   epoch 和基线；若已变化，从该 capture 替换为完整投影。仅有 CLI stdout 回调不够。
+3. 只有该精确展示完整进入活跃模型输入后才推进基线。失败或 ACK 不确定时不能确认新基线，
+   下一次发送全量；该传输确认仅证明交付，不证明模型理解。
+
+这是 host adapter 的验证条件，不是向 Agent 或 owner 发问的步骤。真实 host 尚无该接入
+边界时，普通 CLI 自动保持全量；全部走 full 的 pilot 不能证明增量收益。不能禁用原生
+compaction 来制造连续性，也不为这项优化另建模型 runner。先通过成对的 host 边界原型
+验证现有传输能否支持 adapter；负结果保留基础包缩减的价值，并记录具体缺失的集成点。
+
+| 情况 | 自动表示选择与效果行为 |
+|---|---|
+| 首次调用或 host 不支持 | 完整当前控制与上下文；不能仅靠输出文件建立可信温态基线。 |
+| 同一 epoch、基线已确认且 delta 更小 | 当前控制全量，加变化来源子树和删除；未变要求保留原有约束力。 |
+| guard 到模型提交之间发生 reset/compaction | 使基线失效，在提交前将候选 delta 替换为同 capture 的完整投影；不重新准入或扣额。 |
+| 交付缺失、损坏、截断或乱序 | 使相应基线失效，从原 capture 恢复全量。host 无法完整交付正文时沿已有完整读取路径恢复，不确认温态基线。 |
+| 来源不可用或权限变化 | 保留既有拒绝/重新 guard 规则；存储的完整 capture 不能制造当前权限。 |
+| 增量元数据比全量更贵 | 发送全量，不裁剪值、放宽限制或要求 owner 选择。 |
+
+**一期调用方与交付顺序。** 可独立评审的基础包缩减先进入既有集成测试，该测试不等待
+新协议。已接受的设计须在一期同时验证下列两个场景，使用同一 typed 投影与回退契约。
+benchmark 可以先落地，但产品化 Codex App 尚未验收时不能关闭一期。
+
+| 调用方 | 一期验收 |
+|---|---|
+| Benchmark solver | 既有普通 quota 路径先交付全量，确认温态基线后交付更小的精确子树变化。在匹配且已授权的测试中统计首次及补读的全部模型输入、详情读取、工具调用、后续决策和验收成果；管理包或离线字节统计不能代替 solver 采用。 |
+| 产品化 Codex App | 已交付的 heartbeat/bootstrap 与 quota 续跑入口复用同一 owner，提供实际打包与安装态读回。验证温态增量及其后有效动作，并覆盖首次使用、重启/恢复、压缩/裁剪、基线丢失和同 capture 全量恢复。检查既有产品入口及可见错误/恢复结果；只有 CLI fixture 不证明 App 采用。 |
+
+每个 host 都须建立前述模型输入顺序与连续性边界，验证各自真实 adapter，不能借另一
+host 的证明替代。若 Codex App 缺少该接入点，记录具体缺失的 host 边界、继续安全全量
+交付，并保持该一期验收未完成；全部走 full 的 App pilot 只是正确性回退，不算增量
+产品化完成。这是工程证据缺口，不能变成运行时 owner 问询或新增准入 gate。保留现有
+通知、scheduler、取消、claim、结算与恢复归属，不另建 runner 或 authority。
+
+同一 owner 用于 Turn 传输后，只在调用方采用后退役被替代投影分支。冻结 campaign
+保留其来源/处理，通过回放和另行准入的后续运行验证新交付。设计接受本身不授予合并、
+发布、安装或新增 benchmark 运行权限；运行时回退保持自动。
+
+**原生输入边界刻画（局部验证，尚未启用）。** 显式选择运行的
+`tests/control_plane/test_codex_context_boundary.py` 使用真实 Codex `exec` 和
+`app-server` 二进制，连接确定性的本机 loopback Responses provider。在
+`0.163.0-alpha.11.1` 上，两条路径均能保留首次完整来源与一条字面温态变化，并通过
+`SessionStart(compact)` 在自动压缩后的第一条模型请求中交付完整目标来源。
+oracle 检查实际发出的模型输入，而非 hook 日志或 stdout。这只验证传输原语：fixture
+没有实现共享子树 owner、运行 solver，也不证明打包或安装态的 App 采用。
+
+成对负例说明了为何单靠该 hook 仍不足以构成 adapter：
+
+- 默认 hook 输出会溢写并缩成预览。首尾要求同时出现，仍不能证明中间正文进入模型。
+- 未信任的 handler 不运行。配置 hook，或给 app-server 启动器传 CLI 的信任跳过参数，
+  都不是交付证据。测试只信任其隔离环境内自建的合成 handler；产品安装须保留宿主
+  既有信任策略。
+- compact 恢复 handler 非成功退出后，两条受测宿主仍发送下一条模型请求，且完整
+  必需来源已缺失。验证将此记录为预期失败，不算恢复通过。
+
+还在不配置 hook 的条件下验证了 app-server 的键控
+`turn/start.additionalContext`，同时覆盖 `untrusted` 和 `application` 类型。
+小型完整来源能进入首次及温态请求，但在自动压缩后缺失；大型来源在首次请求中
+就已不完整。因此，不透明 source key 既不是完整交付回执，也不是压缩后仍保留的
+常驻来源。这些案例继续记为资格验证预期失败，不证明全量回退有效，也不构成将
+来源数据提升为指令的理由。当前 adapter 不得从该字段推断连续性，也不应在宿主
+边界未变化时反复尝试这些不受支持的路径。
+
+[原生 hook 契约](https://learn.chatgpt.com/docs/hooks) 提供了有用的执行顺序和显式完整
+输出选项，但 hook 成功回调本身不能建立故障安全的输入边界。生产交付继续保持全量，
+直到宿主集成能在 hook／输出处理后核对候选输入，并在失败、丢失或 epoch 改变时自动
+替换为同 capture 的完整来源。该回退须覆盖 hook 信任、超时、截断和进程失败；不能
+以新增 Agent／owner 问询或禁用 compaction 弥补。下一步须在每个调用方的既有宿主
+最终输入组装边界证明这一集成，再让共享 typed 投影采用已验证的接缝。本检查点保持
+一期未完成，不将合成 usage 计数解释为 token 或成果收益。
+
+**轻量生命周期 hook 与捕获文件恢复（架构修订，待 review）。** 上述原生 hook
+负例继续作为整包 hook 注入的证据，不应成为共享实现的前置阻塞。生命周期事件可以
+使基线失效，而不传输大型要求正文。恢复通过普通入口完整读取不可变捕获；因此，
+恢复控制消息可以先于完整来源读取，依赖该来源的业务工作仍须等完整来源读取后执行。
+这修订了此前“压缩后第一条模型请求必须装入全部恢复正文”的要求，不增加 owner
+问询、准入或扣账。
+
+| Owner | 职责与边界 |
+|---|---|
+| 既有 quota/Turn producer | 只计算一次完整权威结果，先持久化不可变捕获，再发布展示形式。保留既有必读来源、签名、选择和结算 owner。 |
+| 共享 TypeScript 上下文投影 | 绑定 Goal/Agent/session/epoch、capture 和摘要；比较已注册来源正文；每次保留新鲜控制与来源事实；选择较小的精确差分或全量，发布前按完整目标重建核对。 |
+| Codex 生命周期 adapter | 观察 startup/resume/fork/compaction，使先前连续性观察失效；resume 只可保留未确认候选，复用仍须新的实际输入证据。只携带小事件和捕获恢复引用，不传整个 packet。每种真实宿主分别验证 hook 配置、信任与事件覆盖。 |
+| 既有本地 capture/detail IO | 有边界地分段读取原捕获，保留完整正文，核对目标身份和摘要。预览或写文件成功不证明完整消费。恢复展示不需要新 guard 或 quota 操作。 |
+
+**时序与失败处理。** 首次使用或连续性未知时走全量；只有同会话、同 epoch 内
+完整且可观察的交付才能成为温态基线，文件存在本身不够。依据该基线生成下一展示，
+同时留存当前完整捕获。生成期间 epoch 改变则丢弃待发布差分，走全量恢复；事件在
+发布后到达时，小型恢复引用指向同一份当前捕获。丢失或截断的 delta 不推进确认基线。
+限制差分继承深度并定期全量刷新，不积累无限 patch 链。
+
+恢复 wrapper 捕获主 handler 错误，从保存的捕获生成有界的全文读取引用。事件观察
+缺失或 wrapper 健康未知时，在下一次普通入口取消温态资格。只重试展示 IO，不重放
+准入或业务效果。捕获缺失/损坏继续走既有来源恢复失败，不能伪造基线。事件检测、
+完整交付与完整文件消费分别保留证据；恢复提示不能变成新增的强制用户问询门槛。
+
+**实现与验证检查点。** 共享投影已通过既有 Turn RPC 提供 full/delta 准备和同捕获
+重建，也复用于普通 quota 上下文。仅当完整正文逐字相同时省略重复的 selected-Todo
+标题，保留不同标题及来源状态。真实 File/SQLite quota 测试覆盖普通 CLI、Codex App
+模式、共享 Turn 来源内容、epoch 丢失、差分损坏、来源状态不变和零额外扣账。这是
+产品代码提案，还不是已启用的原生温态 adapter 或安装态 App 交付。
+
+普通 `quota should-run` 的 capture rendezvous 现已把该 codec 接到 JSON stdout，
+同时支持 quota 与 `--turn-envelope`。已获资格的调用方在被保留的 `decision.json`
+旁写入私有 `delivery-request.json`，沿用 `scope` 及可选的 `baseline`、`retained`
+输入，并在既有摘要绑定的 release 中添加 `context_delivery: true` 显式启用。
+CLI 将 Goal/Agent 绑定到实际决策，保存不可变的 `projection.json`，返回共享全量/
+差分展示及完整恢复文件的路径、字节摘要。优化输入缺失、损坏、身份不符或不可用时
+返回全量，不重跑准入或改变原决策成功状态。旧 release 与普通调用的输出、文件行为
+保持不变。
+
+真实 File/SQLite 子进程测试覆盖首次/温态输出、epoch 重置、损坏请求、跨 Agent
+拒绝、来源保留、原 receipt 和零扣额。差分准备后仍可从精确保存的投影恢复。
+这只关闭 CLI producer 接缝；rendezvous 仍位于原生输出处理之前，release 不等于
+模型交付 ACK，没有合格连续性观察器的调用方不得启用温态复用。实际 solver 与
+安装态 App 的生命周期消费者仍未获得资格。
+
+恢复引用现包含可直接执行的 `quota context-read` 命令。这是既有 quota 入口下的
+本地 capture IO，不另建投影或决策 owner。传入原始 `--capture-file` 和
+`--capture-sha256`，依次执行每页 `next_command` 到 `eof`，按字节 offset 顺序组合
+`content`。`--page-bytes` 限制 UTF-8 内容大小（256–8192 字节，默认 4096）；JSON
+元数据和 Host 包装同样计入输出成本。每页返回内容前校验完整文件摘要及 JSON object。
+文件被替换、offset 错误或 capture 不可用时返回错误，不交付部分上下文或产生 quota
+副作用。父目录别名仍可使用；拒绝被替换为符号链接的最终文件及非普通文件。该命令
+无需初始化 Goal 或 runtime，不执行 guard、准入或扣额。分页 EOF 只表示文件结尾，
+不证明模型完整消费，也不授予基线复用资格。传输局部的 `context_capture_page_v1`
+形状不扩展控制面生命周期状态。
+
+原生传输 probe 使用实际共享投影、有界工具读取和很小的 `SessionStart(compact)`
+引用。确定性的本机 provider 请求相应读取，不证明自主 solver 会遵循恢复路线。
+保留之前整包 hook 与 fail-open 负例；从实际发出的模型输入验证首次完整读取、温态
+差分、压缩、主 handler 失败和完整目标读回。成本与调用次数须包含每个恢复分段，
+hook 或 packet 变小本身不等于节省。下一接入是让 Codex 生命周期 adapter 消费
+既有普通 quota capture/detail 路径，覆盖一期两个调用方，不增加第二套 runner 或审批流程。
+
+组合原生 fixture 现通过 Codex 工具执行真实 `quota should-run` CLI，使用 SQLite、
+私有 rendezvous 和共享投影；在实际发出的模型输入中观察到完整分页输出后，才提供温态
+基线。Codex exec 覆盖普通 quota，app-server 覆盖 Turn envelope。两条路径均在自动
+压缩后恢复同一份不可变 CLI 投影，包含主恢复 handler 失败，且不触发第三次 guard 或
+quota 扣额。这补齐 producer 到原生传输的测试缺口；独立 oracle 检查确定性 loopback
+provider 的实际输入。来源正文、来源状态和原始 capture 独立于
+delta 校验。包括恢复在内的全部分页仍属于成本边界；这些读取现执行带摘要校验的
+`quota context-read`，不再自行编写文件切片。安装采用和自主成果保持未完成。
+
+既有 CLI rendezvous 还接受可选的 `native_input` 交叉校验，字段为 `trace_bundle`、
+`tool_call_id`、`capture_file`、`capture_sha256`。原生 Codex trace-v1 reader 核对
+产生当前仍在执行的、由模型发起的 `exec_command` 调用的那次推理输入，是否包含精确
+全量基线；要求 session 匹配、trace 顺序有效、已完成 response 包含该调用，并观察到
+完整工具结果或全部摘要绑定的 context 分页。更早的推理历史、部分分页、预览、其他
+消息角色、已完成调用及隐式服务端历史均不具备资格。code-mode 的 `exec_command`
+子调用还须绑定唯一仍在执行的原生 cell，其模型可见 call id 与完整 JavaScript 必须
+匹配当前推理 response。完整正文/分页须实际出现在模型可见 custom-tool 文本块中，
+可以是正文或原生 exec 结果封装；私有子调用结果及未转发的输出不具备资格。观察缺失、
+格式错误、超限或不兼容时，丢弃保留声明并自动全量；普通调用方保持不变。
+Reader 只读取已经启用的私有 trace，复用既有传输大小上限；读取有界事件日志尾部，
+不读整份 session，当前推理已超出该窗口时自动全量。不启用诊断或改变原生 session。
+Python 持有 provider 特有的 IO；基线身份、新鲜度和精确重建仍由共享 TS
+投影器校验。
+
+该检查只能收窄调用方的保留声明，不能自行生成声明或证明未来 dispatch 的顺序。
+只有每个原始字节仍可观察时，才可复用全量基线；reader 不从已存文件推断 patch 链。
+原生 CLI/SQLite 组合使用该 reader 选择温态交付，loopback provider 保留为独立
+oracle。当前生产接入新增 `quota context-hook --codex-context-dir <private-session-dir>`，
+从 stdin 读取原生事件；普通 `quota should-run` 在既有 capture destination 上携带同一
+`--codex-context-dir`，直接调用共享 projector，无需测试侧 rendezvous controller。
+该 Python 模块只负责 Codex 特有的事件和私有文件 IO，不新增 capability、runner、
+Goal 状态或决策 owner；TS 继续持有差分、绑定和回退语义。
+
+调用方为每个原生 session/workspace 准备独立的私有目录，并通过原生配置与信任流程
+把上述 hook 命令接到 `SessionStart`、`PreToolUse`、`PreCompact`。CLI 不安装 hook、
+修改信任或启用 tracing。它核对当前 `CODEX_THREAD_ID`、工作目录和 active call，并
+要求已经启用的 trace 提供完整输入；缺失、不可兼容或无法确认时自动全量。移除 opt-in
+参数即可恢复原路径；普通参数和旧 rendezvous 行为保持不变。selection 命令继续携带
+同一 transport 参数，不增加人工步骤。
+
+启动、fork、压缩事件使 epoch 失效。同 session/workspace 的 resume 清除 active call，
+只保留未确认候选及其 epoch；这是查找线索，不是连续性回执。新的仍在执行的调用必须
+独立证明完整基线存在于实际模型输入；输入缺失或裁剪仍全量。同 session 的多个原生
+bundle 只由唯一有效的当前调用/输入观察选择，不使用 mtime 或最新文件；歧义或发现
+范围超限仍全量。同一 session 的恢复提示只带最新不可变
+capture 的完整读取命令，跨 session 不借用旧引用。生成候选和保存最新恢复引用使用同一
+私有锁；发布之后的压缩也能恢复同 capture。主 journal 写入失败时，handler 仍返回已知
+恢复引用；生产发布无法记录引用时返回原全量。候选文件从不等于 ACK，完整模型输入需在
+每次复用时重新核对。`context-read` 读回的完整投影可以提供基线正文证据；`1` 与 `1.0`
+均属 JSON number，布尔值仍须不同。基线缺失或错配、来源权限与新鲜度规则不变。
+
+原生 exec/quota 与 app-server/Turn 测试现执行上述生产 CLI 和 hook，而非测试侧
+生命周期 controller；覆盖完整初读、温态差分、发布后自动压缩、主 handler 写入失败、
+同 capture 完整补读和零额外 guard/扣额。它们仍使用确定性 loopback provider，不证明
+真实模型自主遵循恢复提示或总成本收益。同一生产路径也通过原生 app-server 的
+code-mode 验证 quota 与 Turn 两种视图，覆盖父 cell/子调用绑定、输出转发、压缩和
+主 journal 写入失败。cell 缺失、错配或结束以及输出不完整时仍全量。这验证原生
+code-mode transport，不等于已安装桌面产品采用。下述常驻恢复入口验证整个 hook 未执行/
+被杀；安装采用、trace 与全部补读开销及真实 solver 成果仍须独立验证；不开新 runtime/owner
+问询门，一期保持开放。
+
+既有 benchmark worker 现通过显式 `context_delivery: "on"` heartbeat 选项消费上述生产
+路径（默认 `"off"`）；EdgeBench/SForge 以 `--context-delivery on` 暴露同一选择。trial 私有 home 放置
+产品 hook，并用原生 `hooks/list` 获取精确 hash，仅在该进程信任这些 hook；无关
+workspace hook 仍不受信任。显式启用的私有 trace 支持输入 observer。设置失败继续
+普通全量，既有 checkpoint handoff 保留原 capture 所有权。run/install/wake receipt
+记录选择，设置可用不等于保留回执。默认运行不新增 hook、trace 或 trust 配置；改变
+treatment 须另起 trial。产品 renderer 与恢复分页保留原 Turn、capture 和固定 CLI
+路由。确定性原生测试驱动真实 worker，覆盖 quota 与 Turn 两种视图的完整初读、温态
+差分、自动压缩及同 capture 完整恢复，零额外 guard/扣额。第二次真实 worker 调用和
+第二个 code-mode app-server 进程现恢复同一原生 session，核验先前完整输入，直接
+选择温态差分而不再初读；quota 与 Turn 两种视图均覆盖。之后的原生压缩仍恢复原始
+全量 capture。benchmark 每次 wake 使用独立私有 trace 子目录，旧 wake 不进入热路径
+诊断扫描。这些确定性检查验证跨唤醒传递，不证明 solver 净收益。Harbor/container 与 Codex App
+安装与完整 solver/成本资格仍开放；hook 丢失恢复在下文验证。成本比较须计入原生发现、
+trace IO 和所有补读。
+
+同负载原生输入重放现将子树 codec 与读取策略分开：先在相同分页大小、转发与批量
+策略下比较全量和差分，再单独比较读取策略。统计全部重复模型输入（含历史与工具
+定义）、模型请求、CLI 读取和私有 trace 字节。一次初读加一次温态续跑，节省比例
+可能小于长期温态序列。将更小的页合并到更少模型轮次，可能增加 CLI 调用却减少重复
+输入；不能把组合收益全部归给 codec。对已捕获输入的确定性重放只验证传输成本估算，
+不证明自主 solver 成果、计费 token、缓存收益或安装采用。
+
+code-mode 调用方可以直接转发成功的 CLI stdout，避免再次序列化 exec 结果包装。
+只有每一页都完整到达**最终模型输入**时才可合并有界读取；还须考虑宿主的独立上限。
+单独调高请求的输出预算并不足够：原生宿主可能省略文本块，或在仍可解析的 JSON
+内部截断内容。因此 JSON 解析成功和分页 EOF 都不证明传递完整。须验证连续 UTF-8
+偏移及原始完整摘要；批次失败时缩小批次并重读同一原 capture，不重新准入。单次
+重放不能资格化通用批次数或提高默认上限。保留截断负例，并在后续推广成本中计入恢复。
+
+生产 quota 恢复指令与原生 resume/compact hook 现共用这份有界读取指导，包含直接转发
+成功 stdout、小批量自适应读取及同 capture 重试。损坏的模型可见页不贡献保留证据，
+也不会永久否决当前输入中随后完整的重读。分页大小改变后，原生 observer 仅在每个
+完整区间都匹配原摘要绑定的字节、且区间并集覆盖整个 capture 时接受重叠读取。
+缺口、只有预览或不同 capture 仍不足以证明保留；无需清空历史、新增 ACK 或重新准入。
+组合 code-mode 测试覆盖批量 stdout、重叠分页边界、跨进程续跑、温态差分及原生压缩
+恢复，包含 quota 和 Turn 两种视图。
+
+事件 handler 完全丢失时，现有独立的**只读恢复入口**，不新增执行或准入路径。
+`quota context-read --codex-context-dir DIR --goal-id GOAL --agent-id AGENT`
+仅在私有 journal 匹配环境中的原生 session、当前工作目录和所请求 Goal/Agent 时，
+选取最新的原 capture。它不读取当前 Goal、不执行 guard、不扣额，也不修改 journal。
+缺失、跨身份或旧版未标注范围的 journal 拒绝隐式查找；已有显式摘要绑定引用仍可使用。
+查找从 offset 零开始，后续每个 `next_command` 固定到原路径和 hash，避免并发发布
+更新 capture 时混读。文件缺失、内容变化或符号链接继续沿既有 reader 拒绝。
+
+实验开关现为 `--context-delivery {off,on}`，默认 `off`。复用已有声明的宿主上下文：
+`--codex-app` / 等价 `codex_app_heartbeat` profile，或 benchmark worker 既有
+`generic_cli` profile 加显式 `LOOPX_EXECUTION_MODE=heartbeat` 与
+`LOOPX_CONTEXT_DELIVERY=on` 声明。worker 既有执行 owner 拒绝非 heartbeat 模式，
+并把这些设置传递给原生工具；scheduler 声明不变。不通过进程名或环境中的原生
+session 启发式认证宿主。`on` 时，跑法声明缺失、不完整、
+矛盾或不受支持会在准入与 transport 写入前以非零退出码和可操作原因报错，hook 也遵守
+此规则。应修正声明或改为 `off`，不新增 owner 问询或审批。受支持跑法内，输入保留证据
+缺失或失效仍自动恢复同一 capture 的全量。hook、配置、已保存
+包展示和重入均传递这一二态选择。目录参数或 host handoff 本身不能开启差分。关闭时
+仍可回查原 capture 全量。这些调用方声明只选择受支持 adapter 路径，不授予执行权限，
+也不替代实际输入保留验证。
+
+`quota context-config --context-delivery on --codex-app` 通过 CLI 生成原生 hook/恢复配置，benchmark worker 复用同一
+provider helper。Codex App 共享配置使用 `--codex-context-root` 按原生 session 隔离
+journal，独立 trial home 保留 `--codex-context-dir`。只读查找不创建未知 session
+目录。心跳 bootstrap 保留 root/capture 参数，使用既有每次唤醒的 `LOOPX_TURN`
+绑定，不持久化固定 Turn ID。原生 hook 信任和私有实际输入诊断仍由宿主管理；缺少
+诊断时使用全量。生成配置不安装文件、不改变信任、不授予执行权限。参见
+[启用/读回/回滚](../../heartbeat-automation-prompt.md#opt-in-native-context-delivery)。
+本段验证生成配置及原生消费，不等于真实桌面安装采用或新的成本测量。
+
+原生上下文交付也可复用既有 checkpoint handoff 的同一 capture。checkpoint owner
+先持有并核验原始完整决策，按精确摘要释放后才执行原生投影。释放丢失或拒绝不发布
+优化结果；中断时保留原始全量 continuation，不再次 guard。原生中断 cursor 核验
+除既有身份/capture 路由外，也绑定 context 路由。宿主侧 preflight 保留完整原始捕获，
+Darwin 原生 checkpoint 限制保持不变。确定性原生测试覆盖普通持有释放、warm 复用、
+hook 丢失后的压缩恢复，以及唤醒中途捕获/拒绝。续跑 worker 测试读取最新生成的
+guard，在新 Turn 前通过正常入口结算独立核验的前次读回；旧历史不能替代新准入。
+这只验证传输组合，不构成新的成本/结果资格，也不授予修改冻结 trial 的权限。
+
+已保存 preflight 的交付现走公开 `quota context-project`：宿主固定原始路径/摘要和
+Goal/Agent/Turn，原生工具调用同一 projector/实际输入 observer，不再次 guard 或扣额。
+简短描述返回 full/delta 读取命令、可用的 target 和原始全量回退。冷启动全文仍可核验；
+原生状态不确定或可选 cache 失败选择全量，来源摘要/作用域失败则在发布前拒绝。
+物理文件和摘要的有界 IO 与既有 reader 复用。原生测试通过真实 checkpoint worker
+跨唤醒恢复后生成的 saved-read 入口验证 warm 完整重建及零 guard 重放。原决策新鲜度、checkpoint
+顺序和默认关闭时的全量预载保持；完整成本/solver 结果资格须计入新增描述及工具读取，
+不能只计算 delta 字节。
+
+新增匹配的确定性原生 worker 诊断，计入生成的 preflight、跨唤醒历史和全部分页；
+两侧使用相同合成要求及默认 function-tool 读取策略，并覆盖正反执行顺序。每侧两组
+双唤醒中，序列化输入 token 估算下降 35.83%，reader 调用从 72 次降为 48 次。
+冷启动输入约增加 11%，收益来自 warm 复用；耗时区间重叠，未证明延迟改善。
+两侧均开启诊断捕获，不据此认定相对未采集诊断时的追踪成本、自主 solver 成果或精确
+计费。既有真实捕获回放是另一种负载及读取策略，分别保留。
+
+后续以运行时源 `912d56036` 对照普通关闭 trace、普通开启 trace、显式差分并开启
+trace 三组路径，每组按交叉顺序执行三次双唤醒。计入生成 preflight、恢复历史、描述、
+常驻指令及全部 4096 字节串行读取。相对普通关闭 trace，差分累计序列化输入 o200k
+代理值从 5,482,641 降为 3,499,312（36.17%），整请求代理值从 5,892,161 降为
+3,801,600（35.48%），请求数从 114 降为 84；reader 调用从 108 降为 72，另增六次
+投影调用。全部样本核验原包完整字节、独立重建、session 连续性及不变的 guard/扣额
+次数。分词在计时之外完成；合成 loopback usage 不证明计费或自主 solver 成果。
+
+默认关闭对照也揭示 IO 代价：差分每次双唤醒保留约 5.77 MB 原生诊断，未追踪时为零。
+原生后台插件目录克隆占据大部分波动的总保留量；终点文件大小不等于累计写入。
+延迟、CPU 和净 IO 收益仍未验收。hook 身份查询现仅在临时原生进程关闭插件功能，
+避免启动无关目录；仍由原生 `hooks/list` 生成哈希，且只信任精确自有 hook。
+solver 配置、默认关闭路径和模型设置保持不变。真实原生配置回读核验该隔离，重复查询
+返回相同信任身份，且不发送推理请求；同一测试能够发现旧 helper 仍开启插件功能。
+上述成本数据采于本次 helper 修复之前，不代表其延迟或落盘收益。
+
+共享 codec 同时避免复制未变化或未选中的替换子树，以及对相同要求字符串重复规范化。
+V8 采样定位比较、尺寸计算及复制开销；受控修改使用 31 份固定真实 capture 回放已加载
+owner。四组交叉进程对照，每进程预热后测 12 次回放，prepare/recovery 平均耗时从
+347.30 降至 303.06 ms（12.74%）。所有交付输出逐字节一致；重建与值隔离核验保持两份
+来源不被修改。这只测单机已加载 codec，不含启动、CLI/backend IO、原生宿主、模型或
+完整 Turn；不改变 packet 字节或输入 token 结果，完整成本和 solver 成果验收仍开放。
+
+原生 adapter 改为复用既有 Core 原始 capture IO owner 的共享读取指导与投影，消除
+Core 反向依赖 CLI。CLI 展示命令仍在权限 IO 之前分派；事件记录、settlement 回读与
+memory ingest 保持原顺序。原生输入解析、调用绑定和摘要绑定分页核验分清职责，
+不削弱生命周期或完整覆盖检查。既有旧 quota adapter 向编码与恢复两侧提供自己拥有
+的字段绑定；调用方 JSON 不能指定更多可复用控制字段，未知字段仍为 fresh。这些调整
+保持已测运行契约，不新增另一套投影或兼容读取入口。
+
+显式启用的 benchmark worker 将简短恢复指令放入原生 `developer_instructions`，
+独立于 SessionStart/PreToolUse 的交付。原生 code-mode 消费者也可在隔离配置中携带
+同一产品 owner 生成的指令；应追加到既有宿主指令，不替换无关规则。触发条件是
+上下文丢失后继续一个已捕获的决策，不是每个普通新 turn 的前置检查。指令要求依赖
+该上下文的工作先读回同 capture，不增加用户问询；独立授权工作仍可继续，恢复不刷新
+权限或新鲜度。首个查找页提供既有的有界读取指导。关闭功能的 worker 不增加常驻
+指令。确定性原生测试在真实压缩中删除完整来源，随后跳过或杀死所有后续 hook 进程，
+由真实 worker 与 code-mode 宿主通过常驻公开 CLI 入口读回全部字节，零额外 guard/扣额。
+私有文件与 session 身份仍不构成保留声明；是否可复用仍独立核验实际当前输入。
+后续成本比较须计入常驻指令与全部恢复读取，先前测量不包含这条新指令。此处不宣称
+真实桌面安装采用或自主 solver 效果。
+
+Capture 回归验证同时区分 settlement 绑定与 closeout：receipt 已升级但仍欠语义
+重规划时，可以捕获无执行效果的 replan，且不授予交付权限；显式 pending closeout
+则抑制该捕获。真实 CLI fixture 和 typed selector 现分别验证这些事实，不再从
+receipt status 推断 closeout。
+
+在可选能力模式不变的条件下，比较匹配的普通执行、重规划和等待/恢复负载，覆盖首次交付、
+温态复用、reset、删除、数组重排、丢失/重复/乱序 delta、部分输出、来源/身份不匹配及迟到
+要求变化。重建结果须等于完整当前投影，fresh 控制事实始终不得省略。统计首次和补读的模型输入、上下文占用、
+cache/non-cache 与完整成本、读取次数、延迟和 IO，再验证后续动作与验收结果。恰好一次
+效果及 required-source 拒绝保持硬约束。序列化往返或离线 delta 仅证明表示可行，不能
+结算安装采用或完整成本验收。SQLite 继续承担默认本地性能资格，保留受影响支持后端的
+正确性/恢复验证。本检查点不改变 runtime 默认值、预算、必读规则、权限或活动实验。
 
 原生 Turn detail 采用现持久化真实 `run-once` producer 的完整 observation，由既有 TS
 envelope owner 将 Host 请求绑定到它。真实 File/SQLite CLI 检查实际 subprocess 输入，
@@ -468,6 +914,12 @@ fixture。只读规划与可选 quota capture 默认值不变，原生执行 Tur
 证据。证据缺失或不匹配拒绝再次调用 Host；legacy 缓存结果恢复与终态读回保留原 receipt。
 这只关闭 producer 到 detail 的传输缺口。真实模型、打包 App/Lark、后续 authority 检查
 及其余收敛矩阵仍独立验收，本切片不退役任何 Python 投影。
+
+新的 quota 与原生 Turn capture 共用紧凑 JSON 编码，去除所存详情的排版空白，
+完整保留决策值与字符串内容。原子发布、来源签名与重试仍由既有 owner 持有。
+File/SQLite 原生 Host 验证覆盖新紧凑格式与历史缩进观察，包括来源改变、详情
+缺失或损坏及恰好一次恢复。这是无损的传输成本缩减，不证明模型质量、完整
+Turn 成本或新的收敛默认值。
 
 共享 Host 结果适配器现在保留所提供文本，交给既有 Turn 校验器，而不通过截短使
 候选通过。超限后续行动原本可能丢失末尾审批约束却仍获接受。JSON 布尔值、数字和
@@ -509,6 +961,20 @@ conformance 覆盖拒绝与恢复。最终 no-followup 保留既有结算顺序�
 和累计 outcome，避免再次搬运无关任务的关联观察及选定 Todo 正文。真实 File/SQLite
 CLI 与 DSH 协议输入覆盖已配置检查、仅声明 outcome 两种情形；无选定工作的读取
 仍返回原列表。这只验证局部 IO 边界，不能替代真实模型收益、安装采用或整轮成本。
+
+原生验收／capture 矩阵还覆盖捕获后新增或修改工作、未来恢复条件以及显式移除检查。
+先验证并结算原合成工作，再进入新的 managed Turn：当前准入拒绝未关联／失效工作
+和待恢复任务；移除检查不会产生新的 owner 问询。累计要求及其来源完整保留，当前
+工作状态及其派生依据摘要可随实际变化更新。原详情仍可逐字节读取，不再次准入或
+改变 authority revision。这些案例验证既有边界，不确立新的执行默认，也不结清
+三条完整收敛验收。
+
+Goal 来源上下文现复用原 writer 的严格归属 parser，分离显式标记的生成 Todo 区域，
+通过共享 typed context owner 原样传递其余全部文字，附带完整文件摘要与被分离区域
+的来源记录。未标记／混合文档保留渐进式全文读取，归属错误拒绝。此处改变默认上下文
+交付，不改变 canonical Todo authority、源文件或累计验收。File/SQLite 原生 guard
+与签名 DSH 协议输入验证这一来源边界；模型采用、安装态 App/Lark、完整 Turn 成本
+及三条收敛验收仍未完成。任意大段正文完整保留，不做截断。
 
 下一步先调查获准真实 Goal 的活跃工作、peer/replan、等待/恢复和可选能力形态，
 将每条保留义务映射到共享 typed owner 与实际消费者，再完成一族调用方迁移，最后
@@ -557,6 +1023,13 @@ JSON 仍为 3,122。既有 runner 测试仍拒绝真实 stdout 膨胀，不改�
 关闭有界源码预算缺口；M7.4 仍未完成，packaged host 采用、模型 token／IO／延迟／
 结果证据及可逆 transport 默认决策继续保留。执行 quota、wire 限制和冻结的
 promotion 条件不变，不声称运行成本下降。
+
+#7161 取消旧 `protocol_action_packet` reader 格式支持，删除字段选择、summary
+重建、residue／opaque fallback 及其传输输入。Effect／CLI／Envelope／Host
+在转换或使用签名前明确拒绝旧包及 capsule witness。冻结历史记录保持原样；
+不带旧包的 v0 签名与执行检查语义不变。本项有界清理替代旧兼容承诺，不关闭
+M7.4 或 benchmark／Codex App 上下文传输验收。见
+[格式边界](../../reference/protocols/protocol-action-packet-decision-v0.md)。
 
 不引入通用 executor，也不降低验收门槛来让短包通过。保留未满足要求，分别记录
 传输等价、安装态宿主采用和有效模型结果。见
@@ -698,6 +1171,12 @@ M7 只有在真实 vertical slice 满足 Product Outcome Contract、旧路径被
 - `turn_driver/executor` 应在提交 receipt 前通过 `interpret_turn_result_packet` 派生 result status 和 next phase。
 
 ## 语义控制与执行归属
+
+可选的 [controller/executor profile](controller-executor-unified-contract-v0.zh-CN.md)
+在既有 owner 内分配模型职责：controller 是唯一面向 Core 的模型客户端，executor 在
+host 强制范围内交流自然语言工作与产物。它不同于确定性的 Turn Loop Controller。
+同一 Agent 可绑定这两个角色，不增加竞争业务 executor 或第二份权限。单会话仍可用；
+角色绑定、结果验证和完整成本资格先于默认提升。
 
 LoopX 的语义控制面跨 Turn、Agent 与 runtime 保持工作含义：intent、ownership、
 dependency、authority、evidence 和 continuation。执行责任覆盖它实际拥有的 typed

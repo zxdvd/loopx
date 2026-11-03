@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import os
+import json
+from pathlib import Path
 import uuid
 from typing import Any
 from .chat import require_matching_message_replay, require_matching_replay
@@ -10,10 +12,66 @@ from .file_lock import exclusive_file_lock
 
 
 SESSION_QUEUE_MAX_PENDING = 20
-SESSION_QUEUE_TTL_SECONDS = 3600
+SESSION_QUEUE_TTL_SECONDS: int | None = None
+
+
+def chat_runtime_activation_lock(runtime_root: Path, *, timeout_seconds: float | None = None):
+    """Fence new durable input against a managed-service runtime switch."""
+    return exclusive_file_lock(
+        runtime_root.expanduser().resolve() / "chat" / "runtime-activation",
+        agent_id="loopx-chat",
+        operation="chat_runtime_activation",
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def chat_runtime_activation_state(runtime_root: Path) -> dict[str, int]:
+    """Strict read of all accepted work; never initialize or recover a store.
+
+    The caller holds ``chat_runtime_activation_lock`` through the service switch.
+    Session summaries alone omit queued input and are insufficient for this check.
+    Unknown or unreadable records must not authorize stopping their consumer.
+    """
+    from .chat_store import CHAT_SESSION_SCHEMA_VERSION, CHAT_TURN_SCHEMA_VERSION, TERMINAL_TURN_STATES
+
+    sessions = runtime_root.expanduser().resolve() / "chat" / "sessions"
+    counts = {"sessions": 0, "nonterminal_turns": 0}
+    if not sessions.exists():
+        return counts
+    for directory in sessions.iterdir():
+        if not directory.is_dir():
+            continue
+        session = json.loads((directory / "session.json").read_text(encoding="utf-8"))
+        if not isinstance(session, dict) or session.get("schema_version") != CHAT_SESSION_SCHEMA_VERSION:
+            raise ValueError("unreadable Chat Session state")
+        counts["sessions"] += 1
+        active_id = session.get("active_turn_id")
+        active_found = not active_id
+        turns = directory / "turns"
+        for path in turns.iterdir() if turns.exists() else ():
+            if path.suffix != ".json":
+                continue
+            turn = json.loads(path.read_text(encoding="utf-8"))
+            if (not isinstance(turn, dict)
+                    or turn.get("schema_version") != CHAT_TURN_SCHEMA_VERSION
+                    or not isinstance(turn.get("status"), str)
+                    or turn.get("status") not in TERMINAL_TURN_STATES | {
+                        "queued", "starting", "running", "completing", "interrupting",
+                    }):
+                raise ValueError("unreadable Chat Turn state")
+            if turn.get("turn_id") == active_id:
+                active_found = True
+            if turn["status"] not in TERMINAL_TURN_STATES:
+                counts["nonterminal_turns"] += 1
+        if not active_found:
+            raise ValueError("active Chat Turn state is missing")
+    return counts
 
 
 class ChatIngressStore:
+    def runtime_activation_lock(self):
+        return chat_runtime_activation_lock(self.root.parent)
+
     def create_queued_turn(
         self,
         session_id: str,
@@ -22,21 +80,27 @@ class ChatIngressStore:
         message: str,
         attachments: list[dict[str, Any]] | None = None,
         goal_instance_id: str | None = None,
-        ttl_seconds: int = SESSION_QUEUE_TTL_SECONDS,
+        ttl_seconds: int | None = SESSION_QUEUE_TTL_SECONDS,
         origin: str = "external",
         external_agent_target: dict[str, Any] | None = None,
+        collaboration_request: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], bool]:
-        """Persist one bounded follow-up without replacing the active Turn."""
+        """Persist one follow-up without replacing the active Turn.
+
+        Accepted user input has no implicit wall-clock expiry. Callers may
+        still supply an explicit TTL for time-sensitive work. Queue capacity,
+        source revalidation and Stop remain independent bounds.
+        """
 
         from .chat_store import _opaque_id, _instant, _atomic_write_json, utc_now, CHAT_TURN_SCHEMA_VERSION
 
         client_id = _opaque_id(client_turn_id, field="client_turn_id")
-        from .chat_attachments import normalize_chat_image_attachments, validate_chat_turn_envelope
-        normalized_attachments = normalize_chat_image_attachments(attachments) or None
+        from .chat_attachments import normalize_chat_attachments, validate_chat_turn_envelope
+        normalized_attachments = normalize_chat_attachments(attachments) or None
         if normalized_attachments:
             validate_chat_turn_envelope({"message": message, "attachments": normalized_attachments})
         session_path = self._session_path(session_id)
-        with self._session_lock(session_id):
+        with self.runtime_activation_lock(), self._session_lock(session_id):
             with exclusive_file_lock(
                 session_path,
                 agent_id="loopx-chat",
@@ -52,6 +116,7 @@ class ChatIngressStore:
                             "attachments": normalized_attachments,
                             "origin": _opaque_id(origin, field="origin"),
                             "external_agent_target": external_agent_target,
+                            **({"collaboration_request": collaboration_request} if collaboration_request is not None else {}),
                         },
                     )
                     # Managed acceptance retains its own message identity and
@@ -90,6 +155,7 @@ class ChatIngressStore:
                     "client_turn_id": client_id,
                     "status": "queued",
                     **({"external_agent_target": external_agent_target} if external_agent_target is not None else {}),
+                    **({"collaboration_request": collaboration_request} if collaboration_request is not None else {}),
                     "message": str(message),
                     **({"attachments": normalized_attachments} if normalized_attachments else {}),
                     "origin": _opaque_id(origin, field="origin"),
@@ -98,9 +164,8 @@ class ChatIngressStore:
                     "error_code": None,
                     "error": None,
                     "created_at": now_text,
-                    "expires_at": (now + timedelta(seconds=max(1, ttl_seconds)))
-                    .isoformat()
-                    .replace("+00:00", "Z"),
+                    "expires_at": ((now + timedelta(seconds=max(1, ttl_seconds)))
+                        .isoformat().replace("+00:00", "Z") if ttl_seconds is not None else None),
                     "started_at": None,
                     "first_event_at": None,
                     "completed_at": None,

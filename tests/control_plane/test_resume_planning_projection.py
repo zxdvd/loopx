@@ -11,7 +11,12 @@ from loopx.control_plane.testing.canary_harness import write_fixture_registry, r
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
 
-from loopx.control_plane.todos.resume_planning import project_todo_resume_planning
+from loopx.control_plane.todos.resume_planning import (
+    build_referenced_todo_resume_planning_request,
+    build_todo_resume_planning_request,
+    project_todo_resume_planning,
+)
+from loopx.control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from loopx.control_plane.todos.quota_summary import select_quota_todo_summary
 
 
@@ -51,6 +56,53 @@ def waiting(todo_id: str, **fields: object) -> dict:
 
 def ids(items: list[dict]) -> list[str]:
     return [item["todo_id"] for item in items]
+
+
+@pytest.mark.parametrize("copy_rows", [False, True], ids=["shared-object", "equal-copies"])
+def test_referenced_request_deduplicates_lanes_without_pruning_payload_facts(copy_rows) -> None:
+    row = waiting(
+        "todo_shared",
+        content_revision="sha256:synthetic-full-projection",
+    )
+    request = build_referenced_todo_resume_planning_request({
+        "items": [row],
+        "first_open_items": [deepcopy(row) if copy_rows else row],
+        "deferred_items": [deepcopy(row) if copy_rows else row],
+    })
+
+    assert request["schema_version"] == "todo_resume_planning_request_v1"
+    assert len(request["records"]) == 1
+    assert request["sources"]["items"] == [0]
+    assert request["sources"]["first_open_items"] == [0]
+    assert request["sources"]["deferred_items"] == [0]
+    assert request["records"][0]["payload"]["content_revision"] == row["content_revision"]
+
+
+def test_referenced_projection_keeps_conflicting_same_id_source_facts() -> None:
+    source = {"items": [waiting("todo_shared")],
+              "first_open_items": [waiting("todo_shared", claimed_by="agent-b")],
+              "deferred_items": [waiting("todo_shared", status="deferred")]}
+    request = build_referenced_todo_resume_planning_request(source, agent_id="agent-a")
+    assert len(request["records"]) == 3
+    assert effect_runtime_result("todo.resume_planning.project", request) == effect_runtime_result(
+        "todo.resume_planning.project", build_todo_resume_planning_request(source, agent_id="agent-a"))
+
+
+@pytest.mark.parametrize("reference", [-1, 1, True, 0.5, "0"])
+def test_referenced_projection_rejects_malformed_or_out_of_range_references(reference) -> None:
+    request = build_referenced_todo_resume_planning_request({"items": [waiting("todo_shared")]})
+    request["sources"]["items"] = [reference]
+    with pytest.raises(EffectRuntimeRejected, match="record reference"):
+        effect_runtime_result("todo.resume_planning.project", request)
+
+
+@pytest.mark.parametrize("schema", [["todo_resume_planning_request_v0"],
+                                  ["todo_resume_planning_request_v1"], None, "unsupported"])
+def test_resume_planning_rejects_coercible_or_unknown_schema_versions(schema) -> None:
+    request = build_referenced_todo_resume_planning_request({})
+    request["schema_version"] = schema
+    with pytest.raises(EffectRuntimeRejected, match="schema mismatch"):
+        effect_runtime_result("todo.resume_planning.project", request)
 
 
 def test_claim_priority_and_exclusion_are_independent_of_display_priority() -> None:
@@ -140,6 +192,12 @@ def test_public_quota_distinguishes_monitor_repair_from_generation_wait(
     assert (b"## Agent Todo" in before) == (provider is None)
     code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
         "--include-detail", "agent-todos",  registry_path=registry, runtime_root=runtime)
+    if provider is None:
+        assert code == 1 and packet["error_code"] == "canonical_authority_required", packet
+        assert packet["should_run"] is False
+        assert state.read_bytes() == before
+        assert not (runtime / "goals/goal-a/runs").exists()
+        return
     assert code == 0, packet
     summary = packet["agent_todo_summary"]
     condition = summary["resume_blocked_items"][0]["resume_condition"]
@@ -198,6 +256,12 @@ def test_public_quota_replans_completion_cycles_without_reassigning_work(
     before = state.read_bytes()
     code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
         "--include-detail", "agent-todos",  registry_path=registry, runtime_root=runtime)
+    if provider == "legacy":
+        assert code == 1 and packet["error_code"] == "canonical_authority_required", packet
+        assert packet["should_run"] is False
+        assert state.read_bytes() == before
+        assert not (runtime / "goals/goal-a/runs").exists()
+        return
     assert code == 0, packet
     summary = packet["agent_todo_summary"]
     blocked = next(row for row in summary["resume_blocked_items"] if row["todo_id"] == "todo_alpha")
@@ -227,9 +291,9 @@ def test_quota_composes_capacity_and_visibility_in_one_request_per_source(monkey
     original = quota_selection.effect_runtime_result
     calls = []
 
-    def record(method, params):
+    def record(method, params, **kwargs):
         calls.append(method)
-        return original(method, params)
+        return original(method, params, **kwargs)
 
     monkeypatch.setattr(quota_selection, "effect_runtime_result", record)
     summary = select_quota_todo_summary(
@@ -271,6 +335,11 @@ def test_public_quota_capacity_wait_uses_provider_after_cutover_without_display_
             "quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
              *capabilities, registry_path=registry, runtime_root=runtime,
         )
+        if provider is None:
+            assert code == 1 and packet["error_code"] == "canonical_authority_required", packet
+            assert packet["should_run"] is False
+            assert state.read_bytes() == before
+            continue
         assert code == 0, packet
         assert packet["agent_todo_summary"]["current_agent_deferred_resume_count"] == count
         if count:

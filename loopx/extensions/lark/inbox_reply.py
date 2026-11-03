@@ -304,6 +304,12 @@ def _result(
     return packet
 
 
+def _private_root_readback_matches(message: Mapping[str, Any], chat_id: str) -> bool:
+    """A new private result must be visible in its authorized main chat."""
+    return (message.get("chat_id") == chat_id and not message.get("parent_id")
+        and message.get("root_id") in (None, "", message.get("message_id")))
+
+
 def _deliver_lark_inbox_outbound(
     *,
     project: str | Path,
@@ -311,6 +317,8 @@ def _deliver_lark_inbox_outbound(
     message_id: str | None,
     text: str,
     content_format: str = "text",
+    reply_placement: str | None = None,
+    delivery_id: str | None = None,
     execute: bool = False,
     provider_preflight: bool = False,
     runner: CommandRunner = _default_runner,
@@ -323,6 +331,7 @@ def _deliver_lark_inbox_outbound(
     finalize_reactions: bool = True,
     attachment_keys: tuple[str, ...] = (),
     attachment_names: tuple[str, ...] = (),
+    image_keys: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Deliver through one inbox-configured bot with exact provider readback.
 
@@ -358,6 +367,10 @@ def _deliver_lark_inbox_outbound(
         raise ValueError(
             "lark inbox reply source message is not captured by this inbox"
         )
+    if reply_placement is not None and (
+        reply_placement != "chat_root" or source_event is None
+    ):
+        raise ValueError("a new result requires its captured authorization source")
     if content_format not in {"text", "markdown"}:
         raise ValueError("unsupported Lark reply content format")
     # Structured mentions retain the existing identity-verified text transport.
@@ -365,6 +378,9 @@ def _deliver_lark_inbox_outbound(
     if attachment_keys and (not markdown or len(attachment_keys) > 4
                             or any(not re.fullmatch(r"file_[A-Za-z0-9_-]{1,240}", key) for key in attachment_keys)):
         raise ValueError("result files require bounded post attachment keys")
+    if image_keys and (not markdown or len(image_keys) > 4
+                       or any(not re.fullmatch(r"img_[A-Za-z0-9_-]{1,240}", key) for key in image_keys)):
+        raise ValueError("App images require bounded post image keys")
     reply_text = normalize_lark_outbound_text(
         text,
         limit=None if source_event is not None else short_message_limit,
@@ -394,21 +410,26 @@ def _deliver_lark_inbox_outbound(
     )
     placement = (
         "chat_root"
-        if source_event is None
+        if reply_placement == "chat_root" or source_event is None
         or (
             reply_config["placement_policy"] == "source_context"
             and not source_is_threaded
         )
         else "source_thread"
     )
+    if delivery_id is not None and (not isinstance(delivery_id, str)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}", delivery_id)):
+        raise ValueError("invalid native delivery identity")
     digest = hashlib.sha256(
         json.dumps(
             {
                 "message_id": source_message_id,
                 "placement": placement,
                 "text": reply_text,
+                **({"delivery_id": delivery_id} if delivery_id is not None else {}),
                 **({"content_format": "markdown"} if markdown else {}),
                 **({"attachment_keys": attachment_keys} if attachment_keys else {}),
+                **({"image_keys": image_keys} if image_keys else {}),
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -428,7 +449,7 @@ def _deliver_lark_inbox_outbound(
 
     base = ["lark-cli", "--profile", profile]
     content_args = (
-        ["--msg-type", "post", "--content", lark_markdown_post_content(reply_text)]
+        ["--msg-type", "post", "--content", lark_markdown_post_content(reply_text, image_keys=image_keys)]
         if markdown else ["--text", reply_text]
     )
     if attachment_keys:
@@ -526,7 +547,7 @@ def _deliver_lark_inbox_outbound(
     provider_preview_verified = bool(
         preview.get("returncode") == 0
         and (
-            lark_markdown_preview_matches(text=reply_text, payload=_json_object(preview.get("stdout")), attachment_keys=attachment_keys)
+            lark_markdown_preview_matches(text=reply_text, payload=_json_object(preview.get("stdout")), attachment_keys=attachment_keys, image_keys=image_keys)
             if markdown else lark_provider_preview_matches_outbound(
                 outbound_text=reply_text, payload=_json_object(preview.get("stdout")),
             )
@@ -575,8 +596,10 @@ def _deliver_lark_inbox_outbound(
                         "delivery_attempt_recorder": delivery_attempt_recorder,
                         "source_membership_verifier": source_membership_verifier,
                         "source_authority_verifier": source_authority_verifier,
+                        **({"reply_placement": reply_placement} if reply_placement is not None else {}),
+                        **({"delivery_id": delivery_id} if delivery_id is not None else {}),
                         "finalize_reactions": finalize_reactions,
-                        "attachment_keys": attachment_keys, "attachment_names": attachment_names})
+                        "attachment_keys": attachment_keys, "attachment_names": attachment_names, "image_keys": image_keys})
     guidance = None
     if before_send is not None:
         # Bind review to destination/profile as well as content and placement.
@@ -727,8 +750,9 @@ def _deliver_lark_inbox_outbound(
     verified = bool(
         readback.get("returncode") == 0
         and readback_message is not None
+        and (reply_placement is None or _private_root_readback_matches(readback_message, chat_id))
         and (lark_markdown_readback_matches(text=reply_text, message=readback_message, attachment_keys=attachment_keys,
-                                          attachment_names=attachment_names)
+                                          attachment_names=attachment_names, image_keys=image_keys)
              if markdown else lark_readback_matches_outbound(
             outbound_text=reply_text,
             message=readback_message,
@@ -796,6 +820,8 @@ def reply_lark_event_inbox(
     message_id: str,
     text: str,
     content_format: str = "text",
+    reply_placement: str | None = None,
+    delivery_id: str | None = None,
     execute: bool = False,
     provider_preflight: bool = False,
     runner: CommandRunner = _default_runner,
@@ -808,6 +834,7 @@ def reply_lark_event_inbox(
     finalize_reactions: bool = True,
     attachment_keys: tuple[str, ...] = (),
     attachment_names: tuple[str, ...] = (),
+    image_keys: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Reply with the explicit inbox-configured bot and placement policy.
 
@@ -826,6 +853,10 @@ def reply_lark_event_inbox(
     Ordinary/legacy callers retain independent identity and membership checks.
     ``overlap_source_preflight`` schedules a readonly preview for a native
     completed stop; it supplies no authority and both checks must join.
+    A host-owned proactive private result may request ``reply_placement=chat_root``.
+    The captured source still proves authority, but does not make an unrelated
+    historical question the result's parent. The private-conversation owner
+    admits this request from the original private source, never a group.
     """
 
     result = _deliver_lark_inbox_outbound(
@@ -834,6 +865,8 @@ def reply_lark_event_inbox(
         message_id=message_id,
         text=text,
         content_format=content_format,
+        reply_placement=reply_placement,
+        delivery_id=delivery_id,
         execute=execute,
         provider_preflight=provider_preflight,
         runner=runner,
@@ -846,6 +879,7 @@ def reply_lark_event_inbox(
         finalize_reactions=finalize_reactions,
         attachment_keys=attachment_keys,
         attachment_names=attachment_names,
+        image_keys=image_keys,
     )
 
     result.setdefault("content_format", "markdown" if content_format == "markdown"
@@ -858,6 +892,8 @@ def verify_lark_inbox_reply(
     project: str | Path,
     config_path: str | Path,
     message_id: str,
+    reply_placement: str | None = None,
+    delivery_id: str | None = None,
     text: str,
     attempt: Mapping[str, Any],
     runner: CommandRunner = _default_runner,
@@ -866,6 +902,7 @@ def verify_lark_inbox_reply(
     finalize_reactions: bool = True,
     attachment_keys: tuple[str, ...] = (),
     attachment_names: tuple[str, ...] = (),
+    image_keys: tuple[str, ...] = (),
     resume_parts: bool = False,
     before_send: Callable[[str], Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -901,19 +938,22 @@ def verify_lark_inbox_reply(
     chat_id = str(reply_config.get("chat_id") or "")
     if batch:
         original = reply_lark_event_inbox(project=project, config_path=config_path,
-            message_id=message_id, text=text, content_format="markdown", attachment_keys=attachment_keys)
+            message_id=message_id, text=text, content_format="markdown", attachment_keys=attachment_keys, image_keys=image_keys,
+            reply_placement=reply_placement, delivery_id=delivery_id)
         receipt = original["idempotency_key"]
         return verify_post_parts(receipt=receipt, intent_digest=_intent_digest(profile, chat_id, receipt),
             attempt=attempt, resume=resume_parts, arguments={"project": project,
                 "config_path": config_path, "message_id": message_id, "runner": runner,
                 "source_membership_verifier": source_membership_verifier,
                 "source_authority_verifier": source_authority_verifier,
+                **({"reply_placement": reply_placement} if reply_placement is not None else {}),
+                **({"delivery_id": delivery_id} if delivery_id is not None else {}),
                 "before_send": before_send, "finalize_reactions": finalize_reactions,
                 "text": normalize_lark_outbound_text(text, limit=None, preserve_format=True),
-                "attachment_keys": attachment_keys, "attachment_names": attachment_names})
+                "attachment_keys": attachment_keys, "attachment_names": attachment_names, "image_keys": image_keys})
     preview = None
     candidates = [(text, "markdown")]
-    if not attachment_keys:
+    if not attachment_keys and not image_keys:
         # Historical text receipts are read-only compatibility, never a new
         # downgrade from an oversized Markdown reply.
         candidates.append((text, "text"))
@@ -924,9 +964,12 @@ def verify_lark_inbox_reply(
             message_id=message_id,
             text=candidate_text,
             content_format=content_format,
+            reply_placement=reply_placement,
+            delivery_id=delivery_id,
             execute=False,
             runner=runner,
             attachment_keys=attachment_keys,
+            image_keys=image_keys,
         )
         receipt = str(candidate.get("idempotency_key") or "")
         if (
@@ -1003,7 +1046,7 @@ def verify_lark_inbox_reply(
         }
     verified = (
         lark_markdown_readback_matches(text=reply_text, message=message, attachment_keys=attachment_keys,
-                                      attachment_names=attachment_names)
+                                      attachment_names=attachment_names, image_keys=image_keys)
         if markdown
         else lark_readback_matches_outbound(
             outbound_text=reply_text,
@@ -1011,7 +1054,7 @@ def verify_lark_inbox_reply(
             verified_bot_aliases=bot_aliases or {},
         )
     )
-    if not verified:
+    if not verified or (reply_placement is not None and not _private_root_readback_matches(message, chat_id)):
         return {
             "ok": False,
             "verification_performed": True,

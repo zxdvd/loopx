@@ -5,6 +5,24 @@ import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {projectStrideExploreBasis, strideReviewMismatch} from "../../loopx/control_plane/work_items/stride_policy.ts";
 import {projectExploreTurnContext} from "../../loopx/control_plane/capabilities/explore_turn_context.ts";
 
+test("recent questions use UTC instants, preserve microseconds and retain legacy timestamps", () => {
+  for (const timestamps of [
+    ["2026-01-02T08:00:00+08:00", "2026-01-02T00:01:00Z", "2026-01-01T19:02:00-05:00"],
+    ["2026-01-02T08:00:00.000001+08:00", "2026-01-02T00:00:00.000002Z"],
+    ["unknown", "2026-01-02T00:00:00"],
+  ]) {
+    const nodes = timestamps.map((last_updated_at, index) => ({node_id: `node-${index}`, last_updated_at}));
+    const request = {goal_id: "research", agent_id: "worker", route: ["loopx"],
+      graph_enabled: true, harness_gate: {enabled: false},
+      projection: {nodes, findings: [], edges: []}, plan: {}};
+    const original = structuredClone(request);
+    const result = projectExploreTurnContext(request).graph as JsonObject;
+    assert.deepEqual(result.recent_nodes.map(row => row.node_id), nodes.map(row => row.node_id).reverse());
+    assert.deepEqual(request, original);
+    assert.equal(projectExploreTurnContext({...request, graph_enabled: false}).graph, null);
+  }
+});
+
 test("next-turn evidence exposes current question state and relation changes invalidate old pages", () => {
   const request = {goal_id: "research", agent_id: "worker", route: ["loopx"],
     graph_enabled: true, harness_gate: {enabled: false}, result_limit: 1,
@@ -82,11 +100,11 @@ for (const includeDigests of [false, true]) {
   });
 }
 
-for (const limit of [3, 4, 20]) {
-  test(`every scoped outcome on an explicitly requested page remains selectable: ${limit}`, () => {
+for (const tagged of [false, true]) for (const limit of [3, 4, 20]) {
+  test(`every scoped measured outcome remains selectable: tagged=${tagged}, limit=${limit}`, () => {
     const findings = Array.from({length: 20}, (_, index) => ({finding_id: `scoped-${index}`,
       node_id: "question", finding: `Measured input family ${index}`, status: "confirmed",
-      summary: `Applicable to input family ${index} only.`, tags: ["writeback-result"],
+      summary: `Applicable to input family ${index} only.`, tags: tagged ? ["writeback-result"] : [],
       evidence_refs: [`result:scoped-${index}`],
       measurements: [{metric: "quality", value: index, unit: "points", higher_is_better: true,
         comparison_scope: "validation:owned-v1", input_revision: "owned-input-v1",
@@ -99,6 +117,7 @@ for (const limit of [3, 4, 20]) {
         typed_evidence_audit: {requested_node_refs: ["question"]}}]}};
     const source = projectExploreTurnContext(request);
     const graph = source.graph as JsonObject, harness = source.harness as JsonObject;
+    assert.ok(harness.comparison_candidates?.length, "measured findings must reach the existing decision cards without an origin tag");
     const card = harness.comparison_candidates[0];
     // Quantitative feedback still uses all sources, independently of page size.
     assert.equal(graph.measurement_feedback[0].measured_count, 20);

@@ -102,7 +102,12 @@ def _verify_interrupted_guard(turns: list[dict], guard: dict) -> None:
         argv = _guard_cli_arguments(command, guard)
         try:
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                return vars(parser.parse_args(argv))
+                parsed = vars(parser.parse_args(argv))
+            # A sealed command is independent of today's machine preference.
+            # Legacy omitted transport flags mean off; explicit on stays distinct.
+            if parsed.get("context_delivery") is None:
+                parsed["context_delivery"] = "off"
+            return parsed
         except (SystemExit, ValueError) as error:
             raise ValueError("native pending guard arguments are invalid") from error
     args = arguments(item.get("command", ""))
@@ -116,7 +121,10 @@ def _verify_interrupted_guard(turns: list[dict], guard: dict) -> None:
                 "goal_id": guard["goal_id"], "agent_id": guard["agent_id"],
                 "turn_instance_id": guard["turn_instance_id"], "turn_envelope": turn_envelope,
                 "decision_output_root": guard["capture_root"],
-                "decision_output_dir": None, "decision_handoff_socket": guard["socket_path"]}
+                "decision_output_dir": None, "decision_handoff_socket": guard["socket_path"],
+                "codex_context_dir": guard.get("codex_context_dir"),
+                "codex_context_root": guard.get("codex_context_root"),
+                "context_delivery": guard.get("context_delivery", "off")}
     if any(args.get(key) != value for key, value in expected.items()):
         raise ValueError("native pending guard differs from the held packet routes or identity")
     # A second matching guard after a tool yield cannot stand in for the first
@@ -273,8 +281,70 @@ def _native_thread_ids(home: Path) -> set[str]:
     return set(ids)
 
 
+def checkpoint_destination_config(config_path: Path, source_sha256: str,
+                                  destination_config: Path | None = None, *,
+                                  provider_base_url: str | None = None) -> tuple[bytes, dict[str, str] | None]:
+    """Verify sealed settings and a new receiver's explicit configuration.
+
+    Model/effort may change as declared. A Host may separately bind its current
+    credential-gateway route; that changes only the existing provider's base URL,
+    never its protocol, credential contract, tools or permissions. The complete
+    source and destination config digests remain in the transition provenance.
+    This does not authorize changing an active session or selecting a provider.
+    """
+    source = config_path.read_bytes()
+    if hashlib.sha256(source).hexdigest() != source_sha256:
+        raise ValueError("native checkpoint effective configuration differs")
+    if destination_config is None:
+        if provider_base_url is not None:
+            raise ValueError("provider transport rebinding requires explicit destination settings")
+        return source, None
+    if (not destination_config.is_absolute() or
+            destination_config.resolve(strict=True) != destination_config):
+        raise ValueError("checkpoint model configuration requires a physical absolute path")
+    target = destination_config.read_bytes()
+    original, changed = tomllib.loads(source.decode("utf-8")), tomllib.loads(target.decode("utf-8"))
+    keys = ("model", "model_reasoning_effort")
+    if any(not isinstance(config.get(key), str) or not config[key].strip()
+           for config in (original, changed) for key in keys):
+        raise ValueError("checkpoint model transition requires explicit model and reasoning effort")
+    original_other = {k: v for k, v in original.items() if k not in keys}
+    changed_other = {k: v for k, v in changed.items() if k not in keys}
+    if provider_base_url is not None:
+        provider = original.get("model_provider")
+        before_profiles, after_profiles = original.get("model_providers"), changed.get("model_providers")
+        if (not isinstance(provider, str) or not isinstance(before_profiles, dict)
+                or not isinstance(after_profiles, dict)):
+            raise ValueError("checkpoint provider transport requires an existing custom provider")
+        before = before_profiles.get(provider, {})
+        after = after_profiles.get(provider, {})
+        if (not isinstance(provider_base_url, str) or not provider_base_url.strip()
+                or not isinstance(provider, str) or provider == "openai"
+                or changed.get("model_provider") != provider
+                or not isinstance(before, dict) or not isinstance(after, dict)
+                or not isinstance(before.get("base_url"), str) or not before["base_url"]
+                or after.get("base_url") != provider_base_url):
+            raise ValueError("checkpoint provider transport differs from the current Host route")
+        # Compare typed TOML values, not text substitutions or hostname guesses.
+        # All other provider entries and every non-route setting stay fixed.
+        for config, profile in ((original_other, before), (changed_other, after)):
+            config["model_providers"] = {**config["model_providers"], provider: {
+                key: value for key, value in profile.items() if key != "base_url"}}
+    if original_other != changed_other:
+        raise ValueError("checkpoint configuration transition may change only model and reasoning effort "
+                         "or an explicitly bound provider transport route")
+    return target, {
+        "source_config_sha256": source_sha256,
+        "destination_config_sha256": hashlib.sha256(target).hexdigest(),
+        "source_model": original["model"], "source_effort": original["model_reasoning_effort"],
+        "destination_model": changed["model"], "destination_effort": changed["model_reasoning_effort"],
+    }
+
+
 def fork_native_checkpoint(env: dict[str, str], unit: Path, expected_sha256: str,
-                           config_path: Path, *, timeout: float) -> dict[str, Any]:
+                           config_path: Path, *, timeout: float,
+                           destination_config: Path | None = None,
+                           provider_base_url: str | None = None) -> dict[str, Any]:
     # The existing process lock serializes reconstruction in this isolated home.
     # The private attempt below describes one opaque native RPC, not authority
     # to admit a Goal, a work Turn, or a second fork after an uncertain response.
@@ -282,6 +352,8 @@ def fork_native_checkpoint(env: dict[str, str], unit: Path, expected_sha256: str
 
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("native checkpoint reconstruction timeout must be finite and positive")
+    if provider_base_url is not None and provider_base_url != env.get("OPENAI_BASE_URL"):
+        raise ValueError("checkpoint provider transport differs from the current launch")
     deadline = time.monotonic() + timeout
     home = Path(env["CODEX_HOME"])
     if not home.is_absolute() or home != home.resolve():
@@ -290,11 +362,15 @@ def fork_native_checkpoint(env: dict[str, str], unit: Path, expected_sha256: str
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError("native checkpoint reconstruction window closed")
-        return _fork_native_checkpoint(env, unit, expected_sha256, config_path, timeout=remaining)
+        return _fork_native_checkpoint(env, unit, expected_sha256, config_path, timeout=remaining,
+            **({"destination_config": destination_config} if destination_config is not None else {}),
+            **({"provider_base_url": provider_base_url} if provider_base_url is not None else {}))
 
 
 def _fork_native_checkpoint(env: dict[str, str], unit: Path, expected_sha256: str,
-                            config_path: Path, *, timeout: float) -> dict[str, Any]:
+                            config_path: Path, *, timeout: float,
+                            destination_config: Path | None = None,
+                            provider_base_url: str | None = None) -> dict[str, Any]:
     """Reconstruct one native branch in a new, fixed-path isolated environment.
 
     No model starts and no LoopX binding is registered. Existing session/Goal
@@ -329,9 +405,9 @@ def _fork_native_checkpoint(env: dict[str, str], unit: Path, expected_sha256: st
     recovering = home.exists()
     if recovering and (not attempt_path.is_file() or attempt_path.resolve() != attempt_path):
         raise ValueError("native checkpoint destination home must be new or retain its original fork attempt")
-    config = config_path.read_bytes()
-    if hashlib.sha256(config).hexdigest() != native["config_sha256"]:
-        raise ValueError("native checkpoint effective configuration differs")
+    config, transition = checkpoint_destination_config(
+        config_path, native["config_sha256"], destination_config,
+        **({"provider_base_url": provider_base_url} if provider_base_url is not None else {}))
     version = subprocess.check_output([env["CODEX_BIN"], "--version"], env=env, text=True, encoding="utf-8",
                                       timeout=max(.1, deadline - time.monotonic())).strip()
     if version != native["host_version"]:
@@ -365,6 +441,8 @@ def _fork_native_checkpoint(env: dict[str, str], unit: Path, expected_sha256: st
         **cursor_basis, "config_sha256": native["config_sha256"],
         "destination_goal_id": env.get("LOOPX_GOAL_ID"), "destination_agent_id": env.get("LOOPX_AGENT_ID"),
         "guest_workspace": env["LOOPX_PROJECT"], "guest_home": str(home)}
+    if transition is not None:
+        basis["model_transition"] = transition
     attempt = None
     if recovering:
         attempt = json.loads(attempt_path.read_bytes())
@@ -440,11 +518,14 @@ def _fork_native_checkpoint(env: dict[str, str], unit: Path, expected_sha256: st
             raise ValueError("native checkpoint reconstructed history differs")
     return {"session_id": session, **cursor_basis,
             "visible_history_sha256": native["visible_history_sha256"], "history_verified": True,
+            **({"model_transition": transition} if transition is not None else {}),
             "model_calls": 0, "execution_authority_granted": False, "continuation_qualified": False}
 
 
 def admit_native_checkpoint_session(env: dict[str, str], unit: Path, expected_sha256: str,
-                                    config_path: Path, *, sandbox: str, timeout: float) -> dict[str, Any]:
+                                    config_path: Path, *, sandbox: str, timeout: float,
+                                    destination_config: Path | None = None,
+                                    provider_base_url: str | None = None) -> dict[str, Any]:
     """Explicit controller admission of a verified fork into a destination Goal.
 
     Existing native fork, Goal lifetime and session owners retain their rules.
@@ -458,11 +539,15 @@ def admit_native_checkpoint_session(env: dict[str, str], unit: Path, expected_sh
     from loopx.control_plane.projects.registry_codec import (
         project_registry_transaction,
     )
-    from loopx.control_plane.turn_driver.codex_sessions import select_codex_cli_session
+    from loopx.control_plane.turn_driver.codex_sessions import (
+        codex_session_profile_digest, select_codex_cli_session,
+    )
     from loopx.control_plane.turn_driver.codex_agent_session import CodexAgentSession
 
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("checkpoint session admission timeout must be finite and positive")
+    if provider_base_url is not None and provider_base_url != env.get("OPENAI_BASE_URL"):
+        raise ValueError("checkpoint provider transport differs from the current launch")
     deadline = time.monotonic() + timeout
     effect_runtime_result("runtime.checkpoint_artifacts", {
         "action": "verify", "root": str(unit), "expected_sha256": expected_sha256,
@@ -475,8 +560,30 @@ def admit_native_checkpoint_session(env: dict[str, str], unit: Path, expected_sh
         raise ValueError("checkpoint session admission requires its captured source session profile")
     if tomllib.loads(config_path.read_text(encoding="utf-8")).get("features", {}).get("goals") is not False:
         raise ValueError("checkpoint session admission requires native automatic Goals explicitly disabled")
-    if hashlib.sha256(config_path.read_bytes()).hexdigest() != metadata["native_session"]["config_sha256"]:
-        raise ValueError("native checkpoint effective configuration differs")
+    config, transition = checkpoint_destination_config(
+        config_path, metadata["native_session"]["config_sha256"], destination_config,
+        **({"provider_base_url": provider_base_url} if provider_base_url is not None else {}))
+    target_profile = source_profile
+    if transition is not None:
+        if (env["MODEL_NAME"] != transition["destination_model"] or
+                env["REASONING_EFFORT"] != transition["destination_effort"]):
+            raise ValueError("checkpoint destination model differs from the current launch")
+        binary = shutil.which(env["CODEX_BIN"])
+        if binary is None:
+            raise ValueError("Codex CLI executable is unavailable")
+        observed_source = codex_session_profile_digest(
+            project=Path(env["LOOPX_PROJECT"]), codex_bin=binary,
+            home=Path(env["CODEX_HOME"]), sandbox=sandbox,
+            model=transition["source_model"], reasoning_effort=transition["source_effort"],
+            config_bytes=config_path.read_bytes())
+        if observed_source != source_profile:
+            raise ValueError("checkpoint source session profile changed")
+        target_profile = codex_session_profile_digest(
+            project=Path(env["LOOPX_PROJECT"]), codex_bin=binary,
+            home=Path(env["CODEX_HOME"]), sandbox=sandbox,
+            model=env["MODEL_NAME"], reasoning_effort=env["REASONING_EFFORT"], config_bytes=config)
+        transition = {**transition, "source_profile_digest": source_profile,
+                      "destination_profile_digest": target_profile}
     source = metadata.get("loopx_state", {})
     lineage = {"goal_id": env["LOOPX_GOAL_ID"], "agent_id": env["LOOPX_AGENT_ID"]}
     if (not source.get("goal_id") or not source.get("agent_id") or
@@ -492,20 +599,25 @@ def admit_native_checkpoint_session(env: dict[str, str], unit: Path, expected_sh
         # The original session binding is also the admission receipt. Only a
         # source-bound committed admission can recover a lost controller reply;
         # an unrelated binding or a partial native fork is never replaced.
+        # Session construction captures launch authority through the registry
+        # owner too. Construct before taking the non-reentrant binding fence;
+        # recheck current Goal and Agent authority inside it before readback.
+        wake = CodexAgentSession(env, context="resume", sandbox=sandbox, receipt={})
         with project_registry_transaction(registry, operation="checkpoint_session_binding", agent_id=lineage["agent_id"]):
             current = load_goal_from_registry(registry, lineage["goal_id"])
             require_registered_agent_id(registry_path=registry, goal_id=lineage["goal_id"], agent_id=lineage["agent_id"])
             if current != goal:
                 raise ValueError("destination Goal configuration changed during native checkpoint readback")
-            wake = CodexAgentSession(env, context="resume", sandbox=sandbox, receipt={})
             binding = select_codex_cli_session(wake.root, lineage=lineage, session_scope="agent",
                                               goal_admission=wake.admission)
             if not binding or binding.get("checkpoint_artifact_sha256") != expected_sha256:
                 raise ValueError("destination session binding already exists without this checkpoint admission")
             if binding.get("checkpoint_artifact_root") not in (None, str(unit)):
                 raise ValueError("destination checkpoint source root differs from the original admission")
-            if wake.digest != source_profile:
+            if wake.digest != target_profile:
                 raise ValueError("checkpoint source session profile changed")
+            if transition is not None and binding.get("checkpoint_model_transition") != transition:
+                raise ValueError("checkpoint model transition differs from its original admission")
             native = metadata["native_session"]
             observed = native_session_checkpoint(env, binding["session_id"],
                 timeout=max(.1, deadline - time.monotonic()),
@@ -513,15 +625,21 @@ def admit_native_checkpoint_session(env: dict[str, str], unit: Path, expected_sh
             cursor_key = "interrupted_turn_id" if native.get("interrupted_guard") is not None else "completed_turn_id"
             keys = (cursor_key, "turn_ids", "visible_history_sha256", "host_version",
                     "guest_home", "guest_workspace", "config_sha256")
-            if binding["session_id"] == native["session_id"] or any(observed[key] != native[key] for key in keys):
+            expected = {**native, "config_sha256": hashlib.sha256(config).hexdigest()}
+            if binding["session_id"] == native["session_id"] or any(observed[key] != expected[key] for key in keys):
                 raise ValueError("checkpoint admitted native session advanced or differs; use its existing continuation")
             return {"session_id": binding["session_id"], cursor_key: observed[cursor_key],
                 "visible_history_sha256": observed["visible_history_sha256"], "history_verified": True,
                 "model_calls": 0, "execution_authority_granted": False, "continuation_qualified": False,
                 "destination_goal_ref": wake.goal_ref, "destination_agent_id": lineage["agent_id"],
-                "session_binding_admitted": True, "session_profile_digest": wake.digest}
+                "session_binding_admitted": True, "session_profile_digest": wake.digest,
+                **({"model_transition": transition} if transition is not None else {})}
     result = fork_native_checkpoint(env, unit, expected_sha256, config_path,
-                                    timeout=max(.1, deadline - time.monotonic()))
+        timeout=max(.1, deadline - time.monotonic()),
+        **({"destination_config": destination_config} if destination_config is not None else {}),
+        **({"provider_base_url": provider_base_url} if provider_base_url is not None else {}))
+    receipt: dict[str, Any] = {}
+    wake = CodexAgentSession(env, context="resume", sandbox=sandbox, receipt=receipt)
     # Hold the existing registry owner's fence through the session write. This
     # does not mint a lease, task or work admission from historical state.
     with project_registry_transaction(registry, operation="checkpoint_session_binding", agent_id=lineage["agent_id"]):
@@ -529,10 +647,13 @@ def admit_native_checkpoint_session(env: dict[str, str], unit: Path, expected_sh
         require_registered_agent_id(registry_path=registry, goal_id=lineage["goal_id"], agent_id=lineage["agent_id"])
         if current != goal:
             raise ValueError("destination Goal configuration changed during native checkpoint reconstruction")
-        receipt: dict[str, Any] = {}
-        wake = CodexAgentSession(env, context="resume", sandbox=sandbox, receipt=receipt)
-        wake._bind_verified_fork(result["session_id"], source_profile, expected_sha256, str(unit))
-    return {**result, "destination_goal_ref": wake.goal_ref, "destination_agent_id": lineage["agent_id"],
+        # The source profile was independently checked against the sealed
+        # settings above. Bind the explicitly verified destination profile;
+        # ordinary session resumes still require an exact profile match.
+        wake._bind_verified_fork(result["session_id"], target_profile, expected_sha256, str(unit),
+            **({"model_transition": transition} if transition is not None else {}))
+    return {**result, **({"model_transition": transition} if transition is not None else {}),
+            "destination_goal_ref": wake.goal_ref, "destination_agent_id": lineage["agent_id"],
             "session_binding_admitted": True, "session_profile_digest": wake.digest}
 
 
@@ -545,6 +666,8 @@ def main(argv=None) -> None:
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--expected-sha256", required=True)
     parser.add_argument("--config-path", type=Path, required=True)
+    parser.add_argument("--destination-model-config", type=Path,
+                        help="Explicit new-receiver config changing only model and reasoning effort")
     parser.add_argument("--sandbox", choices=CODEX_CLI_SANDBOXES, required=True)
     parser.add_argument("--timeout-seconds", type=float, default=30)
     args = parser.parse_args(argv)
@@ -554,7 +677,9 @@ def main(argv=None) -> None:
     if missing:
         parser.error("Explicit destination controller environment is missing: " + ", ".join(missing))
     result = admit_native_checkpoint_session(dict(os.environ), args.root, args.expected_sha256,
-        args.config_path, sandbox=args.sandbox, timeout=args.timeout_seconds)
+        args.config_path, sandbox=args.sandbox, timeout=args.timeout_seconds,
+        **({"destination_config": args.destination_model_config}
+           if args.destination_model_config is not None else {}))
     print(json.dumps(result))
 
 

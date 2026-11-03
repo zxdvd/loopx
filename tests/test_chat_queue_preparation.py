@@ -38,6 +38,48 @@ def session_runtime(tmp_path, *, channel="goal.public-research"):
     )
 
 
+@pytest.mark.parametrize("document", [False, True])
+def test_restarted_queue_delivers_original_material_to_native_turn(tmp_path, monkeypatch, document):
+    import queue
+    from types import SimpleNamespace
+    from loopx.chat_agent import CodexChatAgentSession
+
+    store, sid, _ = session_runtime(tmp_path)
+    material = "Explain this exact source:\n```python\nif ready:\n    print('a  b')\n```\n\n原文：a\u00a0b"
+    import base64
+    raw = material.encode("utf-8")
+    attachments = [{"id": "source", "name": "source.txt", "mime_type": "text/plain", "size": len(raw),
+                    "data_url": "data:text/plain;base64," + base64.b64encode(raw).decode()}] if document else []
+    original, _ = store.create_queued_turn(
+        sid, client_turn_id="material-request", message=material, attachments=attachments, origin="web")
+    store = ChatSessionStore(tmp_path)
+    runtime = ChatRuntimeController(store=store, codex_bin="unused-test-codex")
+    native = CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
+        messages=queue.Queue(), thread_id="public-thread", work_dir=tmp_path)
+    sent = []
+
+    def write(packet):
+        assert packet["method"] == "turn/start"
+        sent.append(packet["params"])
+        native.messages.put({"id": packet["id"], "result": {"turn": {"id": "native-material"}}})
+        native.messages.put({"method": "item/completed", "params": {"item": {
+            "type": "agentMessage", "phase": "final_answer", "text": "Received the source."}}})
+        native.messages.put({"method": "turn/completed", "params": {"turn": {"status": "completed"}}})
+
+    monkeypatch.setattr(native, "_write", write)
+    monkeypatch.setattr(runtime, "_ensure_adapter", lambda *a, **kw: CodexAppServerAdapter(native))
+    runtime.resume_session_queue(session_id=sid, work_dir=tmp_path, objective="Explain source")
+    result = runtime.wait_for_turn(session_id=sid, turn_id=original["turn_id"], timeout_sec=10)
+    assert result["status"] == "completed"
+    assert len(sent) == 1 and sent[0]["threadId"] == "public-thread"
+    assert sent[0]["input"][0]["text"].endswith(material)
+    assert store.turn_for_client(sid, "material-request")["message"] == material
+    assert store.messages(sid)[0]["text"] == material
+    if document:
+        assert sent[0]["input"][-1] == {"type": "text", "text": material}
+        assert store.messages(sid)[0]["attachments"] == attachments
+
+
 @pytest.mark.parametrize("failure", ["before_message", "after_message", "before_event"])
 @pytest.mark.parametrize("display", ["Execution request", "Original visible request 原文"])
 def test_queue_replay_leaves_prepared_managed_input_with_its_owner(tmp_path, monkeypatch, failure, display):
@@ -697,3 +739,65 @@ def test_lark_wait_receives_typed_failure_without_model_or_timeout(tmp_path, mon
     assert "修复后重试" in reply
     assert "private installation path" not in reply
     assert not store.queued_turns(sid)
+
+
+@pytest.mark.parametrize("replacement", ["new_turn", "closed_session"])
+def test_late_queue_recovery_preserves_current_session_claim(tmp_path, replacement):
+    store, sid, runtime = session_runtime(tmp_path)
+    original, _ = store.create_turn(sid, client_turn_id="old", message="Original request")
+    entered, release = threading.Event(), threading.Event()
+
+    class HealthBarrier:
+        def healthcheck(self):
+            entered.set()
+            assert release.wait(5)
+            return True
+
+    runtime.adapters[sid] = HealthBarrier()
+    runtime.resume_session_queue(session_id=sid, work_dir=tmp_path, objective="Research")
+    worker = runtime.session_queue_threads[sid]
+    try:
+        assert entered.wait(5)
+        peer = ChatSessionStore(tmp_path)
+        peer.update_turn(sid, original["turn_id"], status="interrupted")
+        assert peer.release_active_turn(
+            sid, original["turn_id"], last_activity_at="2026-10-23T00:00:00Z", last_error_code=None,
+        )
+        if replacement == "new_turn":
+            current, _ = peer.create_turn(sid, client_turn_id="new", message="New request after stop")
+            peer.update_turn(sid, current["turn_id"], status="running")
+        else:
+            peer.update_session(sid, status="closed")
+        expected = peer.load_session(sid)
+        release.set()
+        worker.join(5)
+        assert not worker.is_alive()
+        assert peer.load_session(sid) == expected
+        if replacement == "new_turn":
+            assert peer.load_turn(sid, current["turn_id"])["status"] == "running"
+    finally:
+        release.set()
+        runtime.closed.set()
+        worker.join(5)
+
+
+def test_owned_queue_release_preserves_metadata_unless_explicitly_replaced(tmp_path):
+    store = ChatSessionStore(tmp_path)
+    session = store.create_session(
+        goal_id="public-research", agent_id="codex",
+        adapter_kind="codex_app_server", upstream_thread_id="public-thread",
+    )
+    sid = session["session_id"]
+    turn, _ = store.create_turn(sid, client_turn_id="original", message="Original")
+    store.update_session(sid, last_activity_at="2026-10-23T00:00:00Z", last_error_code="retained-diagnostic")
+    assert store.release_active_turn(sid, turn["turn_id"])
+    released = store.load_session(sid)
+    assert released["status"] == "ready" and released["active_turn_id"] is None
+    assert released["last_activity_at"] == "2026-10-23T00:00:00Z"
+    assert released["last_error_code"] == "retained-diagnostic"
+    next_turn, _ = store.create_turn(sid, client_turn_id="next", message="Next")
+    assert store.release_active_turn(
+        sid, next_turn["turn_id"], last_activity_at="2026-10-23T01:00:00Z", last_error_code=None,
+    )
+    assert store.load_session(sid)["last_activity_at"] == "2026-10-23T01:00:00Z"
+    assert store.load_session(sid)["last_error_code"] is None

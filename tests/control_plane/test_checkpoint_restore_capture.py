@@ -82,3 +82,88 @@ def test_readonly_participant_capture_and_limited_basis_read(tmp_path):
     with pytest.raises(EffectRuntimeRemoteError):
         effect_runtime_result("runtime.checkpoint_artifacts", {"action": "verify", "root": str(unit),
             "expected_sha256": captured["sha256"]})
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("cited", [False, True])
+def test_successor_review_needs_checkpoint_linked_settlement(tmp_path, monkeypatch, provider, cited):
+    """A legal successor can close out without losing the recovery-specific review.
+
+    Exercise real CLI authoring, canonical storage and settlement. The native
+    conversation completion check is a separate Host gate, not established here.
+    """
+    import json
+    import shlex
+    import subprocess
+
+    from test_replan_successor_guard_reentry import _fixture, GOAL, AGENT, TURN
+    from loopx.control_plane.quota.settlement import read_heartbeat_settlement
+
+    call, runtime, _ = _fixture(tmp_path, monkeypatch, provider)
+    original = call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
+        "--agent-id", AGENT, "--turn-instance-id", TURN,
+        "--codex-app-current-rrule", "FREQ=MINUTELY;INTERVAL=3",
+        "--decision-output-dir", str(tmp_path / "decision"))
+    read = subprocess.run(shlex.split(original["replan_action_packet"]["writeback"]),
+        capture_output=True, text=True, check=True)
+    writer = json.loads(read.stdout)
+    successor_binding = shlex.split(writer["writeback_contract"]["successor_binding_args"])
+    obligation = original["heartbeat_receipt"]["settlement_identity"]["replan_obligation_id"]
+    before_todos = call("todo", "list", "--goal-id", GOAL)["todos"]
+    rejected = call("todo", "add", "--goal-id", GOAL, "--role", "agent", "--claimed-by", AGENT,
+        "--text", "Must not persist without the original Turn", "--task-class", "advancement_task",
+        "--action-kind", "validate", "--target-key", "rejected-source",
+        "--replan-obligation-id", obligation, "--turn-instance-id", "unadmitted-turn", expected_code=1)
+    assert rejected["ok"] is False
+    assert call("todo", "list", "--goal-id", GOAL)["todos"] == before_todos
+    successor = call("todo", "add", "--goal-id", GOAL, "--role", "agent", "--claimed-by", AGENT,
+        "--text", "Independently verify the source artifact", "--task-class", "advancement_task",
+        "--action-kind", "validate", "--target-key", "independent-source-artifact",
+        "--replan-obligation-id", obligation, *successor_binding)
+    assert "host_action" not in successor  # No premature stop before original settlement.
+    assert successor["settlement_identity"] == original["heartbeat_receipt"]["settlement_identity"]
+    # Follow only the returned receipt; no fresh guard or successor admission.
+    steps = successor["settlement_plan"]["ordered_steps"]
+    actions = [step["command_template"] for step in steps if step["kind"] in {"durable_writeback", "quota_spend"}]
+    from loopx.control_plane.todos.markdown import render_todo_markdown
+    rendered = render_todo_markdown(successor)
+    assert successor["instruction"] in rendered
+    assert all(command in rendered for command in actions)
+    actions[0] = actions[0].replace("<validated_progress>", "source_review").replace("<scale>", "single_surface").replace("<outcome>", "outcome_progress")
+    sha = "a" * 64
+
+    def capture():
+        observed = read_heartbeat_settlement(runtime, goal_id=GOAL, agent_id=AGENT,
+            todo_id=None, turn_instance_id=TURN, resolve_original_binding=True,
+            registry_path=tmp_path / "registry.json")
+        return effect_runtime_result("runtime.checkpoint_artifacts", {
+            "action": "restore_capture", "checkpoint_sha256": sha,
+            "goal_id": GOAL, "agent_id": AGENT, "current_obligation_id": None,
+            "review": {"identity": observed.identity.value.as_dict(),
+                "progress": observed.progress, "writeback_run": observed.writeback_run,
+                "semantic_replan_guard": observed.semantic_replan_guard}})
+
+    assert capture()["capture_allowed"] is False
+    packet = {"schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "Retained checkpoint evidence supports the next source audit."},
+        "path_delta": {"outcome": "continue", "prior_assumption": "The retained source needs review.",
+            "observed_reality": "Reviewed source evidence supports the independently validated successor.",
+            "retained": ["Original acceptance and remaining evaluation opportunity"],
+            "evidence_refs": ["checkpoint:" + sha if cited else "evidence:source-review"]}}
+    vision = tmp_path / "checkpoint-review.json"
+    vision.write_text(json.dumps(packet))
+    refresh_args = (*shlex.split(actions[0])[1:], "--agent-vision-json", str(vision),
+                    "--no-global-sync", "--suppress-external-sinks")
+    if cited:
+        settled = call(*refresh_args, "--settle-turn")
+        assert settled["settlement_progress"]["state"] == "settled"
+    else:
+        call(*refresh_args)
+        assert capture()["capture_allowed"] is False  # Writeback alone is not settled.
+        call(*shlex.split(actions[1])[1:])
+    assert capture()["capture_allowed"] is cited
+    # Retrying the original debit repairs/replays its receipt, never starts the successor.
+    call(*shlex.split(actions[1])[1:])
+    assert capture()["capture_allowed"] is cited
+    assert call("todo", "list", "--goal-id", GOAL,
+                "--todo-id", successor["todo_id"])["todo"]["status"] == "open"

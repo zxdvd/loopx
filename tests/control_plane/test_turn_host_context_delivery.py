@@ -9,16 +9,15 @@ import sys
 
 import pytest
 
-from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.quota.turn_envelope import build_turn_envelope, turn_envelope_action_signature_document
 from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
 from loopx.control_plane.turn_driver.host_candidate import _canonical_hash
-from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from tests.control_plane.test_agent_context import POLICY
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID, SELECTED_REPLAN_TODO_ID,
     _bind_selected_replan_guard, _configure_selected_todo_replan_fixture,
-    _initialize_git_checkout, _run_cli, _write_fixture,
+    _initialize_fixture_authority, _initialize_git_checkout, _run_cli, _write_fixture,
 )
 
 
@@ -35,11 +34,9 @@ def test_captured_context_reaches_actual_host_without_readmission(tmp_path, monk
     config = json.loads(registry.read_text())
     config["goals"][0]["spawn_policy"] = {**POLICY, "spawn_allowed": mode != "off"}
     registry.write_text(json.dumps(config))
-    code, listed = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID)
-    assert code == 0, listed
-    initialize_canonical_authority(runtime, GOAL_ID, build_todo_runtime_shadow_projection(
-        goal_id=GOAL_ID, handoff_mode="soft_claim", todos=listed["todos"],
-    ), state_path=state, provider=provider)
+    # Ordinary reads reject unmigrated Goals. Bootstrap the disposable canonical
+    # fixture through its explicit conversion helper before exercising delivery.
+    _initialize_fixture_authority(project, runtime, provider=provider)
 
     capture = tmp_path / "capture"
     code, envelope = _run_cli(registry, runtime, "quota", "should-run",
@@ -82,25 +79,29 @@ def test_captured_context_reaches_actual_host_without_readmission(tmp_path, monk
     prompt_path = project / "received.txt"
     prompt = prompt_path.read_text()
     authority = json.loads(prompt.split("Turn authority JSON:\n", 1)[1].split("\n\nWhen finished", 1)[0])
+    # Capability context can be off or complete inline while the admitted Turn
+    # still needs its original evidence route and signed required reads.
+    assert authority["action_signature"] == envelope["action_signature"]
+    assert authority["required_reads"] == envelope["required_reads"]
+    detail = authority["detail_ref"]
+    assert detail == envelope["detail_ref"]
+    captured = detail["captured_decision"]
+    assert (captured["goal_id"], captured["agent_id"], captured["turn_instance_id"]) == (GOAL_ID, AGENT_ID, "host-context-turn")
+    read = subprocess.run(shlex.split(detail["full_decision"]), capture_output=True, check=True).stdout
+    assert read == original
+    # Full decision JSON includes numeric values whose canonical wire is owned
+    # by TS (e.g. Python 1.0 and JSON.stringify's 1 differ).
+    assert build_turn_envelope(json.loads(read))["action_signature"]["source_decision_hash"] == authority["action_signature"]["source_decision_hash"]
     if context:
         # Independent source oracle after the actual subprocess boundary: two
         # agreeing reduced projections cannot prove delivery of the full source.
         assert authority["agent_context"] == envelope["agent_context"]
         if mode == "legacy_reference":
-            assert authority["action_signature"] == envelope["action_signature"]
-            detail = authority["detail_ref"]
-            assert detail == envelope["detail_ref"]
-            read = subprocess.run(shlex.split(detail["full_decision"]), capture_output=True, check=True).stdout
-            assert read == original
-            # Full decision JSON includes numeric values whose canonical wire
-            # is owned by TS (e.g. Python 1.0 and JSON.stringify's 1 differ).
-            assert build_turn_envelope(json.loads(read))["action_signature"]["source_decision_hash"] == authority["action_signature"]["source_decision_hash"]
             assert _canonical_hash(json.loads(read)["interaction_contract"]["agent_context"]) == authority["agent_context"]["content_hash"]
         else:
             assert envelope["agent_context"] == context
             assert "detail_ref" not in envelope["agent_context"]
             assert envelope["compaction"]["within_budget"] is False
-            assert "detail_ref" not in authority
         invalid = deepcopy(request)
         invalid["turn_envelope"]["agent_context"]["scope"]["agent_id"] = "wrong-agent"
         rejected = subprocess.run(command, input=json.dumps(invalid), text=True, capture_output=True, timeout=30)
@@ -108,8 +109,14 @@ def test_captured_context_reaches_actual_host_without_readmission(tmp_path, monk
         assert prompt_path.read_text() == prompt  # Refusal precedes the provider seam.
     else:
         assert "agent_context" not in authority
-        assert "detail_ref" not in authority
-        assert "action_signature" not in authority
+    # Even with capability context off, dropping signed reads must be refused
+    # before the provider seam, without another admission or state mutation.
+    assert envelope["required_reads"]
+    invalid = deepcopy(request)
+    invalid["turn_envelope"]["required_reads"] = []
+    rejected = subprocess.run(command, input=json.dumps(invalid), text=True, capture_output=True, timeout=30)
+    assert rejected.returncode != 0 and "action signature" in rejected.stderr
+    assert prompt_path.read_text() == prompt
     assert (capture / "decision.json").read_bytes() == original
     assert {p: p.read_bytes() for p in runtime.rglob("*") if p.is_file()} == before
 
@@ -124,11 +131,9 @@ def test_bound_replan_reaches_actual_host_with_original_evidence(tmp_path, monke
     state.write_text(state.read_text() + f"\n## Accepted scope and stop\n\n{stop}\n")
     goal_bytes = state.read_bytes()
     _initialize_git_checkout(project)
-    code, listed = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID)
-    assert code == 0, listed
-    initialize_canonical_authority(runtime, GOAL_ID, build_todo_runtime_shadow_projection(
-        goal_id=GOAL_ID, handoff_mode="soft_claim", todos=listed["todos"],
-    ), state_path=state, provider=provider)
+    # Ordinary reads reject unmigrated Goals. Bootstrap the disposable canonical
+    # fixture through its explicit conversion helper before exercising delivery.
+    _initialize_fixture_authority(project, runtime, provider=provider)
     turn = "host-replan-turn"
     code, initial = _run_cli(registry, runtime, "quota", "should-run",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", turn,
@@ -141,6 +146,8 @@ def test_bound_replan_reaches_actual_host_with_original_evidence(tmp_path, monke
         "--todo-id", SELECTED_REPLAN_TODO_ID, "--turn-instance-id", turn,
         "--codex-app", "--turn-envelope", "--decision-output-dir", str(capture), cwd=project)
     assert code == 0, envelope
+    assert envelope["action"]["delivery_allowed"] is False
+    assert envelope["action"]["must_attempt"] is True
     plan = build_loopx_turn_plan(envelope, host="dsh", execution_mode="isolated-headless",
                                  turn_instance_id=turn)
     assert plan["route"]["kind"] == "replan_required"
@@ -167,9 +174,13 @@ def test_bound_replan_reaches_actual_host_with_original_evidence(tmp_path, monke
     prompt_path = project / "received.txt"
     prompt = prompt_path.read_text()
     authority = json.loads(prompt.split("Turn authority JSON:\n", 1)[1].split("\n\nWhen finished", 1)[0])
-    # Compare the actual provider input with the full native source, not a
-    # second reduced projection. Replan guidance and outcome choices are signed.
-    assert authority["replan_action_packet"] == source["replan_action_packet"]
+    # Compare preserved choices with the complete source and execute the reader
+    # actually delivered to the provider. No unconditional full-source detour.
+    packet = authority["replan_action_packet"]
+    for field in ("obligation_id", "required_outcome", "allowed_terminal"):
+        assert packet[field] == source["replan_action_packet"][field]
+    review = subprocess.run(shlex.split(packet["review"]), capture_output=True, text=True, check=True)
+    assert json.loads(review.stdout)["context_id"] == source["autonomous_replan_obligation"]["replan_context"]["context_id"]
     assert authority["action_signature"] == envelope["action_signature"]
     detail = authority["detail_ref"]
     assert detail == envelope["detail_ref"]
@@ -183,9 +194,10 @@ def test_bound_replan_reaches_actual_host_with_original_evidence(tmp_path, monke
     goal_read = next(r for r in authority["required_reads"] if r["source"] == "goal_state")
     delivered_goal = subprocess.run(shlex.split(goal_read["command"]), capture_output=True, check=True).stdout
     assert delivered_goal == goal_bytes and stop.encode() in delivered_goal
-    assert "replan_action_packet" in prompt and "replan_context" in prompt
+    assert "Read replan_action_packet.review" in prompt
+    assert "read autonomous_replan_obligation.replan_context" not in prompt
     assert "Never re-enter quota admission" in prompt
-    assert "Do not execute its writeback commands" in prompt
+    assert "Do not execute writeback commands" in prompt
     for field in ("obligation_id", "planning_guidance", "uncovered_frontier"):
         invalid = deepcopy(request)
         invalid["turn_envelope"]["replan_action_packet"][field] = "changed after signing"

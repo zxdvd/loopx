@@ -194,6 +194,7 @@ def test_real_native_interrupt_retains_branch_but_does_not_qualify_checkpoint(tm
     boundary; a successful native fork alone must not loosen that contract.
     """
     import subprocess
+    from pathlib import Path
     from loopx.capabilities.benchmark_toolkit.native_codex_goal import StdioNativeGoalTransport
 
     workspace = tmp_path / "work"
@@ -261,6 +262,9 @@ def test_real_native_interrupt_retains_branch_but_does_not_qualify_checkpoint(tm
         with pytest.raises(ValueError, match="completed final cursor"):
             native_session_checkpoint(env, source, timeout=15)
         with native_host(env) as native:
+            source_rollouts = list((Path(env["CODEX_HOME"]) / "sessions").rglob(f"*{source}.jsonl"))
+            assert len(source_rollouts) == 1
+            original_rollout = source_rollouts[0].read_bytes()
             fork = native.request("thread/fork", {"threadId": source, "cwd": str(workspace),
                 "lastTurnId": turn, "persistExtendedHistory": True})["thread"]["id"]
             assert fork != source and history(native, fork) == retained
@@ -269,7 +273,17 @@ def test_real_native_interrupt_retains_branch_but_does_not_qualify_checkpoint(tm
             wait_terminal(native, fork, next_turn, "completed")
             assert (workspace / "continued.txt").read_text() == "continued-candidate\n"
             assert "retained-candidate" in json.dumps(requests[2])
-            assert history(native, source) == retained
+            assert len(requests) == 4
+            # Extended history may hydrate the interrupted command's terminal
+            # metadata later. The persisted original and all model input must
+            # remain unchanged; that derived metadata is not a new source Turn.
+            assert source_rollouts[0].read_bytes() == original_rollout
+            original = history(native, source)
+            assert [row["id"] for row in original] == [row["id"] for row in retained]
+            assert original[:-1] == retained[:-1]
+            assert original[-1]["status"] == retained[-1]["status"] == "interrupted"
+            assert [item for item in original[-1]["items"] if item["type"] == "userMessage"] == [
+                item for item in retained[-1]["items"] if item["type"] == "userMessage"]
 
 
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"),
@@ -291,7 +305,8 @@ def test_real_native_workspace_readback_rejects_foreign_code_basis(tmp_path):
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"),
                     reason="Requires an explicit real native Host binary; only a local static provider is used")
 @pytest.mark.parametrize("case", ["resume", "scope_change", "profile_change", "joint", "binding_reply_loss",
-                                 "fork_reply_loss", "fork_missing", "fork_ambiguous", "warm_preparation"])
+                                 "fork_reply_loss", "fork_missing", "fork_ambiguous", "warm_preparation",
+                                 "model_transition", "provider_transport", "joint_provider_transport"])
 def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, capsys, monkeypatch, case, request):
     """Real Host/CLI/Goal/session/artifact owners; deterministic synthetic work.
 
@@ -304,6 +319,8 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
     import shlex
     import subprocess
     import sys
+    import tomllib
+    from contextlib import ExitStack
     from pathlib import Path
     from benchmark.runtime.codex import Execution
     from loopx.hosts.codex_checkpoint import admit_native_checkpoint_session
@@ -315,6 +332,8 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
     from loopx.control_plane.quota.settlement import read_heartbeat_settlement
     from loopx.control_plane.projects.registry_codec import ProjectRegistryProtocolError
 
+    joint = case in {"joint", "joint_provider_transport"}
+    provider_transport = case in {"provider_transport", "joint_provider_transport"}
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     monkeypatch.chdir(workspace)  # Real settlement verifies the producing workspace.
@@ -372,7 +391,7 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
     requests = []
     retained_context_path = None
     joint_command = ""
-    if case == "joint":
+    if joint:
         import copy
         import shlex
         import requests as http
@@ -409,7 +428,7 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
             return {"type": "function_call", "id": "fc_retained", "call_id": "call_retained",
                 "name": "exec_command", "arguments": json.dumps({
                     "cmd": read_current + "cat candidate.txt research.txt " + retained_context_path + joint_command,
-                    "max_output_tokens": 6000})}
+                    "yield_time_ms": 10000, "max_output_tokens": 6000})}
         if index == 3:
             message["content"][0]["text"] = "Retained candidate 7 verified; candidate 3 remains rejected."
         return message
@@ -417,10 +436,10 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
     binary = os.environ["LOOPX_NATIVE_CHECKPOINT_BIN"]
     # The warm receiver uses the benchmark's execution profile inside its
     # isolated worker. Other cases retain their original sandbox contract.
-    sandbox = ("danger-full-access" if case == "warm_preparation" else
-               "workspace-write" if case == "joint" else "read-only")
+    sandbox = ("danger-full-access" if provider_transport or case in {"warm_preparation", "model_transition"} else
+               "workspace-write" if joint else "read-only")
     execution = Execution(context="resume", sandbox=sandbox)
-    with real_native_source(tmp_path / "native", binary, workspace, close_source=True,
+    with ExitStack() as receiver_transports, real_native_source(tmp_path / "native", binary, workspace, close_source=True,
                             response_builder=response, sandbox=execution.sandbox) as (env, source_session, _, calls):
         env.update(LOOPX_REGISTRY=str(source_registry), LOOPX_RUNTIME_ROOT=str(source_runtime),
                    LOOPX_GOAL_ID=source_goal, LOOPX_AGENT_ID=source_agent,
@@ -464,7 +483,7 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
         components = [*native["components"], {"id": "code", "source_path": str(candidate)},
                       {"id": "research", "source_path": str(research)},
                       {"id": "research_context", "source_path": str(context_export)}]
-        if case == "joint":
+        if joint:
             components.append({"id": "evaluation", "source_path": str(evaluator_unit)})
         probe = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe", "components": components})
         unit = tmp_path / "point"
@@ -478,7 +497,7 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
                     "provider_revision": source_context["snapshot"]["provider_revision"],
                     "store_identity": source_context["snapshot"]["store_identity"]}}}, retry_safe=False)
         digest = captured["sha256"]
-        if case == "joint":
+        if joint:
             source_judge.state.judge.tokens[source_token]["submission_cooldown"] = 0
             assert submit(source_url, source_token, 99).status_code == 200
             judge_before = copy.deepcopy((source_judge.state.judge.tokens,
@@ -516,6 +535,33 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
         env.update(LOOPX_REGISTRY=str(registry), LOOPX_RUNTIME_ROOT=str(runtime),
                    LOOPX_GOAL_ID=destination_goal, LOOPX_AGENT_ID=destination_agent,
                    MODEL_NAME="fixture", REASONING_EFFORT="high")
+        admission_options, model_config_args = {}, []
+        if case == "model_transition":
+            target_config = tmp_path / "destination-model.toml"
+            target_config.write_text(config.read_text().replace('model="fixture"', 'model="fixture-next"')
+                                     .replace('model_reasoning_effort="high"', 'model_reasoning_effort="max"'))
+            env.update(MODEL_NAME="fixture-next", REASONING_EFFORT="max")
+            admission_options = {"destination_config": target_config}
+            model_config_args = ["--destination-model-config", str(target_config)]
+        if provider_transport:
+            from tests.control_plane.codex_checkpoint_fixture import local_inference_provider
+            from benchmark.runtime.sforge_warm_start import admit_warm_session
+
+            def receiver_response(body, index, message):
+                calls.append("/v1/responses")
+                return response(body, index + 1, message)
+
+            receiver_url, _, _ = receiver_transports.enter_context(local_inference_provider(receiver_response))
+            original = tomllib.loads(config.read_text())
+            source_url = original["model_providers"][original["model_provider"]]["base_url"]
+            assert receiver_url != source_url
+            target_config = tmp_path / "destination-transport.toml"
+            target_config.write_text(config.read_text().replace(source_url, receiver_url))
+            env["OPENAI_BASE_URL"] = receiver_url
+            admission_options = {"destination_config": target_config, "provider_base_url": receiver_url}
+            transport_declaration = {"root": str(unit), "sha256": digest, "config": str(config),
+                "destination_config": str(target_config), "provider_base_url": receiver_url,
+                "deadline_epoch": int(time.time()) + 600}
         lifecycle_registry = tmp_path / "lifecycle-only" / "registry.json"
         assert main(["--format", "json", "--registry", str(lifecycle_registry),
             "--runtime-root", str(tmp_path / "lifecycle-only/runtime"), "project", "register",
@@ -618,11 +664,19 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
             assert load_codex_cli_session(runtime, lineage={"goal_id": destination_goal,
                 "agent_id": destination_agent}, session_scope="agent")["checkpoint_artifact_sha256"] == digest
             assert len(calls) == 1
-        admitted_cli = subprocess.run([sys.executable, "-m", "loopx.hosts.codex_checkpoint",
-            "--root", str(unit), "--expected-sha256", digest, "--config-path", str(config), "--sandbox", execution.sandbox],
-            env=env, text=True, capture_output=True, timeout=40)
-        assert admitted_cli.returncode == 0, admitted_cli.stderr
-        admitted = json.loads(admitted_cli.stdout)
+        if provider_transport:
+            with pytest.raises(ValueError, match="only model and reasoning effort"):
+                admit_warm_session(env, {key: value for key, value in transport_declaration.items()
+                                        if key != "provider_base_url"})
+            assert not Path(env["CODEX_HOME"]).exists() and len(calls) == 1
+            admitted = admit_warm_session(env, transport_declaration)
+        else:
+            admitted_cli = subprocess.run([sys.executable, "-m", "loopx.hosts.codex_checkpoint",
+                "--root", str(unit), "--expected-sha256", digest, "--config-path", str(config),
+                "--sandbox", execution.sandbox, *model_config_args],
+                env=env, text=True, capture_output=True, timeout=40)
+            assert admitted_cli.returncode == 0, admitted_cli.stderr
+            admitted = json.loads(admitted_cli.stdout)
         assert admitted["session_binding_admitted"] and admitted["history_verified"]
         assert admitted["model_calls"] == 0 and not admitted["continuation_qualified"]
         assert admitted["session_id"] != source_session and len(calls) == 1
@@ -636,17 +690,21 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
             def forbidden_fork(*args, **kwargs):
                 raise AssertionError("a repeated admission must not create a second native fork")
             replay.setattr("loopx.hosts.codex_checkpoint.fork_native_checkpoint", forbidden_fork)
-            recovered = admit_native_checkpoint_session(env, unit, digest, config, sandbox=(execution).sandbox, timeout=30)
+            recovered = admit_native_checkpoint_session(env, unit, digest, config,
+                sandbox=(execution).sandbox, timeout=30, **admission_options)
             assert recovered == admitted
             assert bound["checkpoint_artifact_sha256"] == digest
             # Transport reply loss leaves the atomic source-bound binding as the
             # original receipt. An exact CLI retry must also recover it.
-            retry_cli = subprocess.run(admitted_cli.args, env=env, text=True, capture_output=True, timeout=40)
-            assert retry_cli.returncode == 0, retry_cli.stderr
-            assert json.loads(retry_cli.stdout) == admitted
-            with pytest.raises(ValueError, match="profile changed"):
+            if provider_transport:
+                assert admit_warm_session(env, transport_declaration) == admitted
+            else:
+                retry_cli = subprocess.run(admitted_cli.args, env=env, text=True, capture_output=True, timeout=40)
+                assert retry_cli.returncode == 0, retry_cli.stderr
+                assert json.loads(retry_cli.stdout) == admitted
+            with pytest.raises(ValueError, match="profile changed|destination model differs"):
                 admit_native_checkpoint_session({**env, "REASONING_EFFORT": "low"}, unit, digest,
-                                                config, sandbox=(execution).sandbox, timeout=30)
+                    config, sandbox=(execution).sandbox, timeout=30, **admission_options)
         assert len(calls) == 1 and load_codex_cli_session(runtime, lineage={
             "goal_id": destination_goal, "agent_id": destination_agent}, session_scope="agent") == bound
         if case == "resume":
@@ -724,7 +782,7 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
         assert json.loads(adopted_todo["todo"]["note"])["source_session"] == source_session
         guard = invoke([*prefix, "quota", "should-run", "--runtime-profile", "generic_cli", *binding])
         assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
-        if case == "joint":
+        if joint:
             control = tmp_path / "host-control"
             control.mkdir()
             branch_phase = control / "phase-deadline"
@@ -760,7 +818,7 @@ response = requests.post(url + '/api/v1/submit', data={'token': token},
 response.raise_for_status()
 identifier = response.json()['submission_id']
 for _ in range(100):
-    result = requests.get(url + '/api/v1/result/' + identifier, timeout=5).json()
+    result = requests.get(url + '/api/v1/result/' + identifier, params={'token': token}, timeout=5).json()
     if result['status'] == 'completed': break
     time.sleep(.01)
 assert result['status'] == 'completed'
@@ -779,7 +837,7 @@ print('Captured public best 7; continued candidate 8; consumed round agent-3; no
         logs = tmp_path / "continuation"
         logs.mkdir()
         command = native_command(env, execution, "execute", logs, wake)
-        if case == "joint":
+        if joint:
             command = ["/bin/bash", "-c", shell + "exec " + shlex.join(command)]
         current_body = json.dumps(guard["interaction_contract"], ensure_ascii=False)
         result = subprocess.run(command, env=env, cwd=workspace, input=current_body + "\nContinue: verify the retained files.",
@@ -788,6 +846,9 @@ print('Captured public best 7; continued candidate 8; consumed round agent-3; no
         (logs / "stdout.jsonl").write_text(result.stdout)
         wake.observe(logs / "stdout.jsonl")
         assert wake.session_id == admitted["session_id"] and len(calls) == 3
+        if case == "model_transition":
+            assert requests[1]["model"] == "fixture-next"
+            assert requests[1]["reasoning"]["effort"] == "max"
         retained_message = ("previous Host deadline has passed" if case == "warm_preparation"
                             else "Synthetic source result.")
         assert retained_message in json.dumps(requests[1])
@@ -820,7 +881,7 @@ print('Captured public best 7; continued candidate 8; consumed round agent-3; no
         assert "Future route outside this checkpoint" not in json.dumps(requests[2])
         assert canonical_context({**env, "LOOPX_GOAL_ID": source_goal,
             "LOOPX_RUNTIME_ROOT": str(source_runtime)}, deadline=time.time() + 30) == later_context
-        if case == "joint":
+        if joint:
             assert "Captured public best 7; continued candidate 8" in json.dumps(requests[2])
             history = http.get(branch_url + "/api/v1/history", params={"token": fresh["token"]}, timeout=5).json()
             assert history["best_score"] == 8 and history["best_round"] == "agent-3"
@@ -842,7 +903,8 @@ print('Captured public best 7; continued candidate 8; consumed round agent-3; no
             "agent_id": destination_agent}, session_scope="agent")
         assert after_work["checkpoint_artifact_sha256"] == digest
         with pytest.raises(ValueError, match="advanced or differs"):
-            admit_native_checkpoint_session(env, unit, digest, config, sandbox=(execution).sandbox, timeout=30)
+            admit_native_checkpoint_session(env, unit, digest, config,
+                sandbox=(execution).sandbox, timeout=30, **admission_options)
         assert load_codex_cli_session(runtime, lineage={"goal_id": destination_goal,
             "agent_id": destination_agent}, session_scope="agent") == after_work
         if case != "warm_preparation":
@@ -876,7 +938,8 @@ print('Captured public best 7; continued candidate 8; consumed round agent-3; no
 
 
 @pytest.mark.parametrize("turn_envelope", [None, False, True], ids=["legacy", "ordinary", "envelope"])
-def test_interrupted_cursor_requires_exact_unreleased_final_guard(tmp_path, monkeypatch, turn_envelope):
+@pytest.mark.parametrize("context_option", [None, "codex_context_dir", "codex_context_root"])
+def test_interrupted_cursor_requires_exact_unreleased_final_guard(tmp_path, monkeypatch, turn_envelope, context_option):
     """A stopped command is eligible only at the declared pre-output boundary."""
     import copy
     import shlex
@@ -894,6 +957,9 @@ def test_interrupted_cursor_requires_exact_unreleased_final_guard(tmp_path, monk
         guard["turn_envelope"] = turn_envelope
     if turn_envelope is False:
         argv.remove("--turn-envelope")
+    if context_option:
+        guard[context_option] = "/fixture/context"
+        argv += ["--" + context_option.replace("_", "-"), guard[context_option]]
     command = shlex.join(["/bin/bash", "-lc", shlex.join(argv)])
     item = {"type": "commandExecution", "id": "guard-call", "command": command, "cwd": str(tmp_path),
             "status": "failed", "exitCode": 137, "aggregatedOutput": None}
@@ -911,6 +977,21 @@ def test_interrupted_cursor_requires_exact_unreleased_final_guard(tmp_path, monk
     rendered[-1]["items"][-1]["command"] = shlex.join(["/bin/bash", "-lc",
         "LOOPX_TURN=turn-1\n" + shlex.join(argv).replace("--turn-instance-id turn-1", '--turn-instance-id "${LOOPX_TURN:?}"')])
     _verify_interrupted_guard(rendered, guard)
+    for setting in ("off", "on"):
+        explicit = copy.deepcopy(turns)
+        explicit[-1]["items"][-1]["command"] = shlex.join([
+            "/bin/bash", "-lc", shlex.join(argv + ["--context-delivery", setting])])
+        _verify_interrupted_guard(explicit, {**guard, "context_delivery": setting})
+    with pytest.raises(ValueError, match="routes or identity"):
+        _verify_interrupted_guard(turns, {**guard, "context_delivery": "on"})
+    with pytest.raises(ValueError, match="routes or identity"):
+        _verify_interrupted_guard(turns, {**guard, "context_delivery": None})
+    # Equivalent implicit/explicit off commands cannot hide an earlier call.
+    repeated = copy.deepcopy(turns)
+    repeated[-1]["items"].append({**item, "id": "later-call", "command": shlex.join([
+        "/bin/bash", "-lc", shlex.join(argv + ["--context-delivery", "off"])])})
+    with pytest.raises(ValueError, match="ambiguous"):
+        _verify_interrupted_guard(repeated, guard)
     # A caller cannot change the captured presentation/authority mode on restore.
     opposite = list(argv)
     if "--turn-envelope" in opposite:
@@ -925,15 +1006,27 @@ def test_interrupted_cursor_requires_exact_unreleased_final_guard(tmp_path, monk
         with pytest.raises(ValueError, match="must be boolean"):
             _verify_interrupted_guard(turns, {**guard, "turn_envelope": invalid})
     variants = []
+    for option in ("--codex-context-dir", "--codex-context-root"):
+        altered = list(argv)
+        if option in altered:
+            altered[altered.index(option) + 1] = "/foreign/context"
+        else:
+            altered += [option, "/foreign/context"]
+        changed = copy.deepcopy(turns)
+        changed[-1]["items"][-1]["command"] = shlex.join(["/bin/bash", "-lc", shlex.join(altered)])
+        variants.append(changed)
     for field, value in [("aggregatedOutput", "score already exposed"), ("cwd", "/elsewhere"),
                          ("status", "completed"), ("command", shlex.join(["/bin/bash", "-lc", shlex.join(argv) + "; touch later"]))]:
         changed = copy.deepcopy(turns)
         changed[-1]["items"][-1][field] = value
         variants.append(changed)
-    for option, value in [("--turn-instance-id", "wrong-turn"), ("--decision-handoff-socket", "/tmp/other"),
+    for option, value in [("--context-delivery", "on"), ("--turn-instance-id", "wrong-turn"), ("--decision-handoff-socket", "/tmp/other"),
                           ("--registry", "/other.json"), ("--goal-id", "other")]:
         altered = list(argv)
-        altered[altered.index(option) + 1] = value
+        if option in altered:
+            altered[altered.index(option) + 1] = value
+        else:
+            altered += [option, value]
         changed = copy.deepcopy(turns)
         changed[-1]["items"][-1]["command"] = shlex.join(["/bin/bash", "-lc", shlex.join(altered)])
         variants.append(changed)

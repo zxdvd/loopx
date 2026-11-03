@@ -1,16 +1,104 @@
 /** Compact Explore read model. Existing Graph/Harness owners retain all gates. */
+import {isDeepStrictEqual} from "node:util";
 import {createHash} from "node:crypto";
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireInteger, requireJsonObject, requireNonEmptyString, requireStringArray} from "../runtime_decode.ts";
+import {parseTodoTimestampMicros} from "../runtime_timestamp.ts";
 import {PLANNING_TODO_ID} from "../work_items/planning_relations.ts";
 
-import {EXPLORE_WRITEBACK_SUMMARY_LIMIT, exploreResultWritebackAffordance} from "./explore_result_writeback.ts";
+import {EXPLORE_WRITEBACK_SUMMARY_LIMIT, exploreBeforeWorkGuidance, exploreResultWritebackAffordance} from "./explore_result_writeback.ts";
 import {EXPLORE_RESULT_PAGE_MAX, normalizeExploreResultPages} from "./explore_result_page.ts";
 import {projectExploreMeasurementFeedback} from "./explore_measurements.ts";
 
+/** Reusable evidence and instructions in this owner's read model. Current
+ * selection, eligibility, source revisions and pagination stay outside this
+ * split. Exact array edits retain every change, including its status,
+ * provenance and applicability; no timestamp or revision is normalized away. */
+export function exploreReusableContextPaths(content: JsonObject = {}): (string | number)[][] {
+  return [
+    ...["recent_nodes", "recent_findings", "writeback_results", "measurement_feedback",
+      "path_delta_attachment_template", "linked_question_attachment_template",
+      "optional_question_evolution_example", "result_writeback_guidance",
+      "result_attachment_template", "optional_measurement_example", "measurement_guidance",
+      "record_node_template", "record_finding_template", "guidance",
+      "result_writeback_option", "result_writeback_inline_option", "result_writeback_inline_field",
+      "result_attachment_schema", "path_delta_attachment_schema"].map(key => ["graph", key]),
+    ["harness", "guidance"], ["harness", "link_evidence_template"],
+    // The branch's identity, selection, status and resume facts stay fresh.
+    // Its evidence audit is a read model, not an eligibility or execution grant.
+    ...["selected_branches", "comparison_candidates", "rejected_candidates", "frontier"].flatMap(lane => {
+      const branches = (content.harness as JsonObject | undefined)?.[lane];
+      return Array.isArray(branches) ? branches.flatMap((branch, index) =>
+        branch !== null && typeof branch === "object" && !Array.isArray(branch)
+          && typeof branch.todo_id === "string" && branch.todo_id
+          ? [["harness", lane, index, "typed_evidence_audit"]] : []) : [];
+    }),
+  ];
+}
+
+/** The same authoring projection is used inline and by the captured writer. */
+function resultWritebackFields(writeback: JsonObject): JsonObject {
+  return {
+      result_writeback_option: writeback.option,
+      result_writeback_inline_option: writeback.inline_option,
+      result_writeback_inline_field: writeback.inline_field,
+      result_attachment_schema: writeback.attachment_schema,
+      path_delta_attachment_schema: writeback.path_delta_attachment_schema,
+      path_delta_attachment_template: writeback.path_delta_attachment_template,
+      linked_question_attachment_template: writeback.linked_question_attachment_template,
+      optional_question_evolution_example: writeback.optional_question_evolution_example,
+      result_writeback_guidance: writeback.guidance,
+      result_attachment_template: writeback.attachment_template,
+      optional_measurement_example: writeback.optional_measurement_example,
+  };
+}
+
+/** Reference only exact, recognized authoring already delivered by the captured
+ * settlement plan. Unknown/custom guidance stays inline: no prose classification
+ * or migration of old obligations to a later phase. Evidence and paging stay put.
+ */
+function withoutCurrentResultWriteback(content: JsonObject, attachment: JsonObject): JsonObject | null {
+  const rawGraph = content.graph;
+  if (content.ok !== true || content.graph_enabled !== true || !rawGraph || typeof rawGraph !== "object" || Array.isArray(rawGraph) ||
+      attachment.capability_id !== "explore" || attachment.guidance !== exploreResultWritebackAffordance().guidance) return null;
+  const graph = requireJsonObject(rawGraph, "Explore graph");
+  const fields = resultWritebackFields(attachment);
+  if (Object.entries(fields).some(([key, value]) => value === undefined || !isDeepStrictEqual(graph[key], value))) return null;
+  const retained = {...graph};
+  for (const key of Object.keys(fields)) delete retained[key];
+  return retained;
+}
+
+export function referenceExploreResultWriteback(content: JsonObject, attachment: JsonObject, read: string): JsonObject {
+  const retained = withoutCurrentResultWriteback(content, attachment);
+  return retained === null ? content : {...content, graph: {...retained,
+    result_writeback_guidance: exploreBeforeWorkGuidance(), result_writeback_read: read}};
+}
+
+/** A pure replan has no admitted Todo for refresh-state's result attachment.
+ * Preserve evidence collection obligations and the independent graph commands;
+ * do not advertise unusable authoring or invent a later attachment authority.
+ * The caller must establish the autonomous settlement binding first.
+ */
+export function omitUnboundExploreResultWriteback(content: JsonObject): JsonObject {
+  const retained = withoutCurrentResultWriteback(content, exploreResultWritebackAffordance());
+  return retained === null ? content : {...content, graph: {...retained,
+    result_writeback_guidance: exploreBeforeWorkGuidance() +
+      " The refresh-state Explore attachment requires an admitted Todo and is unavailable for this pure replan. " +
+      "The independent graph record commands remain available for reusable evidence."}};
+}
+
 function rows(value: unknown): JsonObject[] {
   return Array.isArray(value) ? value.map(item => requireJsonObject(item, "Explore row")) : [];
+}
+function newestNodeFirst(left: JsonObject, right: JsonObject): number {
+  const a = String(left.last_updated_at ?? ""), b = String(right.last_updated_at ?? "");
+  const at = parseTodoTimestampMicros(a.trim()), bt = parseTodoTimestampMicros(b.trim());
+  // Compare instants before bounding context. Retain deterministic legacy rows
+  // after dated evidence, without rewriting their original timestamps.
+  return (at !== null && bt !== null ? Number(bt - at) : Number(bt !== null) - Number(at !== null))
+    || b.localeCompare(a);
 }
 function compact(row: JsonObject, fields: string[]): JsonObject {
   return Object.fromEntries(fields.filter(key => row[key] !== undefined)
@@ -95,8 +183,7 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
   const projection = requireJsonObject(params.projection, "projection");
   const plan = requireJsonObject(params.plan, "plan");
   // The canonical graph retains creation order; this bounded view needs update order.
-  const nodes = rows(projection.nodes).sort((a, b) =>
-    String(b.last_updated_at ?? "").localeCompare(String(a.last_updated_at ?? "")));
+  const nodes = rows(projection.nodes).sort(newestNodeFirst);
   const findings = rows(projection.findings);
   if (params.include_finding_digests != null && typeof params.include_finding_digests !== "boolean") {
     throw new EffectRuntimeRequestError("include_finding_digests must be a boolean");
@@ -112,16 +199,20 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
     const audit = requireJsonObject(branch.typed_evidence_audit, "Explore evidence audit");
     return requireStringArray(audit.requested_node_refs ?? [], "Explore node refs");
   }) : []);
-  const attachedResults = findings.filter(row => Array.isArray(row.tags) && row.tags.includes("writeback-result"));
+  // Manual quantitative capture uses the same finding owner. Keep its sources
+  // available to the existing exact-result decision path, without requiring a
+  // writeback-origin tag or admitting unrelated unmeasured notes.
+  const decisionResults = findings.filter(row => row.measurements !== undefined || row.measurement_error !== undefined
+    || Array.isArray(row.tags) && row.tags.includes("writeback-result"));
   // Keep the same detail budget, but do not let unrelated newer results evict
   // the applicability of evidence linked to the next selected work item.
   // Explicitly bound work can differ from this independent planner. Prioritize
   // its canonical links without changing candidates, scores or admission.
-  const plannerResults = prioritizeLinkedResults(attachedResults, selectedRefs);
+  const plannerResults = prioritizeLinkedResults(decisionResults, selectedRefs);
   // Shared links must not inherit another task's planner priority. Use source
   // recency within the focus and retain planner ordering only outside it.
   const writebackResults = focusedRefs.size
-    ? prioritizeLinkedResults(attachedResults, focusedRefs, plannerResults) : plannerResults;
+    ? prioritizeLinkedResults(decisionResults, focusedRefs, plannerResults) : plannerResults;
   const command = (...args: string[]) => [...route, "explore", ...args, "--goal-id", goal];
   const resultLimit = requireInteger(params.result_limit ?? 3, "result_limit");
   const resultOffset = requireInteger(params.result_offset ?? 0, "result_offset");
@@ -253,13 +344,13 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
       counts: projection.counts ?? {},
       recent_nodes: nodes.slice(0, 3).map(row => compact(row, ["node_id", "title", "status", "blocked_reason"])),
       // The canonical evidence projection calls the finding's title `finding`.
-      recent_findings: findings.slice(0, 3).map(row => ({...compact({...row, title: row.finding}, ["finding_id", "node_id", "title", "status"]),
+      recent_findings: findings.slice(0, 3).map(row => ({...compact({...row, title: row.finding}, ["finding_id", "node_id", "title", "status", "measurement_error"]),
         ...findingDigest(row, findingSources)})),
       // Full scoped summaries; progressive reads can raise the page size.
       // These retain the observation AND applicability; clipping away conditions
       // could turn a bounded refutation into a blanket route ban.
       writeback_results: visibleResults
-        .map(row => ({...compact(row, ["finding_id", "node_id", "finding", "status", "evidence_refs"]),
+        .map(row => ({...compact(row, ["finding_id", "node_id", "finding", "status", "evidence_refs", "measurement_error"]),
           summary: String(row.summary ?? "").slice(0, EXPLORE_WRITEBACK_SUMMARY_LIMIT),
           ...(row.execution_observation ? {execution_observation: row.execution_observation} : {}),
           ...(row.measurements ? {measurements: row.measurements} : {}),
@@ -274,17 +365,7 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
       },
       omitted_nodes: Math.max(0, nodes.length - 3),
       summary_command: command("summary"),
-      result_writeback_option: writeback.option,
-      result_writeback_inline_option: writeback.inline_option,
-      result_writeback_inline_field: writeback.inline_field,
-      result_attachment_schema: writeback.attachment_schema,
-      path_delta_attachment_schema: writeback.path_delta_attachment_schema,
-      path_delta_attachment_template: writeback.path_delta_attachment_template,
-      linked_question_attachment_template: writeback.linked_question_attachment_template,
-      optional_question_evolution_example: writeback.optional_question_evolution_example,
-      result_writeback_guidance: writeback.guidance,
-      result_attachment_template: writeback.attachment_template,
-      optional_measurement_example: writeback.optional_measurement_example,
+      ...resultWritebackFields(writeback),
       ...(measurementFeedback.length ? {
         measurement_feedback: visibleMeasurements,
         omitted_measurement_feedback: remainingMeasurements,
@@ -294,7 +375,7 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
           remaining: remainingMeasurements, revision: resultRevision,
           next_command: nextRead(remainingMeasurements, visibleMeasurements.length),
         },
-        measurement_guidance: "Compare only matching metric, unit, direction, comparison_scope, input_revision and evaluation_ref. Positive improvement means the latest recorded result beat its prior best; negative means a regression. Use the candidate/evidence references to investigate or return to a better candidate before repeating work. Latest recorded is not current or retained; best is not acceptance, a causal effect or authorization. Unknown values are not zero. Follow measurement_feedback_page.next_command for omitted groups, or filter by node; existing result limit/offset/revision options apply and changed evidence requires restarting the read.",
+        measurement_guidance: "Compare only matching metric, unit, direction, comparison_scope, input_revision and evaluation_ref. Positive improvement means the latest recorded result beat its prior best; negative means a regression. A singleton group's null improvement is not zero gain: check whether candidate revisions or individual receipts were put in input_revision/evaluation_ref instead of candidate_ref/evidence_ref. Correct a recorded finding only with verified provenance; never merge unknown or changed conditions. Use the candidate/evidence references to investigate or return to a better candidate before repeating work. Latest recorded is not current or retained; best is not acceptance, a causal effect or authorization. Unknown values are not zero. Follow measurement_feedback_page.next_command for omitted groups, or filter by node; existing result limit/offset/revision options apply and changed evidence requires restarting the read.",
       } : {}),
       record_node_template: command("node", "--title", "<hypothesis or experiment>", "--status", "exploring"),
       record_finding_template: command("finding", "--node", "<node-id>", "--title", "<evidence-backed result>", "--status", "<tentative|confirmed|refuted>"),

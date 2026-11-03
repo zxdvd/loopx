@@ -19,10 +19,14 @@ from .control_plane.turn_driver.execution_profile import (
     REASONING_EFFORTS,
     managed_execution_profile,
 )
-from .control_plane.turn_driver.host_binding import (
-    EXECUTOR_KIND_MANAGED,
-    MANAGED_TURN_HOST,
-    managed_executor_binding,
+from .control_plane.turn_driver.host_binding import managed_executor_binding
+# Every name stays importable from this module, which tests and smokes use.
+from .capabilities.steward_executor.machine_defaults import (  # noqa: F401
+    MANAGER_ENDPOINT_INDIVIDUAL,
+    MANAGER_ENDPOINT_KINDS,
+    MANAGER_ENDPOINT_MANAGED,
+    MANAGER_EXECUTOR_KIND_INDIVIDUAL,
+    MANAGER_EXECUTOR_KIND_MANAGED,
 )
 from .capabilities.manager_context.answer_contract import (
     classify_manager_answer_shape,
@@ -71,6 +75,7 @@ _DURABLE_CHANGE_RECEIPT_INSTRUCTION = (
 )
 MANAGER_AGENT_OBJECTIVE = (
     "Serve as the user's global LoopX manager, independent of the currently selected Goal or project. Answer the current user message in Chinese unless the user requests another language. "
+    "One user request may address several independently resolved authorized Agents: context_handoff accepts an array of exact goal_id/agent_id/brief entries (at most 32), with recipient-specific context and separate receipts/returns. Do not require one recipient to relay for the others, widen the audience or infer batch completion from one reply. "
     + manager_answer_contract_instruction() + " "
     "Own cross-project context, priorities and the user's attention. Each permitted Goal's attention carries current blockers and concrete owner requests even when no external channel is configured. "
     "Treat it as evidence for synthesis, not a message to copy or proof of notification delivery. Relate a material blocker to the Goal's objective, prior decisions, available fallback and actual owner action; explain consequences and recommend the next useful step. "
@@ -96,6 +101,9 @@ MANAGER_AGENT_OBJECTIVE = (
     "Do not mistake old plans, quota events or an open record for newly completed work. "
     "For dated progress reports, inspect recent_delivery_history for every Goal within the requested and authorized coverage and join todo_id to current_todos.todos and completed_todos for concrete titles. "
     "Filter by the requested calendar date in the user timezone; distinguish recorded delivery time, actual completion, and independently verified artifacts. "
+    "For a fixed local report window, read deliveries with offset-aware window_start/window_end ([start,end)); do not substitute the days lookback. "
+    "Paginate every applicable Goal (include stopped Goals when requested), keep the same bounds and pass the first page's source.source_revision as expected_source_revision. "
+    "A conflicting source requires restarting that Goal's read, not combining revisions. Use an observed delivery_ref to recover truncated recorded_details before drawing conclusions; oversized or unavailable records remain coverage gaps. "
     "Do not let a newer delivery hide yesterday's receipts. Report useful recorded outcomes with their verification level, then name exact remaining gaps. "
     "For dated or coverage-sensitive reports, use evidence_window to state the relevant dates, sources and material omitted coverage. Explain configured/default windows, receipt limits and full-versus-compact coverage when they affect the conclusion or the user asks. Keep routine transport and limit details in the evidence records. Do not turn an unrelated question into a portfolio or source-health report. "
     "Receipts outside that window are outside coverage, not evidence of no progress. "
@@ -211,12 +219,11 @@ def is_manager_channel(value: Any) -> bool:
 # always says which executor it is running on and why.
 MANAGER_CHANNEL_BINDING_SCHEMA_VERSION = "manager_channel_binding_v0"
 MANAGER_ENDPOINT_ENV_VAR = "LOOPX_MANAGER_ENDPOINT"
-# The endpoint an operator selects to run the steward on the managed executor,
-# and the endpoint the channel runs when nothing is selected. Neither name is
-# "default" beyond that: the shipped default is stated once, in the resolution
-# below, so a reader cannot mistake the pair for two competing defaults.
-MANAGER_ENDPOINT_MANAGED = MANAGED_TURN_HOST
-MANAGER_ENDPOINT_INDIVIDUAL = "codex"
+# The endpoint and executor-kind vocabulary (`MANAGER_ENDPOINT_MANAGED`,
+# `MANAGER_ENDPOINT_INDIVIDUAL`, `MANAGER_EXECUTOR_KIND_*` and
+# `MANAGER_ENDPOINT_KINDS`) is imported above from the `steward_executor`
+# namespace that validates it, so reading machine configuration never loads
+# this module. The shipped default is still stated once, in the resolution below.
 MANAGER_ENDPOINT_SOURCE_PRODUCT_DEFAULT = "product_default"
 MANAGER_ENDPOINT_SOURCE_EXPLICIT_CONFIG = "explicit_config"
 # The operator's persistent machine choice. It outranks the service environment
@@ -230,20 +237,6 @@ MANAGER_ENDPOINT_SOURCE_SESSION_BINDING = "session_binding"
 # steward has exactly one such decision, and it is not conditional on a
 # credential, which is why no credential branch appears beside it.
 MANAGER_ENDPOINT_DEFAULT_REASON_STEWARD_CHANNEL_DEFAULT = "steward_channel_default"
-# Executor kinds name where this channel's model work is billed and bounded
-# rather than which adapter is launched, and they use the same vocabulary as the
-# governed Turn surface: an individual executor runs on one person's own CLI
-# login, a managed executor on an operator-supplied credential. Which kind an
-# endpoint is decides whether an operator credential belongs to it at all; the
-# mere presence of a credential decides nothing.
-MANAGER_EXECUTOR_KIND_INDIVIDUAL = "individual"
-MANAGER_EXECUTOR_KIND_MANAGED = EXECUTOR_KIND_MANAGED
-MANAGER_ENDPOINT_KINDS = {
-    MANAGER_ENDPOINT_INDIVIDUAL: MANAGER_EXECUTOR_KIND_INDIVIDUAL,
-    # The managed host is billed to the operator's own endpoint, not to one
-    # person's CLI login, so it is reached only by selecting it.
-    MANAGER_ENDPOINT_MANAGED: MANAGER_EXECUTOR_KIND_MANAGED,
-}
 
 MANAGER_MODEL_ENV_VAR = "LOOPX_MANAGER_MODEL"
 MANAGER_MODEL_DEFAULT = "gpt-6.1-sol"
@@ -316,7 +309,10 @@ def operator_credential_pair(controller: Any) -> dict[str, str]:
     return operator_provider_host_credential(runtime_root)
 
 
-def manager_capabilities_projection(controller: Any, store: Any) -> dict[str, Any]:
+def manager_capabilities_projection(
+    controller: Any, store: Any, *,
+    endpoint_capabilities: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Compose the steward section of the shared chat capabilities payload.
 
     Every steward entry point resolves the same three things -- this machine's
@@ -335,6 +331,7 @@ def manager_capabilities_projection(controller: Any, store: Any) -> dict[str, An
         controller,
         machine_defaults=machine_defaults,
         environ=credential["environ"],
+        endpoint_capabilities=endpoint_capabilities,
     )
     return manager_runtime_capability_projection(
         controller,
@@ -404,14 +401,18 @@ def _manager_eligible_endpoints(
     return [str(item) for item in raw if str(item)]
 
 
-def _controller_endpoint_availability(controller: Any) -> dict[str, bool]:
-    resolver = getattr(controller, "capabilities", None)
-    if not callable(resolver):
-        return {}
-    try:
-        rows = resolver()
-    except Exception:  # noqa: BLE001 - availability readback must remain advisory.
-        return {}
+def _controller_endpoint_availability(
+    controller: Any, *, endpoint_capabilities: list[dict[str, Any]] | None = None,
+) -> dict[str, bool]:
+    rows = endpoint_capabilities
+    if rows is None:
+        resolver = getattr(controller, "capabilities", None)
+        if not callable(resolver):
+            return {}
+        try:
+            rows = resolver()
+        except Exception:  # noqa: BLE001 - availability readback must remain advisory.
+            return {}
     if not isinstance(rows, list):
         return {}
     return {
@@ -439,6 +440,7 @@ def manager_executor_allocation(
     *,
     machine_defaults: Mapping[str, Any] | None = None,
     environ: dict[str, str] | None = None,
+    endpoint_capabilities: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Resolve one bounded steward executor choice and explain why it won.
 
@@ -459,7 +461,9 @@ def manager_executor_allocation(
     )
     policy = _manager_selection_policy(defaults)
     eligible = _manager_eligible_endpoints(defaults)
-    availability = _controller_endpoint_availability(controller)
+    availability = _controller_endpoint_availability(
+        controller, endpoint_capabilities=endpoint_capabilities,
+    )
     requested = str(requested_endpoint or "").strip()
     reason = ""
 
@@ -876,6 +880,8 @@ def manager_model_resolution(
     if MANAGER_ENDPOINT_KINDS.get(resolved_endpoint) == MANAGER_EXECUTOR_KIND_MANAGED:
         profile = managed_execution_profile(environ)
         return str(profile["model"]), MANAGER_MODEL_SOURCE_MANAGED_PROFILE
+    if resolved_endpoint == "antigravity":
+        return "gemini-4-argon-high", MANAGER_MODEL_SOURCE_VENDOR_DEFAULT
     return MANAGER_MODEL_DEFAULT, MANAGER_MODEL_SOURCE_VENDOR_DEFAULT
 
 
@@ -1005,7 +1011,8 @@ def manager_session_model_allocation(
 # 21: migrate the former transcript-in-objective representation to persisted
 #     native history. Merely removing it from new prompts leaves old upstream
 #     conversations overfull and unable to compact before their next request.
-MANAGER_CONTEXT_VERSION = 21
+# 22: resolve role shorthand by subject evidence; a past handoff is not ownership.
+MANAGER_CONTEXT_VERSION = 22
 
 # An installed manager workspace keeps the marker it was written with. The
 # writer refreshes that workspace skill while the file still carries any
@@ -1015,8 +1022,9 @@ MANAGED_SKILL_MARKER_V1 = "<!-- loopx-managed-manager-skill:v1 -->"
 MANAGED_SKILL_MARKER_V2 = "<!-- loopx-managed-manager-skill:v2 -->"
 MANAGED_SKILL_MARKER_V3 = "<!-- loopx-managed-manager-skill:v3 -->"
 MANAGED_SKILL_MARKER_V4 = "<!-- loopx-managed-manager-skill:v4 -->"
-MANAGED_SKILL_MARKERS = (MANAGED_SKILL_MARKER_V1, MANAGED_SKILL_MARKER_V2, MANAGED_SKILL_MARKER_V3, MANAGED_SKILL_MARKER_V4)
-MANAGED_SKILL_CURRENT_MARKER = MANAGED_SKILL_MARKER_V4
+MANAGED_SKILL_MARKER_V5 = "<!-- loopx-managed-manager-skill:v5 -->"
+MANAGED_SKILL_MARKERS = (MANAGED_SKILL_MARKER_V1, MANAGED_SKILL_MARKER_V2, MANAGED_SKILL_MARKER_V3, MANAGED_SKILL_MARKER_V4, MANAGED_SKILL_MARKER_V5)
+MANAGED_SKILL_CURRENT_MARKER = MANAGED_SKILL_MARKER_V5
 
 
 def manager_skill_text() -> str:

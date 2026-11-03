@@ -113,6 +113,54 @@ unknown; this is maintenance of the App's own installation, not proof that one
 source revision is newer. A provably newer runtime remains selected. Both local HTTP services must expose the selected
 artifact's identity before the workspace opens.
 
+Chat readiness uses `/api/chat/readiness`: the loaded service's frozen runtime
+identity and HTTP readiness only. It does not enumerate models, credentials,
+Sessions or Goal state, and grants no work authority. Both native and browser
+launchers retain the original capabilities fallback for older services. The
+native probe keeps its 500 ms deadline, so slow metadata reads cannot multiply
+startup probes into more capability-discovery work. Capability availability and
+original-conversation authorization are still checked by their normal owners.
+
+Chat 就绪探针仅读取已加载服务的固定版本身份，不枚举模型、凭据、会话或 Goal，
+也不授予执行权限。原生与浏览器启动器保留旧服务的完整能力接口兼容路径；原生探针
+仍为 500 毫秒期限，不通过延长期限掩盖问题。能力是否可用、原会话是否获授权，仍由
+原入口单独实时核验。
+
+Opening the selected original conversation is a read-only discovery. It uses a
+fresh provider identity and Core's grant check, then re-reads the exact atomic
+configuration to reject a concurrent selection or revocation. It does not wait
+behind background mutation fences, cache authorization, resume a thread or
+submit work. Sending still uses the existing effect-time admission fences.
+
+打开原管家会话仅做只读发现：实时核验身份及 Core 授权后，再读原子配置，拒绝期间
+发生的选择或撤权变化；不再排队等待后台修改锁，也不缓存授权、恢复线程或提交任务。
+发送消息仍走原有执行时准入与保护锁。
+
+On macOS, adopting a different Chat runtime reuses Core's existing managed
+listener replacement. The loaded original manager supplies its explicit store
+route; the same accepted-work fence protects its queued and active Turns through
+restart. A private bootstrap does not need to match a desktop Python template.
+While work is pending the window explains the wait and retries automatically.
+Unknown manager/store state grants no raw-kill fallback or second consumer.
+`loopx update activate --service chat --port 8767` retries this adoption without
+installing anything; its receipt is a restart request, not readiness proof.
+`loopx update activate` retries the existing managed status/Chat batch.
+
+macOS 切换 Chat 运行时时复用 Core 已有的受管替换入口，由正在运行的原管理器提供
+明确存储路由，并在重启期间保留排队及在途任务保护。私有启动包装无需匹配桌面的
+Python 模板；任务未结束时窗口说明等待原因并自动重试。来源或任务状态未知时，
+不退回直接杀进程，也不启动第二消费者。上述 activate 命令只重试已安装服务的采用，
+不重新安装；返回重启请求后仍需独立核验服务身份与就绪状态。
+
+The startup recovery view distinguishes accepted work from unverified state.
+These before/after images use a synthetic native snapshot to show the copy only;
+they do not establish service readiness or request completion. The managed
+restart fence and independent readiness readback qualify those separately.
+
+| Before: a generic connection failure | After: pending work and automatic continuation |
+| --- | --- |
+| ![Generic startup connection failure](docs/assets/native-chat-wait-before.png) | ![Startup waits for the original request without asking for a restart](docs/assets/native-chat-wait-after.png) |
+
 If anonymous GitHub ancestry lookup is unavailable, the App can reuse an
 existing GitHub CLI login for the same fixed public-repository GET. It never
 starts login or requests account permissions. Each tool has a three-second
@@ -303,6 +351,14 @@ against the local source. Vite development navigation is unchanged. Explicit
 runtime repair retains its existing root handoff; WebContent crash recovery
 continues to retain the current in-process route.
 
+Research uses this same saved-view path. The macOS capture below is a packaged
+QA build with the real backend and a disposable synthetic Goal, reopened
+directly in Research after a normal quit and a loopback-port change. Window
+close/reopen, an explicit return to Manager and a corrupt preference were also
+checked. It does not demonstrate model execution or an official App upgrade.
+
+![Packaged QA reopening the same synthetic Goal in Research](docs/assets/research-reopen-qa.jpg)
+
 For native qualification, use a separately identified packaged App with the
 real backend: select a local Goal and Agent page, quit normally, reopen, and
 check the same selection on the new port. Also check window-close, an explicit
@@ -411,23 +467,40 @@ restricted to loopback CORS and the existing preview/apply authority boundary.
 
 ## Coexistence With `loopx dashboard`
 
-The packaged App allocates its own private Status and Chat endpoints for each
-window. `loopx dashboard` keeps its CLI endpoints on `8766` and `8767`; either
-entrypoint can run without adopting or stopping the other's listeners. Vite
-development retains those CLI ports and its qualified-service reuse path.
+The normal packaged App and `loopx dashboard` use the same machine Status and
+Chat endpoints on `8766` and `8767`. The supervisor first qualifies the existing
+LoopX listener and its exact runtime identity. It reuses a matching service and
+keeps a loaded standard LaunchAgent as its owner; opening a window does not
+create another Chat store or external-message consumer. A foreign or
+unqualified listener is an error, never another port or an empty history.
+A declared but unloaded machine LaunchAgent stays authoritative: the App reports
+recovery instead of starting another service with an empty default store.
+Core retains original binding, Session, Turn and delegation audience semantics;
+sharing the service does not merge private conversations or widen permissions.
 
-The packaged App watches its own direct service children. When one exits, it
-restarts that service on the same private endpoint with the same qualified
-runtime and identity, keeping the healthy peer running. Recovery attempts are
-at least two seconds apart. An occupied endpoint fails closed and is retried;
-the intervening listener is never adopted or stopped. A live but unresponsive
-child is outside this exit-recovery path.
+Closing a window never stops a borrowed service. Services the App itself starts
+still retain the existing owned-process lifecycle; installing a persistent
+machine service on a fresh machine is a separate lifecycle qualification.
+A configured machine service must retain its original registry and Chat runtime,
+rather than replacing them with an empty default store during adoption.
 
-Recovery keeps an update check's error or available-update choice visible. It
-waits during maintenance and after an App replacement requires restart or leaves
-the App incomplete. The native shell sends no conversation input or replay;
-persisted Session and Turn recovery remain owned by Core. Closing the App stops
-only its own service process groups.
+Developer/QA runs may explicitly set `LOOPX_DESKTOP_PRIVATE_ENDPOINTS=1` to use
+the existing private-endpoint path (only `0` and `1` are accepted). Private ports
+do not isolate stored data: QA must also pin a disposable registry/runtime through
+the existing `LOOPX_BIN` test wrapper. In either mode the supervisor watches and
+restarts only its own direct children on the same ports, with the same qualified
+runtime and at least two seconds between recovery attempts. An occupied private endpoint
+is never borrowed or stopped. This isolation is not the ordinary product path.
+
+Both paths retain update errors, maintenance exclusion, existing preview/apply
+authority and Core-owned Session recovery. The native shell sends no conversation
+input and never replays a Turn to establish service readiness.
+
+普通 App 与网页默认连接同一机器服务；打开窗口不再默认创建另一份 Chat 存储或
+外部消息消费者。复用前核验服务及准确运行时身份；原 registry、Chat runtime、
+Session 与委派受众保持不变，不混合不同私聊或扩大权限。借用的常驻服务不随窗口
+关闭而停止。App 自己启动的服务保留既有生命周期，首次安装常驻服务仍单独验收。
+开发隔离须明确设置上述环境变量；服务不可用或来源未核验时显示恢复，不切到空数据。
 
 ## Prerequisites
 

@@ -51,6 +51,7 @@ def effective_turn_cadence_context(
         "goal_ref": goal_ref,
         "source_admission": source_admission,
         "threshold": threshold,
+        "stride_strategy": profile.get("stride_strategy", "off"),
         "settlement_source": {
             "runtime_root": str(runtime_root.resolve()),
             "goal_id": goal["id"],
@@ -82,6 +83,9 @@ def _run_fact(run: Mapping[str, Any], ack_recorded: Callable[..., bool]) -> dict
         "turn_id": _progress_turn_instance_id(run),
         "accepted_ack": ack_recorded(run),
         "progress": progress_observation_from_run(run),
+        **({"todo_id": run.get("todo_id"), "blocked_retry": run["blocked_retry"],
+            "delivery_outcome": run.get("delivery_outcome")}
+           if isinstance(run.get("blocked_retry"), dict) else {}),
         "monitor": {
             "target_id": str(target.get("target_id") or "").strip() or None,
             "mode": str(target.get("monitor_mode") or "").strip() or None,
@@ -186,9 +190,14 @@ def project_replan_history(
         # Carry one observation for the complete current source. Expiry is
         # interpreted by the shared TypeScript Monitor owner, not this codec.
         params["observed_at"] = now_utc().timestamp()
+    if operation in {"all", "periodic"}:
+        # Preserve the native retry's microsecond deadline; TS reuses the
+        # settlement owner instead of a second expiry policy or bridge call.
+        params["retry_observed_at"] = now_utc().isoformat()
     if effective_turn_cadence is not None:
         params["settlement_source"] = effective_turn_cadence["settlement_source"]
         params["periodic_threshold"] = effective_turn_cadence["threshold"]
+        params["stride_strategy"] = effective_turn_cadence.get("stride_strategy", "off")
     try:
         if effective_turn_cadence is None:
             result = project_replan_request(params)

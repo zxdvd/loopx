@@ -4,21 +4,28 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
 
-from .review_body import REQUIRED_FINAL_SECTIONS, review_body_requirements
+from .review_body import (
+    AUTHOR_OWNED_APPROVAL_FALLBACK_TITLE,
+    AUTHOR_OWNED_REQUEST_CHANGES_FALLBACK_TITLE,
+    REQUIRED_FINAL_SECTIONS,
+    REVIEW_SECTION_TITLES,
+    review_body_requirements,
+)
 from .approval_closeout import approval_closeout_contract
 from .architecture_assessment import ARCHITECTURE_ASSESSMENT
 from .visual_assessment import VISUAL_ASSESSMENT
 
 # Increment when review requirements change without changing the packet shape.
-REVIEW_POLICY_REVISION = 23
+REVIEW_POLICY_REVISION = 26
 
 # Agent-consumed prose is observable behavior even when JSON shape is stable.
 # Reuse the existing semantic verdicts; this is evidence within the same review.
-DECISION_TEXT_ASSESSMENT = {
+DECISION_TEXT_ASSESSMENT: dict[str, Any] = {
     "verdict_values": ["equivalent", "intentional_change_validated", "unintended_drift",
                        "not_yet_proven", "not_applicable"],
     "fields": ["verdict", "checked_scope", "reason"],
     "applicable_fields": ["consumer", "clause_comparisons", "counterfactuals", "evidence_refs"],
+    "fields_by_verdict": {"intentional_change_validated": ["authorization_basis"]},
     "clause_fields": ["baseline_clause", "head_clause", "obligation_or_condition", "assessment"],
     "counterfactual_fields": ["triggering_state", "expected_obligation", "observed_result", "evidence_ref", "status"],
     "blocking_verdicts": ["unintended_drift", "not_yet_proven"],
@@ -62,7 +69,7 @@ VISUAL_EXPLANATION_PUBLICATION: dict[str, Any] = {
         "Keep labels public-safe and readable; inspect the rendered diagram before publication, "
         "or use the prose/table fallback and disclose that rendering was not verified. "
         "A diagram is optional presentation guidance, never a new required result field, evidence "
-        "receipt, approval condition or substitute for findings, validation, the complete Chinese "
+        "receipt, approval condition or substitute for findings, validation, the complete bilingual "
         "five-section review and English verdict. Code blocks still do not satisfy explanatory "
         "section floors. Reuse the existing Markdown surface; do not create an image service, "
         "upload private artifacts or infer publication/merge authority."
@@ -107,14 +114,23 @@ VALIDATION_FAILURE_ATTRIBUTION = {
     ],
     "external_fields": ["independent_evidence", "retry_or_recovery_owner"],
     "rule": (
-        "Classify every currently required failed or skipped validation before choosing a review verdict. "
-        "A pre-existing failure is non-blocking for review only when the same check on an "
+        "Judge current changed-invariant coverage before classifying CI observations. Unknown, "
+        "failed, skipped, cancelled or pending remote CI does not itself block APPROVE or "
+        "require a complete CI run, logs or root-cause investigation. When independent current "
+        "evidence establishes the relevant invariants, retain CI observations as diagnostic "
+        "validation rows with required=false; an unknown cause stays unresolved, never relabelled "
+        "as pre_existing_unrelated or external_unrelated. Name any material missing invariant "
+        "in its own required row and the smallest decisive check; do not simply mark all CI "
+        "required or waive necessary validation. A confirmed pr_regression blocks approval "
+        "even on a diagnostic row. Classify failed or skipped required review validation. "
+        "Claim a pre-existing failure only when the same check on an "
         "immutable base and exact head has the same normalized failing identity and detail, "
         "the PR does not alter that failure's causal path, and the changed invariant has "
         "independent passing evidence. Equal aggregate counts alone are insufficient. "
-        "An external failure needs independent outage or infrastructure evidence, a recovery "
-        "owner, and separate coverage of the changed invariant. Otherwise classify it as "
-        "pr_regression or unresolved and request changes. Report unrelated red checks and "
+        "Claim an external failure only with independent outage or infrastructure evidence, "
+        "a recovery owner, and separate coverage of the changed invariant. A required review "
+        "failure without that evidence remains pr_regression or unresolved and blocks approval. "
+        "Report diagnostic red checks and "
         "their recovery separately from the PR verdict: APPROVE may be correct while merge "
         "readiness remains on hold. Never relax a hard limit or required check to make it green."
     ),
@@ -397,7 +413,7 @@ def _section(label: str, minimum: int, instruction: str) -> dict[str, Any]:
         "word_hint": f"至少 {minimum} 个正文字符；不含标题、链接地址、代码和重复行",
         "minimum_prose_characters": minimum,
         "content": "",
-        "agent_instruction": instruction,
+        "agent_instruction": f"Prefer the heading `## {REVIEW_SECTION_TITLES[label]}`. " + instruction,
     }
 
 
@@ -445,6 +461,16 @@ def build_review_template(item: Mapping[str, Any]) -> dict[str, Any]:
             "Render the verified structured result using the five sections. "
             "Open the body with one `Reviewer:` line (reviewer_declaration.body_marker) "
             "carrying result.reviewer's actor_kind, model and provider. "
+            "Write the main narrative, analysis, evidence and conclusion in connected Chinese prose. "
+            "Keep accurate English technical terms, symbols and commands where useful; explain "
+            "unfamiliar terms once. Bilingual headings, short finding titles and optional "
+            "Problem / Evidence / Impact / Fix labels can aid navigation, but their explanations "
+            "stay primarily Chinese. Do not turn English labels into long English paragraphs or "
+            "a second translation of the same analysis. Keep one concise English verdict. "
+            "Use PASS / FAIL / UNVERIFIED for validation, and "
+            "a compact table only for genuinely comparable observations. Do not translate every sentence "
+            "twice, impose a language ratio, repeat conclusions or remove evidence to reduce density. "
+            "This is writing guidance, not a new language quota or an exception to any evidence gate. "
             "The capability-owned review_execution_contract is the evidence and completeness authority. Save the exact final Markdown in result.review_body before check-result; publish that checked body and read it back. Section floors reject empty shells, not certify reasoning. Explain concrete paths and counterexamples; do not pad or duplicate evidence to meet a floor."
             " Follow visual_explanation when a diagram or table improves understanding; retain the complete prose review."
         ),
@@ -660,8 +686,8 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
                     "proof of safety. Use not_yet_proven for missing required evidence on an "
                     "affected current contract, or violated for a concrete violation. Both block "
                     "approval and must name the contract, PR trigger, observed evidence, minimum "
-                    "repair and rerun command. Advisory cannot override a required CI failure "
-                    "or concrete blocking finding. Do not promote future/advisory RFC properties "
+                    "repair and rerun command. Advisory cannot override missing necessary "
+                    "affected-contract evidence or a concrete blocking finding. Do not promote future/advisory RFC properties "
                     "to current obligations. For budget failures or changes, distinguish "
                     "hard limits from regression budgets and presentation caps. Reuse "
                     "validation_matrix and observable_semantics for base/head measurements under the same workload and metric; "
@@ -1011,17 +1037,22 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
                     "or success of every remote job a prerequisite for APPROVE. "
                     "repository_required_checks records the validation required for the code "
                     "judgment; required means review evidence, not GitHub branch protection. "
-                    "Record pending remote jobs separately as diagnostic rows with required=false "
+                    "Record unknown, failed, skipped, cancelled or pending remote jobs separately "
+                    "as diagnostic rows with required=false "
                     "when independent current evidence already covers their relevant invariants. "
-                    "If a pending job is the only decisive coverage, keep that invariant's row "
-                    "required and unverified. Attribute current failures before judging the PR. "
-                    "Pending CI alone does not justify REQUEST_CHANGES; merge readiness still "
+                    "An unknown CI cause stays unresolved; do not demand logs or a full CI "
+                    "root-cause audit merely to approve. If CI is the only decisive coverage, "
+                    "keep the missing invariant's row required and unverified and name the "
+                    "smallest decisive check. CI status alone does not justify REQUEST_CHANGES; "
+                    "confirmed regressions and missing necessary review evidence still do. Merge readiness still "
                     "enforces its configured CI policy."
                     if wait_for_ci else
                     "Repository-native local validation at the reviewed head. "
                     "Do not fetch, poll, or wait for GitHub CI. Missing, pending, "
-                    "or failed remote CI is not a review evidence gap. Attribute local "
-                    "failures against the base and changed invariant before judging the PR."
+                    "or failed remote CI is not a review evidence gap. Retain already supplied "
+                    "CI observations as diagnostic rows with required=false, without inferring "
+                    "a cause. Attribute necessary local validation failures against the base "
+                    "and changed invariant before judging the PR; confirmed regressions still block."
                 ),
                 "failure_attribution": VALIDATION_FAILURE_ATTRIBUTION,
                 "required_when": "always",
@@ -1338,7 +1369,8 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
             "approval_requires": (
                 "All required evidence verified with substantive supporting detail, no "
                 "blocking evidence verdict, and no unresolved blocking finding. An "
-                "unverified result may explain REQUEST_CHANGES but never APPROVE. "
+                "unverified required evidence item may explain REQUEST_CHANGES but never APPROVE; "
+                "diagnostic CI rows may remain unresolved or unverified without blocking it. "
                 "Run pr-review --check-result RESULT --packet PACKET before publishing; "
                 "this checks consistency, not evidence truth or remote freshness."
             ),
@@ -1368,11 +1400,16 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
         "verdict_policy": {
             "open_pr_blocking_finding": "REQUEST_CHANGES",
             "unrelated_validation_failure": (
+                "APPROVE when independent current evidence establishes the changed invariants "
+                "and no blocking finding remains, even when CI is unknown, failed, skipped, "
+                "cancelled or pending. Record diagnostic CI with required=false and preserve "
+                "unknown causes; CI success and complete CI attribution are not prerequisites. "
                 "APPROVE when a required red check is independently attributed to an unchanged "
                 "pre-existing failure or external infrastructure, and the PR's changed "
                 "invariant is covered. Record the separate merge-readiness hold; do not ask "
-                "this PR to repair unrelated code or budgets. Unattributed, introduced, or "
-                "worsened current failures still block approval. Apply validation_matrix's "
+                "this PR to repair unrelated code or budgets. Confirmed current regressions, "
+                "material instability and missing necessary review evidence still block approval, "
+                "including a pr_regression marked required=false. Apply validation_matrix's "
                 "evidence_scope to earlier observations; historical root-cause completeness "
                 "is not an independent approval gate."
             ),
@@ -1414,12 +1451,10 @@ def build_review_execution_contract(*, wait_for_ci: bool = True) -> dict[str, An
             "open_pr_non_blocking_finding": "APPROVE",
             "open_pr_no_finding": "APPROVE",
             "author_owned_no_blocker_fallback": (
-                "COMMENTED review titled 'Approval conclusion (author-owned PR; "
-                "GitHub blocks formal self-approval)'"
+                f"COMMENTED review titled '{AUTHOR_OWNED_APPROVAL_FALLBACK_TITLE}'"
             ),
             "author_owned_blocker_fallback": (
-                "COMMENTED review titled 'Request changes conclusion (author-owned "
-                "PR; GitHub blocks formal self-review)'"
+                f"COMMENTED review titled '{AUTHOR_OWNED_REQUEST_CHANGES_FALLBACK_TITLE}'"
             ),
             "merged_pr": "POST_MERGE_AUDIT_COMMENT when a new actionable finding exists",
             "publication_exceptions": [

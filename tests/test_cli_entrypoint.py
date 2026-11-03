@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -277,8 +278,14 @@ assert payload["groups"]
 		(["review-packet", "--help"], "loopx.cli_commands.status_registration", "loopx.cli_commands.status"),
 		(["quota", "--help"], "loopx.cli_commands.quota_registration", "loopx.cli_commands.quota"),
 		(["task-lease", "--help"], "loopx.cli_commands.task_lease", "loopx.cli_commands.task_lease"),
+		(["handoff", "--help"], "loopx.cli_commands.todo_continuation", "loopx.cli_commands.todo_continuation"),
+		(["handoff-mode", "--help"], "loopx.cli_commands.handoff_mode", "loopx.cli_commands.handoff_mode"),
 		(["todo", "--help"], "loopx.cli_commands.todo_registration", "loopx.cli_commands.todo"),
 		(["delegation", "--help"], "loopx.cli_commands.delegation", "loopx.cli_commands.delegation"),
+		(["agent-context", "--help"], "loopx.cli_commands.agent_context", "loopx.cli_commands.agent_context"),
+		(["agent-directory", "--help"], "loopx.cli_commands.agent_directory", "loopx.cli_commands.agent_directory"),
+		(["agent-capabilities", "--help"], "loopx.cli_commands.agent_capabilities", "loopx.cli_commands.agent_capabilities"),
+		(["goal-acceptance", "--help"], "loopx.cli_commands.goal_acceptance", "loopx.cli_commands.goal_acceptance"),
 		(["goal-portfolio", "--help"], "loopx.cli_commands.summary_all_registration", "loopx.cli_commands.summary_all"),
 		(["global-summary", "--help"], "loopx.cli_commands.summary_all_registration", "loopx.cli_commands.summary_all"),
 		(["global-gates", "--help"], "loopx.cli_commands.summary_all_registration", "loopx.cli_commands.summary_all"),
@@ -286,6 +293,8 @@ assert payload["groups"]
 		(["global-risks", "--help"], "loopx.cli_commands.summary_all_registration", "loopx.cli_commands.summary_all"),
 		(["turn", "--help"], "loopx.cli_commands.turn_registration", "loopx.cli_commands.turn"),
 		(["turn", "run-once", "--help"], "loopx.cli_commands.turn_registration", "loopx.cli_commands.turn"),
+		*[( [command, "--help"], "loopx.cli_commands.project_lifecycle", "loopx.cli_commands.project_lifecycle")
+		  for command in ("refresh-state", "checkpoint-context", "read-only-map", "reward", "operator-gate")],
 	],
 )
 def test_common_command_help_loads_only_its_owner(
@@ -361,6 +370,57 @@ assert "loopx.control_plane.quota.void_commit" not in sys.modules
 	assert completed.returncode == 0, completed.stderr
 
 
+def test_steward_endpoint_vocabulary_is_read_without_the_chat_layer() -> None:
+	script = """
+import sys
+from loopx.capabilities.steward_executor import (
+    normalize_steward_executor_machine_defaults,
+    steward_executor_endpoints,
+)
+
+assert steward_executor_endpoints() == frozenset({"codex", "dsh"})
+normalize_steward_executor_machine_defaults(
+    {"schema_version": "steward_executor_machine_defaults_v0", "executor_endpoint": "dsh"}
+)
+for name in ("loopx.chat_manager", "loopx.chat_agent", "loopx.chat_store"):
+    assert name not in sys.modules, name
+
+import loopx.chat_manager as manager
+from loopx.capabilities.steward_executor import machine_defaults
+for name in (
+    "MANAGER_ENDPOINT_INDIVIDUAL", "MANAGER_ENDPOINT_MANAGED", "MANAGER_ENDPOINT_KINDS",
+    "MANAGER_EXECUTOR_KIND_INDIVIDUAL", "MANAGER_EXECUTOR_KIND_MANAGED",
+):
+    assert getattr(manager, name) is getattr(machine_defaults, name), name
+assert manager.MANAGER_ENDPOINT_KINDS == {"codex": "individual", "dsh": "managed"}
+"""
+	completed = run_isolated_script(script)
+	assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.parametrize("command", [
+	["heartbeat-prompt", "--thin", "--codex-app", "--goal-id", "perf-goal", "--agent-id", "perf-agent",
+		"--agent-scope", "fixture", "--available-capability", "shell"],
+	["quota", "should-run", "--goal-id", "perf-goal", "--agent-id", "perf-agent",
+		"--available-capability", "shell", "--codex-app", "--turn-instance-id", "2026-10-31T00:00:00Z"],
+	["status", "--goal-id", "perf-goal"],
+	["refresh-state", "--goal-id", "perf-goal", "--agent-id", "perf-agent",
+		"--next-action", "Continue bounded fixture work.", "--no-global-sync", "--dry-run"],
+], ids=["heartbeat-prompt", "should-run", "status", "refresh-state"])
+def test_heartbeat_chain_routes_do_not_load_the_chat_layer(tmp_path, monkeypatch, command):
+	from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture, isolate_sqlite_runtime
+
+	isolate_sqlite_runtime(tmp_path, monkeypatch)
+	registry, runtime = write_command_fixture(tmp_path)
+	state = registry.parent.parent / ".codex/goals/perf-goal/ACTIVE_GOAL_STATE.md"
+	initialize_canonical_source_fixture(runtime, "perf-goal", state_path=state, provider="sqlite")
+	argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json", *command]
+	result = run_cli_main("loopx.entrypoint", argv,
+		forbidden_modules=("loopx.cli", "loopx.chat_manager", "loopx.chat_agent", "loopx.chat_store"))
+	assert result.returncode == 0, result.stderr
+	assert json.loads(result.stdout)["ok"] is True
+
+
 def test_turn_facade_preserves_every_export_owner_identity() -> None:
 	script = """
 from importlib import import_module
@@ -378,6 +438,37 @@ from loopx.control_plane.todos.list_readback import list_goal_todos
 from loopx.control_plane.goals.state_resolution import resolve_goal_state
 assert todos.list_goal_todos is list_goal_todos
 assert state_refresh.resolve_goal_state is resolve_goal_state
+"""
+	completed = run_isolated_script(script)
+	assert completed.returncode == 0, completed.stderr
+
+
+def test_capability_hook_imports_defer_unselected_facade_exports() -> None:
+	script = """
+from importlib import import_module
+import sys
+
+import loopx.capabilities.issue_fix.pr_wait_hook
+import loopx.capabilities.reward_memory.turn_hooks
+
+for name in (
+    "issue_fix.periodic_report",
+    "issue_fix.pr_description",
+    "issue_fix.reward_memory",
+    "reward_memory.codex_app_outcome",
+    "reward_memory.dogfood",
+    "reward_memory.evaluation",
+):
+    assert "loopx.capabilities." + name not in sys.modules, name
+
+from loopx.capabilities import issue_fix, reward_memory
+for facade in (issue_fix, reward_memory):
+    assert set(facade._EXPORTS) == set(facade.__all__)
+    for name in facade.__all__:
+        value = getattr(facade, name)
+        owner = import_module("." + facade._EXPORTS[name], facade.__name__)
+        assert value is getattr(owner, name), name
+        assert name in dir(facade)
 """
 	completed = run_isolated_script(script)
 	assert completed.returncode == 0, completed.stderr
@@ -411,8 +502,113 @@ else:
 	assert completed.returncode == 0, completed.stderr
 
 
+QUOTA_AUTHORITY_AND_COMPOSITION_OWNERS = (
+	"loopx.status",
+	"loopx.quota",
+	"loopx.upgrade",
+	"loopx.cli_commands.lark_inbox",
+	"loopx.cli_commands.quota_context",
+	"loopx.control_plane.quota.live_decision",
+	"loopx.control_plane.quota.cli_projection",
+	"loopx.capabilities.explore",
+	"loopx.capabilities.periodic_report",
+	"loopx.capabilities.repository_change_window",
+	"loopx.capabilities.reward_memory",
+	"loopx.capabilities.turn_context",
+)
+# Interaction hooks, the live decision, host observation, and recall exist only
+# for should-run; accounting routes must not compose them.
+QUOTA_SHOULD_RUN_ONLY_OWNERS = (
+	"loopx.cli",
+	"loopx.upgrade",
+	"loopx.control_plane.quota.live_decision",
+	"loopx.capabilities.periodic_report.pending_intent",
+	"loopx.capabilities.repository_change_window",
+	"loopx.capabilities.turn_context",
+)
+
+
+def test_quota_handler_import_defers_owners_and_preserves_export_identity() -> None:
+	script = f"""
+from importlib import import_module
+import sys
+import loopx.cli_commands.quota as command
+
+for owner in {QUOTA_AUTHORITY_AND_COMPOSITION_OWNERS!r}:
+    assert owner not in sys.modules, owner
+for name, (module, attribute) in command._LAZY_EXPORTS.items():
+    assert name in dir(command), name
+    value = getattr(command, name)
+    assert value is getattr(import_module(module), attribute), name
+    assert getattr(command, name) is value, name
+try:
+    command.nonexistent_quota_handler_export
+except AttributeError:
+    pass
+else:
+    raise AssertionError("unknown quota handler exports must fail")
+"""
+	completed = run_isolated_script(script)
+	assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.parametrize("route", ["context-read", "replan-view"])
+def test_quota_pre_authority_routes_skip_authority_owners(tmp_path: Path, route: str) -> None:
+	registry, runtime = write_command_fixture(tmp_path)
+	capture = tmp_path / "decision.json"
+	capture.write_text("{\"ok\": true, \"goal_id\": \"perf-goal\"}\n", encoding="utf-8")
+	digest = hashlib.sha256(capture.read_bytes()).hexdigest()
+	arguments = {
+		"context-read": ["--capture-file", str(capture), "--capture-sha256", digest],
+		"replan-view": ["--decision-file", str(tmp_path / "missing.json"),
+			"--outcome-ref", "outcome", "--source-hash", digest],
+	}[route]
+	before = registry.read_bytes()
+	argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+		"quota", route, *arguments]
+	selected = run_cli_main("loopx.entrypoint", argv,
+		forbidden_modules=("loopx.cli", *QUOTA_AUTHORITY_AND_COMPOSITION_OWNERS))
+	full = run_cli_main("loopx.cli", argv)
+	assert selected.returncode == full.returncode == (0 if route == "context-read" else 1)
+	assert selected.stdout == full.stdout
+	assert selected.stderr == full.stderr
+	assert registry.read_bytes() == before
+	assert not runtime.exists()
+
+
+def test_quota_accounting_routes_skip_should_run_composition(tmp_path, monkeypatch) -> None:
+	from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture, isolate_sqlite_runtime
+
+	isolate_sqlite_runtime(tmp_path, monkeypatch)
+	registry, runtime = write_command_fixture(tmp_path)
+	state = registry.parent.parent / ".codex/goals/perf-goal/ACTIVE_GOAL_STATE.md"
+	initialize_canonical_source_fixture(runtime, "perf-goal", state_path=state, provider="file")
+	base = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json", "quota"]
+	identity = ["--goal-id", "perf-goal", "--agent-id", "perf-agent"]
+	cases = [
+		(["spend-slot", "--slots", "1", "--source", "heartbeat", "--todo-id", "todo_cli_dispatch"], 0),
+		(["void-slot", "--void-generated-at", "2026-08-28T00:00:00+00:00",
+			"--reason-summary", "Checked fixture"], 1),
+		(["monitor-poll"], 1),
+	]
+	for arguments, expected_code in cases:
+		result = run_cli_main("loopx.entrypoint", [*base, *arguments, *identity],
+			forbidden_modules=QUOTA_SHOULD_RUN_ONLY_OWNERS)
+		assert result.returncode == expected_code, result.stderr
+		payload = json.loads(result.stdout)
+		assert payload["mode"] == arguments[0]
+		assert payload["ok"] is (expected_code == 0)
+		assert payload.get("appended") is not True
+
+
 def test_selected_parser_matches_full_help_and_diagnostics() -> None:
 	argv_cases = [
+		*[[command, flag] for command in
+		  ("refresh-state", "checkpoint-context", "read-only-map", "reward", "operator-gate")
+		  for flag in ("--help", "--unknown-option")],
+		["refresh-state", "--goal-id", "goal", "--delivery-outcome", "invalid"],
+		["checkpoint-context", "--goal-id", "goal", "--agent-id", "agent", "--turn-instance-id", "turn",
+		 "--todo-id", "todo_work", "--replan-obligation-id", "replan"],
 		["commands", "--help"],
 		["commands", "--format", "json"],
 		["commands", "--format", "markdown"],
@@ -465,10 +661,67 @@ def test_selected_parser_matches_full_help_and_diagnostics() -> None:
 	for command in ("goal-portfolio", "global-summary", "global-gates", "global-todos", "global-risks"):
 		argv_cases.extend([[command, "--help"], [command, "--unknown-option"], [command, "--limit", "invalid"]])
 	argv_cases.append(["goal-portfolio", "--manager-view", "unknown"])
+	for command in ("agent-context", "agent-directory", "agent-capabilities"):
+		argv_cases.extend([[command, "--help"], [command], [command, "--unknown-option"],
+			[command, "--goal-id", "goal", "--agent-i", "agent"]])
+	argv_cases.append(["agent-context", "--goal-id", "goal", "--agent-id", "agent", "--phase", "unknown"])
+	argv_cases.extend([["goal-acceptance", "--help"], ["goal-acceptance", "inspect"],
+		["goal-acceptance", "unknown-action", "--goal-id", "goal"],
+		["goal-acceptance", "inspect", "--goal-id", "goal", "--unknown-option"]])
 	selected = run_cli_batch("loopx.entrypoint", argv_cases)
 	full = run_cli_batch("loopx.cli", argv_cases)
 
 	assert selected == full
+
+
+@pytest.mark.parametrize("module", ["loopx.entrypoint", "loopx.cli"])
+@pytest.mark.parametrize("command", ["agent-context", "agent-directory", "agent-capabilities"])
+def test_agent_commands_read_registered_peer_without_changing_goal(
+	tmp_path: Path, module: str, command: str,
+) -> None:
+	from tests.control_plane.canonical_authority_fixture import (
+		assert_todo_read_unchanged, initialize_canonical_source_fixture,
+	)
+	from loopx.control_plane.todos.list_readback import list_goal_todos
+
+	registry, runtime_root = write_command_fixture(tmp_path)
+	state_path = registry.parent.parent / ".codex/goals/perf-goal/ACTIVE_GOAL_STATE.md"
+	initialize_canonical_source_fixture(runtime_root, "perf-goal", state_path=state_path)
+	before = list_goal_todos(registry_path=registry, runtime_root_arg=str(runtime_root), goal_id="perf-goal")
+	registry_before = registry.read_bytes()
+	argv = ["--registry", str(registry), "--runtime-root", str(runtime_root),
+		"--format", "json", command, "--goal-id", "perf-goal", "--agent-id", "perf-agent"]
+	if command == "agent-context":
+		argv += ["--phase", "before_plan"]
+	completed = run_cli_main(module, argv,
+		forbidden_modules=("loopx.cli",) if module == "loopx.entrypoint" else ())
+	assert completed.returncode == 0, completed.stderr
+	payload = json.loads(completed.stdout)
+	assert payload["ok"] is True
+	if command == "agent-context":
+		assert payload["read_only"] is True
+		assert payload["agent_context"] is None
+	elif command == "agent-directory":
+		assert [row["agent_id"] for row in payload["rows"]] == ["perf-agent"]
+		assert payload["scope"]["caller_membership"] == "registered_agent"
+	else:
+		assert payload["agent_capabilities"]["agent_id"] == "perf-agent"
+		assert payload["agent_capabilities"]["goal_id"] == "perf-goal"
+		preview = run_cli_main(module, [*argv, "--unavailable-capability", "network"])
+		assert preview.returncode == 0, preview.stderr
+		assert json.loads(preview.stdout)["agent_capabilities"]["proposed"]["unavailable"] == ["network"]
+		assert not (runtime_root / "agent-runtime-capabilities").exists()
+		written = run_cli_main(module, [*argv, "--unavailable-capability", "network", "--execute"])
+		assert written.returncode == 0, written.stderr
+		assert json.loads(written.stdout)["agent_capabilities"]["written"] is True
+		other = "loopx.cli" if module == "loopx.entrypoint" else "loopx.entrypoint"
+		readback = run_cli_main(other, argv)
+		assert readback.returncode == 0, readback.stderr
+		assert json.loads(readback.stdout)["agent_capabilities"]["unavailable"] == ["network"]
+	assert registry.read_bytes() == registry_before
+	assert_todo_read_unchanged(
+		list_goal_todos(registry_path=registry, runtime_root_arg=str(runtime_root), goal_id="perf-goal"), before,
+	)
 
 
 @pytest.mark.parametrize("arguments", [
@@ -487,6 +740,113 @@ def test_selected_manager_inbox_refusals_match_without_loading_full_cli(tmp_path
 	assert json.loads(selected.stdout)["ok"] is False
 
 
+@pytest.mark.parametrize("arguments", [
+	["handoff", "inspect"],
+	["handoff", "prepare", "--goal-id", "perf-goal"],
+	["handoff", "inspect", "--format", "digest"],
+	["handoff-mode", "show", "--goal-id", "perf-goal", "--mode", "hard_lease"],
+	["handoff-mode", "migrate", "--goal-id", "perf-goal"],
+])
+def test_selected_handoff_refusals_match_without_loading_full_cli(tmp_path, arguments):
+	registry, runtime_root = write_command_fixture(tmp_path)
+	argv = ["--registry", str(registry), "--runtime-root", str(runtime_root), "--format", "json", *arguments]
+	before = registry.read_bytes()
+	selected = run_cli_main("loopx.entrypoint", argv, forbidden_modules=("loopx.cli",))
+	full = run_cli_main("loopx.cli", argv)
+	assert selected.returncode == full.returncode == 1
+	assert selected.stdout == full.stdout
+	assert selected.stderr == full.stderr
+	assert registry.read_bytes() == before
+
+
+def test_selected_handoff_parser_diagnostics_match_full_cli():
+	cases = [
+		["handoff"], ["handoff", "unknown"], ["handoff-mode"], ["handoff-mode", "unknown"],
+		["handoff", "inspect", "--format", "yaml"],
+		["handoff-mode", "set", "--mode", "invalid"],
+		["handoff-mode", "show", "--goal-id", "demo", "--unrecognized"],
+	]
+	assert run_cli_batch("loopx.entrypoint", cases) == run_cli_batch("loopx.cli", cases)
+
+
+@pytest.mark.parametrize("input_format", ["json", "markdown"])
+@pytest.mark.parametrize("format_name", ["json", "markdown"])
+def test_selected_handoff_restore_preserves_content_without_authority(tmp_path, input_format, format_name):
+	text = "保持完整要求。\n\nValidate the original Todo.\n"
+	source = tmp_path / "handoff.txt"
+	source.write_text(json.dumps({"ok": True, "handoff_text": text}) if input_format == "json" else text, encoding="utf-8")
+	registry, runtime = tmp_path / "absent-registry.json", tmp_path / "absent-runtime"
+	argv = ["--registry", str(registry), "--runtime-root", str(runtime), "handoff", "restore",
+		"--input", str(source), "--input-format", input_format, "--format", format_name]
+	selected = run_cli_main("loopx.entrypoint", argv, forbidden_modules=("loopx.cli",))
+	full = run_cli_main("loopx.cli", argv)
+	assert selected.returncode == full.returncode == 0
+	assert selected.stdout == full.stdout
+	assert (json.loads(selected.stdout)["handoff_text"] if format_name == "json" else selected.stdout) == text
+	assert not registry.exists() and not runtime.exists()
+
+
+@pytest.mark.parametrize("arguments", [
+	["refresh-state", "--dry-run"],
+	["checkpoint-context", "--agent-id", "perf-agent", "--turn-instance-id", "missing", "--todo-id", "todo_missing"],
+	["read-only-map"],
+	["reward", "--decision", "continue_route", "--reward", "positive", "--reason-summary", "Checked evidence", "--dry-run"],
+	["operator-gate", "--decision", "approve", "--reason-summary", "Checked evidence", "--dry-run"],
+])
+def test_selected_lifecycle_refusals_match_without_full_cli(tmp_path, arguments):
+	registry, runtime = write_command_fixture(tmp_path)
+	before = registry.read_bytes()
+	argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+		*arguments, "--goal-id", "missing-goal"]
+	selected = run_cli_main("loopx.entrypoint", argv, forbidden_modules=("loopx.cli",))
+	full = run_cli_main("loopx.cli", argv)
+	assert selected.returncode == full.returncode == 1
+	assert selected.stdout == full.stdout
+	assert selected.stderr == full.stderr
+	assert json.loads(selected.stdout)["ok"] is False
+	assert registry.read_bytes() == before
+
+
+@pytest.mark.parametrize("arguments", [
+	["inspect"],
+	["inspect-proposal", "--proposal-id", "missing-proposal"],
+	["verify", "--proposal-id", "missing-proposal"],
+])
+def test_selected_goal_acceptance_refusals_match_without_full_cli(tmp_path, arguments):
+	registry, runtime = write_command_fixture(tmp_path)
+	before = registry.read_bytes()
+	argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+		"goal-acceptance", *arguments, "--goal-id", "missing-goal"]
+	selected = run_cli_main("loopx.entrypoint", argv, forbidden_modules=("loopx.cli",))
+	full = run_cli_main("loopx.cli", argv)
+	assert selected.returncode == full.returncode == 1
+	assert selected.stdout == full.stdout
+	assert selected.stderr == full.stderr
+	assert json.loads(selected.stdout)["ok"] is False
+	assert registry.read_bytes() == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_selected_refresh_preview_keeps_canonical_state_without_full_cli(tmp_path, monkeypatch, provider):
+	from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture, isolate_sqlite_runtime
+	from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+
+	isolate_sqlite_runtime(tmp_path, monkeypatch)
+	registry, runtime = write_command_fixture(tmp_path)
+	state = registry.parent.parent / ".codex/goals/perf-goal/ACTIVE_GOAL_STATE.md"
+	initialize_canonical_source_fixture(runtime, "perf-goal", state_path=state, provider=provider)
+	before = state.read_bytes(), read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="perf-goal")
+	argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+		"refresh-state", "--goal-id", "perf-goal", "--agent-id", "perf-agent",
+		"--next-action", "Continue bounded fixture work.", "--no-global-sync", "--dry-run"]
+	for module in ("loopx.entrypoint", "loopx.cli"):
+		result = run_cli_main(module, argv, forbidden_modules=("loopx.cli",) if module == "loopx.entrypoint" else ())
+		assert result.returncode == 0, result.stderr
+		payload = json.loads(result.stdout)
+		assert payload["ok"] and payload["dry_run"]
+		assert (state.read_bytes(), read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="perf-goal")) == before
+
+
 def test_selected_manager_result_matches_full_replay_without_loading_full_cli(tmp_path):
 	from test_collaboration_goal_instance import _create_source_registry, _manager_request
 	from loopx.control_plane.collaboration.inbox import _root, acknowledge
@@ -499,7 +859,8 @@ def test_selected_manager_result_matches_full_replay_without_loading_full_cli(tm
 	argv = ["--registry", str(registry), "--runtime-root", str(tmp_path), "--format", "json",
 		"manager-inbox", "report", "--goal-id", "delivery", "--agent-id", "builder",
 		"--request-id", rid, "--reply-text", "The independent evidence check passed."]
-	selected = run_cli_main("loopx.entrypoint", argv, forbidden_modules=("loopx.cli",))
+	selected = run_cli_main("loopx.entrypoint", argv,
+		forbidden_modules=("loopx.cli", "loopx.quota"))
 	path = _root(tmp_path) / "replies" / rid / "conclusion.json"
 	assert selected.returncode == 0, selected.stderr
 	committed = path.read_bytes()
@@ -676,7 +1037,13 @@ assert json.loads(output.getvalue()) == {{"ok": {healthy!r}, "scope": "installat
 
 
 def test_selected_todo_execution_matches_full_cli(tmp_path: Path) -> None:
+	from tests.control_plane.canonical_authority_fixture import (
+		assert_todo_read_unchanged, initialize_canonical_source_fixture,
+	)
+
 	registry, runtime_root = write_command_fixture(tmp_path)
+	initialize_canonical_source_fixture(runtime_root, "perf-goal",
+		state_path=registry.parent.parent / ".codex/goals/perf-goal/ACTIVE_GOAL_STATE.md")
 	argv = [
 		"--registry",
 		str(registry),
@@ -700,7 +1067,7 @@ def test_selected_todo_execution_matches_full_cli(tmp_path: Path) -> None:
 	full = run_cli_main("loopx.cli", argv)
 
 	assert selected.returncode == full.returncode == 0
-	assert selected.stdout == full.stdout
+	assert_todo_read_unchanged(json.loads(selected.stdout), json.loads(full.stdout))
 	assert selected.stderr == full.stderr == ""
 
 

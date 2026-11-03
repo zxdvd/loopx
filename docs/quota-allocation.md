@@ -112,6 +112,20 @@ The cadence does not interrupt a host, schedule a Turn, spend quota or grant
 authority. The executor must settle work and re-enter quota before starting the
 next work Turn for the review obligation to take effect.
 
+A reached periodic count alone does not preempt the latest same-Agent work's
+accepted, unexpired receipt retry. The shared settlement owner qualifies that
+retry and its original deadline. The counter is not acknowledged or reset:
+review becomes due again at expiry. New work or evidence-driven triggers and
+independent runnable Todos retain their normal paths; another Agent's wait
+cannot suppress this Agent's review.
+
+The compact CLI packet may replace an identical Explore writeback-guidance
+mirror with `result_writeback_guidance_ref`, pointing to the complete settlement
+attachment in the same packet. Every clause remains available without another
+guard call. Differing text, standalone Explore reads and `--include-detail vision`
+retain the original guidance. This changes presentation, not work or settlement
+obligations.
+
 ```bash
 # Preview, apply, and read back an explicit Goal threshold (supported: 1–6).
 loopx configure-goal --goal-id example --execution-replan-after-turns 5
@@ -241,6 +255,40 @@ selection of independent work remain unchanged. A previously committed debit
 is retained, and neither a bare blocker declaration nor an unqualified ACK
 closes the Turn.
 
+History selection also distinguishes this accepted administrative blocked replan
+from a delivered milestone. The existing TypeScript settlement owner qualifies
+the persisted Run facts in one batch; a bare blocker, unaccepted ACK, mismatched
+identity or unsupported checkpoint remains outcome-relevant. Both semantic
+history and the legacy recent-Run reader retain the preceding real outcome
+checkpoint, including any unresolved gap, instead of manufacturing a new
+final-outcome obligation from the administrative closeout. The latest vision,
+checkpoint and replan ACK remain visible. Missing checkpoints and genuine
+delivery gaps still require their original review; this read classification
+grants no execution, completion, acceptance or settlement authority.
+
+历史选取将已验收的行政阻塞重规划与成果里程碑区分。复用 TypeScript 结算 owner 批量
+核对持久 Run 的类型化事实；裸阻塞、未验收 ACK、身份错配和未知 checkpoint 均不能
+取得行政豁免。语义历史和旧 recent-Run 读路都保留前一个真实成果 checkpoint 及其
+未解决缺口，避免行政收尾反复制造新的成果复核义务。最新 vision、checkpoint 和
+重规划 ACK 仍然可见；缺失 checkpoint 与真实交付 gap 保持原复核要求，这一读取
+分类不授予执行、完成、验收或结算权限。
+
+The same settlement owner qualifies active receipt retries for semantic-history
+selection and the legacy status overlay. Each reader sends one candidate batch;
+ordinary history without candidates needs no runtime request. Administrative
+acceptance and retry activity remain separate results. Python transports facts
+and applies existing row selection instead of maintaining a second retry rule.
+Historical reads retain aware timestamps, microsecond expiry and the original
+deadline; live settlement validation is unchanged. A non-string or blank Turn
+identity cannot establish an active retry. Full caller cost and installed
+adoption require separate qualification.
+
+同一结算 owner 也为语义历史选取和旧状态叠加核对活动回执重试。每条读路只发送一批
+候选；没有候选的普通历史无需 runtime 请求。行政验收和重试活动分别返回，Python
+传递事实并沿用已有行选取，不再维护第二套重试规则。历史读取保留带时区时间、微秒
+到期边界和原截止时间；实时结算校验不变。非字符串或空白 Turn 身份不能证明重试
+活动。完整调用成本与安装采用仍需分别验证。
+
 An accepted `vision_checkpoint_v0` for `outcome_progress` also closes its exact
 Todo-bound Turn after the matching writeback and spend receipts commit. Both
 `in_flight_continuation` and `semantic_closeout` use their corresponding typed
@@ -258,6 +306,21 @@ select the due successor under a fresh Turn. A stopped local trial does not
 become progress through recovery. Promoted authority's existing typed blocked
 closeout can use a Turn-owned retry for an open Todo without a resume condition,
 without inventing an external dependency or restarting the trial's budget.
+
+Positive CLI work admission retains the selected Todo's `resume_when` and
+`resume_ready` as scalar receipt facts. On same-Turn reentry, an unchanged
+`resume_at` already satisfied at that admission can continue under the original
+binding. The typed recovery owner checks the original receipt timestamp with
+microsecond precision and current readiness. A newly authored or changed wait,
+even one already due, still requires the original result's closeout. Missing or
+malformed historical admission facts retain conservative recovery. No receipt,
+wait, deadline or debit is rewritten; these facts grant no new work authority.
+
+CLI 正向工作准入将所选 Todo 的 `resume_when` 和 `resume_ready` 作为标量事实保留
+在回执中。同 Turn 重入时，若仍为准入时已经满足的同一个 `resume_at`，可沿原绑定
+继续；typed recovery owner 用微秒精度核对原回执时间及当前就绪状态。后来新设或
+改变的等待，即使已经到期，仍须结清原结果。历史准入事实缺失或畸形时保守进入恢复，
+不改写回执、等待、期限或扣额，也不产生新的执行权限。
 
 A Todo-bound path replan can be qualified during execution even when the
 initial guard selected no replan obligation. Its exact durable writeback must
@@ -479,6 +542,15 @@ Turn without spending quota. The retry suppresses only the blocked Todo for
 the same Agent until due or superseded by newer work, so independent eligible
 Todos can still be selected. Historical blocked writebacks without a bounded
 retry retain their prior spend readback; no debit is retroactively erased.
+Receipt clocks can contain microseconds. Todo `resume_at` authoring and readback
+accept up to six fractional digits and compare the exact instant; existing
+second/millisecond normalization and receipt identities are unchanged. A valid
+historical receipt with a Python datetime spelling outside Todo authoring syntax
+retains its original selection fence, without fabricating an automatic clock
+proof or rewriting the receipt.
+回执时钟可能包含微秒。Todo `resume_at` 的写入与读取接受最多六位小数并精确比较，
+原有秒/毫秒的规范化和回执身份保持不变。合法历史回执若使用 Todo 写入语法之外的
+Python datetime 格式，仍保留原选择限制，不伪造自动时钟证明，也不改写历史回执。
 Automatic no-spend stall writeback uses the same receipt-owned retry projection
 as live selection, including its post-writeback readback. A future unchanged
 monitor therefore stays quiet during that wait without failing the heartbeat
@@ -494,10 +566,31 @@ monitor clock, genuine gate and independent runnable work keep their own rules.
 This corrects the automatic notice explanation without adding configuration or
 persisted state. The pending retry is a recheck deadline, not execution authority:
 current gates and the configured cadence floor still apply at and after due time.
+
+A causal Vision wait retains the same non-gating notice and original retry
+deadline; it must not emit a response plan asking the worker to wait for that
+user action. Unscoped status overlays apply a receipt retry only to its current
+claimant. An unclaimed Todo remains available to other Agents; the requesting
+Agent's admission overlays only its own retry. History retains the original
+Run and clock, and genuine gates still block their declared scope.
+
+关联 Vision 的等待保留同一非阻塞通知与原重试期限，不得再投影“等待用户”的响应
+计划。未分 Agent 的 status 只向当前认领者投影其重试；未认领 Todo 仍可由其他 Agent
+选择，各 Agent 的准入只叠加自己的重试。原 Run／时钟和真正授权门禁保持原边界。
 Receipt waits added after stored resume lanes were built are read from the same
 claim-scoped full selection source. An existing wait lane or its display limit
 cannot hide a new retry; foreign, excluded, mismatched and replaced waits do not
 qualify through this path.
+
+Ordinary open-Vision wait projection uses the same complete, Agent-scoped
+runnable-work counts as selection. Commitment counts still include unfinished
+work and cannot establish that it can execute during a receipt retry. The
+existing resume owner supplies the retry's complete pending-clock proof to
+Vision and host supervision. A causally linked pending retry can therefore
+defer the open acceptance gap until its original due time; it neither closes
+the Vision nor suppresses independent work, a missing checkpoint or an unrelated
+acceptance obligation. Incomplete or differently scoped counts retain the
+existing conservative frontier behavior.
 
 类型化 deadline owner 会把新叠加的、更早到期的 Turn 重试纳入已有的完整来源
 缓存，同时保留显示列表之外的更早监控时钟和未变化的缓存。同一个 typed batch
@@ -510,6 +603,12 @@ qualify through this path.
 stored resume lane 建立后新增的 receipt wait，沿同一个 claim-scoped 完整
 selection 来源读回。已有等待列表及其显示上限不能隐藏新重试；其它 Agent、
 被排除的执行者、身份不匹配或已被替换的等待不能由这条路径取得资格。
+
+普通开放 Vision 的等待投影复用 selection 的完整 Agent 范围可执行工作计数；
+未完成承诺仍保留在 commitment 计数中，但不代表 receipt retry 期间可执行。
+既有 resume owner 向 Vision 和 Host 监督提供完整的未到期时钟证明；具有因果关联的
+retry 可暂缓普通开放验收缺口至原到期时间，不关闭 Vision，也不遮蔽独立工作、
+缺失 checkpoint 或无关验收义务；计数不完整或范围不匹配时仍保留原有保守判断。
 
 `quota should-run` also separates long-running observation from work that should
 advance the selected goal. When the selected goal's current projection is a
@@ -769,6 +868,21 @@ including `generic_cli`, `outer_controller`, and native CLI profiles. An explici
 asking for the selection it just accepted. This does not enable `--begin-turn`
 for those hosts or change legacy calls without a Turn identity.
 
+Hosts that already support `--begin-turn` may combine it with `--todo-id` to
+qualify a known choice on the initial guard. Reuse the returned Turn identity
+for recovery; beginning a Turn does not claim a lease or bypass admission.
+With an open scoped user gate, an explicitly selected eligible action is checked
+against that gate directly, including choices outside the compact display.
+The default fallback ranking is not an authority boundary. Covered actions,
+budget/health stops, capability requirements and committed receipt identities
+retain their existing checks.
+
+已支持 `--begin-turn` 的宿主可以同时传入 `--todo-id`，在第一次 guard 中校验
+已选工作，减少一次选择调用。恢复时复用返回的 Turn 身份；开始 Turn 不等于
+取得租约或绕过准入。存在限定范围的用户审批时，显式选择的合格工作直接按该
+审批范围校验，即使它不在精简展示中。默认推荐顺序不构成权限边界；受审批
+约束的工作、预算和健康停止条件、能力要求及已绑定回执仍保留原有校验。
+
 A single already-claimed candidate keeps the direct execution path without an
 extra selection round trip. A sole unclaimed candidate instead projects the
 existing explicit selection contract: recommendation alone must not create a
@@ -808,6 +922,16 @@ Overflow is reported through completeness counters rather than making the
 read-only quota guard fail. Task graph uses the same canonical Todo rows, while
 extending them with terminal predecessor/evidence rows and remaining an
 agent-neutral read model with separate gate/evidence context.
+
+Known diagnostic Todo rows use the existing bounded summary view. An unfamiliar
+record (including a structured recovery condition) remains complete at its
+original relative position; it does not expand every known sibling. Candidate
+collections and selection obligations stay complete. Omission counts describe
+only removed rows, and explicit detail views retain the original records.
+
+已知诊断 Todo 按原有摘要规则显示。包含结构化恢复条件或未知字段的记录仍按原相对
+顺序完整保留，不再使同组其他已知记录全部展开。候选集合与选择义务保持完整；省略
+计数只统计真正移除的记录，显式详情视图保留原始记录。
 
 Blocked candidates retain typed `resolution_bindings` even when another todo is
 runnable. Each binding names the capability, its resolution owner, and the
@@ -876,6 +1000,19 @@ empty original guard. A later future wait, changed owner or completed
 settlement still closes this resume path. This differs from executable work
 which became deferred after admission: that existing no-execution/no-spend
 boundary remains intact, and independent work is selected under a fresh Turn.
+
+For a Todo-bound resume, the generated CLI sequence therefore places the
+original Turn's guard immediately after reopening, rather than instructing
+the worker to settle and wait for another wake. Read that guard before
+delivery and acquire the required fresh execution claim/lease; only admission
+of the same Todo permits continued work. Validate and settle that original
+binding once after the authorized work. A refusal, changed wait, supersession
+or no-follow-up decision still follows its own recovery/closeout contract.
+
+Todo 绑定的恢复命令因此在重开后直接给出原 Turn 的 guard，而非要求先结算再等一次
+唤醒。执行前须读取 guard 并取得所需的新执行 claim/lease；仅同一 Todo 获得准入后
+才能继续工作，完成授权工作后验证并结算原绑定一次。拒绝、新等待、替代或无需后续
+的决定仍遵循对应的恢复／关闭契约；重开本身不授予执行权限。
 
 Priority remains authoritative across the resume boundary. When a ready
 current-agent or unclaimed deferred successor has strictly higher priority than

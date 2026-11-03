@@ -11,7 +11,7 @@ from hashlib import sha256
 import json
 from typing import Any
 
-from ..quota.turn_envelope import turn_envelope_action_signature_document
+from ..quota.turn_envelope import assert_turn_envelope_consumer_version, turn_envelope_action_signature_document
 from ..work_items.delivery_batch_scale import DELIVERY_BATCH_SCALE_CHOICES
 from ..work_items.delivery_outcome import DELIVERY_OUTCOME_CHOICES
 from .driver import selected_turn_todo
@@ -74,6 +74,7 @@ def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
     """Return the signed action and safety boundary exactly as projected."""
 
     envelope = _mapping(request.get("turn_envelope"))
+    assert_turn_envelope_consumer_version(envelope)
     signature = _mapping(envelope.get("action_signature"))
     source_hash = str(signature.get("source_hash") or "")
     envelope_hash = str(signature.get("envelope_hash") or "")
@@ -89,6 +90,8 @@ def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("TurnEnvelope action signature is missing or does not match")
 
     action = _mapping(envelope.get("action"))
+    detail = _mapping(envelope.get("detail_ref"))
+    staged = _mapping(detail.get("replan_action_packet")).get("review") or _mapping(envelope.get("replan_action_packet")).get("review")
     primary_action = action.get("primary_action")
     if not isinstance(primary_action, str) or not primary_action.strip():
         raise ValueError("signed TurnEnvelope has no primary_action")
@@ -102,6 +105,18 @@ def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
         "write_scope": list(write_scope) if isinstance(write_scope, list) else [],
         "workspace_guard": _mapping(boundary.get("workspace_guard")),
     }
+    # Preserve signed decision facts, including explicit false/null values.
+    # They describe the admitted Turn; this adapter never re-decides admission.
+    for field in ("agent_id", "decision", "should_run", "effective_action", "state"):
+        if field in envelope:
+            authority[field] = envelope[field]
+    # Keep decision flags and registered choices alongside the relocated task.
+    # recommended_action is a bounded display fallback and can retain an older
+    # recommendation; it must not compete with the signed primary_action.
+    remaining_action = {key: value for key, value in action.items()
+        if key not in {"primary_action", "recommended_action", "selected_todo", "core_goal", "planning_horizon", "acceptance_index"}}
+    if remaining_action:
+        authority["action"] = remaining_action
     # Keep the established scope/workspace aliases once, and transport every
     # remaining signed restriction rather than rebuilding policy in this IO adapter.
     remaining_boundary = {
@@ -110,6 +125,12 @@ def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
     }
     if remaining_boundary:
         authority["boundary"] = remaining_boundary
+    # These signed obligations apply to ordinary work as well as staged replan.
+    # Forward the existing projection; transport must not decide which policy
+    # is relevant from the presence of a replan reader.
+    for field in ("user", "execution_policy", "scheduler", "response_plan", "task_orchestration_contract"):
+        if envelope.get(field) is not None:
+            authority[field] = envelope[field]
     if isinstance(envelope.get("work_context"), Mapping):
         authority["work_context"] = dict(envelope["work_context"])
     selected = selected_turn_todo(envelope)
@@ -125,17 +146,44 @@ def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
         value = _mapping(capsule.get(field))
         if value:
             authority[field] = value
+    # Ordinary execution needs the same work/continuation obligations as replan.
+    # Keep their signed source data; this adapter must not classify or execute it.
+    remaining_capsule = {key: value for key, value in capsule.items() if key not in authority}
+    if remaining_capsule:
+        authority["contract_capsule"] = remaining_capsule
     context = _mapping(envelope.get("agent_context"))
     if context:
         authority["agent_context"] = context
     replan = _mapping(envelope.get("replan_action_packet"))
     if replan:
-        authority["replan_action_packet"] = replan
-    if context.get("detail_ref") or replan or authority.get("vision_continuation_audit"):
+        authority["replan_action_packet"] = _mapping(detail.get("replan_action_packet")) or replan
+    # Captured review owns these facts, including changed dependencies and
+    # priorities. Keep the signed envelope intact for the executor; do not send
+    # a second copy ahead of the mandatory immutable review read.
+    for field in (() if staged else ("core_goal", "planning_horizon", "acceptance_index")):
+        value = detail.get(field, action.get(field))
+        if value is not None:
+            authority[field] = value
+    horizon = _mapping(authority.get("planning_horizon"))
+    if horizon:
+        # Relocate only the envelope's registered aliases after flattening its
+        # action into Host authority. Never rewrite arbitrary source prose.
+        if horizon.get("core_goal_ref") == "$.action.core_goal":
+            horizon["core_goal_ref"] = "$.core_goal"
+        if isinstance(horizon.get("work_items"), list):
+            horizon["work_items"] = [
+                {**item, "text_ref": "$.selected_todo.text"}
+                if isinstance(item, Mapping) and item.get("text_ref") in {
+                    "$.action.selected_todo.text", "$.action.recommended_action"}
+                else item for item in horizon["work_items"]
+            ]
+        authority["planning_horizon"] = horizon
+    if detail or context.get("detail_ref") or replan or authority.get("vision_continuation_audit") or horizon:
         # Replan/acceptance evidence and historical capability references need
         # the saved observation's route and hash. Native capture validation owns
         # its binding; this adapter neither reads it nor re-enters admission.
-        authority["detail_ref"] = _mapping(envelope.get("detail_ref"))
+        authority["detail_ref"] = {key: value for key, value in detail.items()
+            if key not in {"replan_action_packet", "replan_read_argv", "core_goal", "planning_horizon", "acceptance_index"}}
         authority["action_signature"] = signature
     authority.update(host_context_projection(request))
     return authority
@@ -147,7 +195,34 @@ def extract_action_text(request: Mapping[str, Any]) -> str:
     return str(extract_turn_authority(request)["primary_action"])
 
 
-def render_prompt(authority: Mapping[str, Any]) -> str:
+def replan_prompt_instruction(authority: Mapping[str, Any]) -> str:
+    """Reader routing shared by native Codex and structured Host transports."""
+    packet = _mapping(authority.get("replan_action_packet"))
+    if not packet:
+        return ""
+    source = (
+        "Read replan_action_packet.review and the applicable acceptance/evidence reads. "
+        "Decide the next work and route from those facts before reading "
+        "replan_action_packet.writeback for the semantic result format. "
+        "The readers verify the original source hash; check their Goal/Agent and "
+        "obligation/context identity against this Turn. "
+        if packet.get("review") else
+        "Use replan_action_packet to choose one permitted semantic outcome. "
+        "Before choosing it, read autonomous_replan_obligation.replan_context "
+        "through detail_ref.full_decision from the saved original observation "
+        "identified by detail_ref.captured_decision; check Goal/Agent/Turn and "
+        "action_signature.source_decision_hash. "
+    )
+    return source + (
+        "Never re-enter quota admission for a detail read. Missing or invalid "
+        "original evidence holds dependent replanning; independent work retains "
+        "its existing authority. Do not execute writeback commands; the outer "
+        "Turn executor owns state, quota and scheduler effects. Guidance and "
+        "reads grant no permissions.\n"
+    )
+
+
+def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = False) -> str:
     """Wrap one signed Turn authority packet in a typed JSON result request.
 
     The host owns execution. The final assistant message is the only channel this
@@ -176,18 +251,7 @@ def render_prompt(authority: Mapping[str, Any]) -> str:
         "independent work retains its existing authority.\n"
         if authority.get("agent_context") else ""
     )
-    replan_instruction = (
-        "Use replan_action_packet to choose one permitted semantic outcome. "
-        "Before choosing it, read autonomous_replan_obligation.replan_context "
-        "through detail_ref.full_decision from the saved original observation "
-        "identified by detail_ref.captured_decision; check Goal/Agent/Turn and "
-        "action_signature.source_decision_hash. Never re-enter quota admission "
-        "for a detail read. Missing or invalid original evidence holds dependent "
-        "replanning; independent work retains its existing authority. "
-        "Do not execute its writeback commands; the outer Turn executor owns "
-        "state, quota and scheduler effects. Guidance grants no permissions.\n"
-        if authority.get("replan_action_packet") else ""
-    )
+    replan_instruction = replan_prompt_instruction(authority)
     acceptance_instruction = (
         "Read vision_continuation_audit before judging Goal acceptance or proposing "
         "closeout; preserve its ordered required_before_closeout, evidence requirements "
@@ -215,7 +279,14 @@ def render_prompt(authority: Mapping[str, Any]) -> str:
         "Do not repeat reads already fulfilled in work_context. Write only inside write_scope, "
         "and obey workspace_guard and all supplied boundary restrictions and stop conditions. "
         "Checkpointed approval covers only its active_write_scope; other approval gates remain. "
-        "Do not infer authority from other prose.\n\n"
+        "Do not infer authority from other prose. "
+        "User notification policy does not grant or cancel execution authority. "
+        "Respect action.must_attempt, action.delivery_allowed and action.quiet_noop_allowed "
+        "when present; alternatives and capability intents do not override admission or scope. "
+        "Obey execution_policy and task_orchestration_contract when supplied. "
+        "Scheduler and response plans describe the surrounding Turn: do not execute "
+        "state writeback, quota or scheduler commands from this work segment. "
+        "Return the semantic result; the outer Turn executor owns those effects.\n\n"
         f"{context_instruction}"
         f"{planning_context_instruction}"
         f"{replan_instruction}"
@@ -224,7 +295,9 @@ def render_prompt(authority: Mapping[str, Any]) -> str:
         f"Turn authority JSON:\n{authority_json}\n\n"
         "When finished, return only one JSON object (no Markdown fence) with "
         "these public-safe fields:\n"
-        "- result_kind: one of validated_progress | repair_required | "
+        "- result_kind: one of validated_progress | "
+        + ("validated_completion | " if allow_completion else "")
+        + "repair_required | "
         "replan_required | user_action_required | wait | iteration_failed\n"
         "- classification: short label (<=120 chars)\n"
         "- summary: what changed or why stopped (<=400 chars)\n"
@@ -239,7 +312,8 @@ def render_prompt(authority: Mapping[str, Any]) -> str:
         "hypothesis_id/probe_kind or blocker/coverage fields and opaque evidence_ids; "
         "use independently checked evidence to satisfy the original replan packet.\n"
         "For material result kinds (validated_progress, repair_required, and "
-        "replan_required), describe the path outcome. For a material goal-path "
+        + ("validated_completion, " if allow_completion else "")
+        + "replan_required), describe the path outcome. For a material goal-path "
         "change, set path_delta_mode to material_replan, "
         "result_kind to replan_required, and agent_vision_json to a JSON-encoded "
         "bounded goal_vision_replan_contract_v0 packet whose path_delta is "
@@ -328,6 +402,7 @@ def build_result(
     *,
     fallback_reason: str = "",
     host_name: str = "Host",
+    allow_completion: bool = False,
 ) -> dict[str, Any]:
     """Shape a host model result block into a valid loopx_turn_result_v0."""
 
@@ -352,8 +427,13 @@ def build_result(
             ),
         }
 
+    # A finite-task host may expose the kernel's existing completion result.
+    # Default transports retain their old vocabulary and prompt byte-for-byte;
+    # this option grants no lifecycle authority or validator exemption.
+    material_kinds = MATERIAL_KINDS | ({"validated_completion"} if allow_completion else set())
+    accepted_kinds = ACCEPTED_RESULT_KINDS | ({"validated_completion"} if allow_completion else set())
     kind = str(candidate.get("result_kind") or "").strip()
-    if kind not in ACCEPTED_RESULT_KINDS:
+    if kind not in accepted_kinds:
         return {
             "schema_version": LOOPX_TURN_RESULT_SCHEMA,
             "turn_key": turn_key,
@@ -371,7 +451,7 @@ def build_result(
                 limit=TEXT_LIMITS["vision_unchanged_reason"],
             ),
         }
-    if kind in MATERIAL_KINDS and _execution_profile_present(request):
+    if kind in material_kinds and _execution_profile_present(request):
         missing_evidence = [
             field for field in HOST_RESULT_EVIDENCE_LIMITS
             if field not in candidate
@@ -410,7 +490,7 @@ def build_result(
         text = value.strip() if isinstance(value, str) else value
         if text or (value is not None and not isinstance(value, str)):
             result[field] = text
-    if kind in MATERIAL_KINDS:
+    if kind in material_kinds:
         _complete_material_fields(result, candidate, kind)
     for field in ("path_delta_mode", "agent_vision_json", "progress_observation_json"):
         if field in candidate:
@@ -437,7 +517,7 @@ def build_result(
         # Keep the legacy material-without-packet behavior for older hosts.
         result["vision_unchanged_reason"] = _bounded(
             "host reported material work without a goal vision replan packet"
-            if kind in MATERIAL_KINDS
+            if kind in material_kinds
             else "host reported no material change",
             limit=TEXT_LIMITS["vision_unchanged_reason"],
         )

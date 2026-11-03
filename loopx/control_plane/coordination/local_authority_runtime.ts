@@ -5,6 +5,8 @@ import {reviewedPromotionPlan, promotionPlanDigest, decodeReviewedPromotionOpera
 import {registryAuthoritySourceCheck} from "./authority_source.ts";
 import {ResearchTerminalEvidenceHost} from "../capabilities/explore_research_terminal.ts";
 import {decodeTaskLeaseProof} from "./task_lease_proof.ts";
+import {LeaseWorktreeObservationError, observeLeaseWorktree} from "../work_items/task_lease_workspace.ts";
+import {evaluateTaskLeaseWriteScopesOverlap} from "../work_items/task_lease_acquire_decision.ts";
 import {COORDINATION_TODO_ARCHIVE_RESULT_SCHEMA} from "./todo_archive.ts";
 import {readCoordinationOwnership} from "./ownership_observation.ts";
 import {executeTodoContinuation} from "./todo_continuation.ts";
@@ -104,6 +106,9 @@ import {
 export const LOCAL_COORDINATION_TODO_CLAIM_REQUEST_SCHEMA =
   "loopx_local_coordination_todo_claim_request_v0";
 export const LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA = "loopx_local_coordination_todo_claim_request_v1";
+export const LOCAL_COORDINATION_TODO_MANAGED_CLAIM_REQUEST_SCHEMA = "loopx_local_coordination_todo_claim_request_v2";
+export const LOCAL_COORDINATION_TODO_EXECUTION_UPDATE_REQUEST_SCHEMA = "loopx_local_coordination_todo_update_request_v6";
+export const LOCAL_COORDINATION_TODO_EXECUTION_TERMINAL_REQUEST_SCHEMA = "loopx_local_coordination_todo_terminal_lifecycle_request_v4";
 export const LOCAL_COORDINATION_TODO_CREATE_REQUEST_SCHEMA =
   "loopx_local_coordination_todo_create_request_v0";
 export const LOCAL_COORDINATION_TODO_CREATE_WITNESSED_REQUEST_SCHEMA = "loopx_local_coordination_todo_create_request_v1";
@@ -1026,11 +1031,19 @@ export async function claimLocalCoordinationTodo(
   try {
     const input = requireJsonObject(value, "local coordination Todo claim request");
     if (input.schema_version !== LOCAL_COORDINATION_TODO_CLAIM_REQUEST_SCHEMA &&
-        input.schema_version !== LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA) {
+        input.schema_version !== LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA &&
+        input.schema_version !== LOCAL_COORDINATION_TODO_MANAGED_CLAIM_REQUEST_SCHEMA) {
       throw new Error("local coordination Todo claim request schema mismatch");
     }
+    if (Object.hasOwn(input, "manage_execution") && input.schema_version !== LOCAL_COORDINATION_TODO_MANAGED_CLAIM_REQUEST_SCHEMA)
+      throw new TypeError("Managed execution requires claim request v2");
+    const worktree = input.write_worktree;
+    if (worktree !== undefined && (input.schema_version !== LOCAL_COORDINATION_TODO_MANAGED_CLAIM_REQUEST_SCHEMA ||
+        input.manage_execution !== true || typeof worktree !== "string" || !isAbsolute(worktree))) {
+      throw new TypeError("Worktree observation requires a managed claim and an absolute caller path");
+    }
     const authoritySourcesCurrent = registryAuthoritySourceCheck(input,
-      input.schema_version === LOCAL_COORDINATION_TODO_CLAIM_WITNESSED_REQUEST_SCHEMA);
+      input.schema_version !== LOCAL_COORDINATION_TODO_CLAIM_REQUEST_SCHEMA);
     if (typeof input.dry_run !== "boolean") {
       throw new Error("dry_run must be a JSON boolean");
     }
@@ -1076,9 +1089,18 @@ export async function claimLocalCoordinationTodo(
         registered_agents: registeredAgents,
         operation_id: requireAuthorityStoreId(input.operation_id, "operation id"),
         lease_request: leaseRequest,
+        ...(input.manage_execution === undefined ? {} : {manage_execution: input.manage_execution as boolean}),
         dry_run: input.dry_run === true,
         now: claimObservedAt(input.observed_at),
-      }, authoritySourcesCurrent);
+      }, authoritySourcesCurrent, worktree === undefined ? undefined : async writeScopes => {
+        try {
+          return await observeLeaseWorktree(worktree as string, path =>
+            evaluateTaskLeaseWriteScopesOverlap({left: [...writeScopes], right: [path]}).overlap === true);
+        } catch (error) {
+          throw new Error(error instanceof LeaseWorktreeObservationError ? error.message
+            : "Cannot verify independent Git worktree and origin for task claim");
+        }
+      });
       return {
         ...result,
         source_authority: sourceAuthority,
@@ -1186,9 +1208,12 @@ export async function updateLocalCoordinationTodo(
         input.schema_version !== COORDINATION_TODO_REVIEWED_UPDATE_REQUEST_SCHEMA &&
         input.schema_version !== COORDINATION_TODO_COMPLETION_UPDATE_REQUEST_SCHEMA &&
         input.schema_version !== COORDINATION_TODO_OBSERVATION_UPDATE_REQUEST_SCHEMA &&
-        input.schema_version !== COORDINATION_TODO_VALIDATION_REVISION_REQUEST_SCHEMA) {
+        input.schema_version !== COORDINATION_TODO_VALIDATION_REVISION_REQUEST_SCHEMA &&
+        input.schema_version !== LOCAL_COORDINATION_TODO_EXECUTION_UPDATE_REQUEST_SCHEMA) {
       throw new TypeError("local coordination Todo update request schema mismatch");
     }
+    if (Object.hasOwn(input, "claim_operation_id") && input.schema_version !== LOCAL_COORDINATION_TODO_EXECUTION_UPDATE_REQUEST_SCHEMA)
+      throw new TypeError("Claim execution reference requires update request v6");
     const planningIntent = input.planning_intent == null ? undefined :
       requireJsonObject(input.planning_intent, "Todo planning intent");
     if (planningIntent && Object.keys(planningIntent).length &&
@@ -1197,7 +1222,9 @@ export async function updateLocalCoordinationTodo(
     }
     const completionUpdate = input.schema_version === COORDINATION_TODO_COMPLETION_UPDATE_REQUEST_SCHEMA;
     const observationUpdate = input.schema_version === COORDINATION_TODO_OBSERVATION_UPDATE_REQUEST_SCHEMA;
-    const validationRevisionUpdate = input.schema_version === COORDINATION_TODO_VALIDATION_REVISION_REQUEST_SCHEMA;
+    const validationRevisionUpdate = input.schema_version === COORDINATION_TODO_VALIDATION_REVISION_REQUEST_SCHEMA ||
+      (input.schema_version === LOCAL_COORDINATION_TODO_EXECUTION_UPDATE_REQUEST_SCHEMA &&
+        Object.hasOwn(input, "completion_validation_revision"));
     if (!observationUpdate && Object.hasOwn(input, "monitor_observation")) {
       throw new TypeError("Monitor observation payload requires request v4");
     }
@@ -1207,12 +1234,13 @@ export async function updateLocalCoordinationTodo(
     }
     if (completionUpdate && input.completion == null) throw new TypeError("Todo completion update requires its completion payload");
     if (!validationRevisionUpdate && Object.hasOwn(input, "completion_validation_revision")) {
-      throw new TypeError("Completion validation revision payload requires request v5");
+      throw new TypeError("Completion validation revision payload requires request v5 or v6");
     }
     if (validationRevisionUpdate && input.completion_validation_revision == null) {
       throw new TypeError("Completion validation revision update requires its revision payload");
     }
-    const reviewed = observationUpdate || completionUpdate || validationRevisionUpdate ||
+    const reviewed = input.schema_version === LOCAL_COORDINATION_TODO_EXECUTION_UPDATE_REQUEST_SCHEMA ||
+      observationUpdate || completionUpdate || validationRevisionUpdate ||
       input.schema_version === COORDINATION_TODO_REVIEWED_UPDATE_REQUEST_SCHEMA;
     if (!reviewed && ["lifecycle_grants", "authority_reason", "registry_source",
       "expected_provider_revision", "expected_registry_sha256"].some(field => Object.hasOwn(input, field))) {
@@ -1250,6 +1278,7 @@ export async function updateLocalCoordinationTodo(
         lease_idempotency_key: input.lease_idempotency_key == null ? null :
           requireAuthorityStoreId(input.lease_idempotency_key, "lease_idempotency_key"),
         lease_expected_version: optionalNonNegativeSafeInteger(input.lease_expected_version, "lease_expected_version"),
+        ...(input.claim_operation_id == null ? {} : {claim_operation_id: requireAuthorityStoreId(input.claim_operation_id, "claim_operation_id")}),
         patch: requireJsonObject(input.patch, "Todo update patch"),
         planning_intent: planningIntent,
         ...(observationUpdate ? {
@@ -1287,9 +1316,12 @@ export async function terminalLifecycleLocalCoordinationTodo(
     decision_read_from_provider: true, legacy_fallback_used: false};
   try {
     const input = requireJsonObject(value, "local coordination Todo terminal request");
-    if (input.schema_version !== LOCAL_COORDINATION_TODO_TERMINAL_LIFECYCLE_REQUEST_SCHEMA) {
+    if (input.schema_version !== LOCAL_COORDINATION_TODO_TERMINAL_LIFECYCLE_REQUEST_SCHEMA &&
+        input.schema_version !== LOCAL_COORDINATION_TODO_EXECUTION_TERMINAL_REQUEST_SCHEMA) {
       throw new TypeError("local coordination Todo terminal request schema mismatch; regenerate with the current runtime");
     }
+    if (Object.hasOwn(input, "claim_operation_id") && input.schema_version !== LOCAL_COORDINATION_TODO_EXECUTION_TERMINAL_REQUEST_SCHEMA)
+      throw new TypeError("Claim execution reference requires terminal request v4");
     const operationIntent = decodeTerminalOperationIntent(input);
     const reviewBasis = input.review_basis == null ? undefined : requireJsonObject(input.review_basis, "terminal review basis");
     const authoritySourcesCurrent = registryAuthoritySourceCheck(input, true, reviewBasis?.registry_sha256);
@@ -1353,6 +1385,7 @@ export async function terminalLifecycleLocalCoordinationTodo(
           input.lease_idempotency_key === null || input.lease_idempotency_key === undefined
             ? null : requireAuthorityStoreId(input.lease_idempotency_key, "lease idempotency key"),
         lease_expected_version: leaseExpectedVersion,
+        ...(input.claim_operation_id == null ? {} : {claim_operation_id: requireAuthorityStoreId(input.claim_operation_id, "claim_operation_id")}),
         allow_user_gate_auto_acquire: input.allow_user_gate_auto_acquire as boolean,
         requested_no_followup: input.requested_no_followup as boolean,
         requested_completion_identity_source:
@@ -1381,6 +1414,8 @@ export async function terminalLifecycleLocalCoordinationTodo(
         completion_policy_request:
           input.completion_policy_request === null || input.completion_policy_request === undefined
             ? null : requireJsonObject(input.completion_policy_request, "completion_policy_request"),
+        auto_archive_completed: input.auto_archive_completed === undefined
+          ? true : Boolean(input.auto_archive_completed),
         dry_run: input.dry_run as boolean,
         now: claimObservedAt(input.observed_at),
       }, async () => await authoritySourcesCurrent() && researchEvidence.current(),

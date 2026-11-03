@@ -9,9 +9,14 @@ The ordinary benchmark runner and existing experiments are unchanged.
 The transport installs an operator-supplied native Claude binary with an explicit
 SHA-256 and version. It reuses SForge's native Stop hook. Both that script and
 `sforge-submit` receive explicit agent-readable executable modes, even when the
-operator runs with umask 077. The Docker transport assigns the uploaded task
-prompt to the agent with mode 0600, including when host and container UIDs
-differ; unrelated uploads retain their original permissions.
+operator runs with umask 077. The currently pinned SForge task installer makes
+generated, non-secret task files readable with mode 0644, including when host
+and container UIDs differ; unrelated uploads retain their original permissions.
+The runner uses that provider owner and its ordinary Docker backend. It does
+not promise that the task prompt is private between container users. The older
+prompt-only copy override has been removed because the provider's subsequent
+task-file installation superseded its 0600 setting. This follows the current
+provider contract without broadening general upload permissions.
 Python belongs here as an existing provider
 transport, not a second control-plane decision owner.
 
@@ -54,9 +59,13 @@ small-model aliases, including the Goal evaluator, to the selected model, and
 passes the requested effort on both initial and resumed invocations. Provider
 translation and usage/cache accounting still need live verification.
 
-Validation uses `python -m pytest benchmark/tests/test_native_claude.py`. Set
+Validation uses `python -m pytest benchmark/tests/test_native_claude.py` with
+the selected SForge source on `PYTHONPATH`. Standard test collection skips this
+optional module when SForge is absent. Set
 `LOOPX_EDGEBENCH_DOCKER_SMOKE=1` for the disposable Docker upload/permission
-case (requires a local `python:3.12-slim` image). That test uses a synthetic
+case (requires a local `python:3.12-slim` image). It exercises the provider's
+complete task-file installation, including its final permission readback, and
+checks that unrelated private uploads remain restricted. That test uses a synthetic
 binary; real CLI/model, Goal/Plan, submission and stability qualification are
 separate, explicitly authorized operational checks. Short checks do not prove
 long-horizon reliability or benchmark improvement.
