@@ -20,7 +20,10 @@ memory setting.
 ## Prerequisites and licensing
 
 Use Python 3.11+ and install both packages from the same integrated LoopX 2.2
-checkout containing `extensions.turn_host.extract_turn_work_identity`; the version
+checkout containing `extensions.turn_host.extract_turn_work_identity` and
+`assert_turn_host_request_version`. Complete-source Host request v1 and historical
+v0 share that decoder; exact Goal lifetime and memory/effect gates still apply.
+The version
 floor alone does not establish that an older wheel contains this shared contract.
 A separately operated Nano SGLang service is required. See the upstream
 [inference guide](https://github.com/MemTensor/MemT-1.0/blob/e75c13d090a6a9d34b29146d901bd84323185f24/inference/README.md)

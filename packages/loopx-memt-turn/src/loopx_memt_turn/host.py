@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 
 from loopx.extensions.turn_host import (
+    assert_turn_host_request_version,
     build_result, exact_goal_ref, extract_turn_authority, extract_turn_work_identity, parse_model_json, render_prompt,
     validate_loopx_turn_host_result,
 )
@@ -24,8 +25,10 @@ MEMORY_BOUNDARY = (
 
 
 def work_identity(request: dict) -> dict:
-    if request.get("schema_version") != "loopx_turn_host_request_v0":
-        raise AdapterError("invalid_request_schema")
+    try:
+        assert_turn_host_request_version(request)
+    except ValueError as exc:
+        raise AdapterError("invalid_request_schema") from exc
     work = extract_turn_work_identity(request)
     if request.get("session", {}).get("context_policy", {}).get("mode") != "fresh":
         raise AdapterError("fresh_iteration_context_required")

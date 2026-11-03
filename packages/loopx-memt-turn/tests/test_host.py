@@ -198,13 +198,16 @@ def test_receipt_is_not_a_transcript_or_credential_log(config, provider):
     assert not any("input_ids" in receipt or "responses" in receipt for receipt in receipts)
 
 
-def test_complete_cli_input_without_exact_lifetime_cannot_open_memory(config, provider, complete_host_request):
+@pytest.mark.parametrize("wire", [False, True])
+def test_complete_cli_input_without_exact_lifetime_cannot_open_memory(preflight_config, complete_host_request, wire):
     request, _ = complete_host_request
+    if wire:
+        from loopx.control_plane.turn_driver.host_candidate import complete_host_input
+        request = complete_host_input(request)
     assert "goal_ref" not in request
     with pytest.raises(AdapterError, match="exact_goal_instance_required"):
-        execute(config, request)
-    assert provider.requests == []
-    assert not Path(config.state_dir).exists()
+        execute(preflight_config, request)
+    assert not Path(preflight_config.state_dir).exists()
 
 
 def test_complete_identity_reaches_the_unchanged_lifetime_gate(complete_host_request):
@@ -225,11 +228,15 @@ def test_complete_identity_reaches_the_unchanged_lifetime_gate(complete_host_req
 
 
 @pytest.mark.parametrize("invalidate_source", [False, True])
-def test_generation_validation_retains_the_complete_source(complete_host_request, monkeypatch, invalidate_source):
+@pytest.mark.parametrize("wire", [False, True])
+def test_generation_validation_retains_the_complete_source(complete_host_request, monkeypatch, invalidate_source, wire):
     from types import SimpleNamespace
     from loopx_memt_turn import host
 
     request, _ = complete_host_request
+    if wire:
+        from loopx.control_plane.turn_driver.host_candidate import complete_host_input
+        request = complete_host_input(request)
     request = copy.deepcopy(request)
     vision = {"schema_version": "goal_vision_replan_contract_v0", "state": "active",
         "vision_patch": {"acceptance_summary": "Validate the preserved work."},
@@ -291,8 +298,12 @@ def test_lifecycle_only_profile_cannot_supply_an_executable_turn(tmp_path):
 
 
 @pytest.mark.parametrize("mutation", ["source", "version", "binding", "missing"])
-def test_complete_cli_input_rejects_corruption_before_memory(config, provider, complete_host_request, mutation):
+@pytest.mark.parametrize("wire", [False, True])
+def test_complete_cli_input_rejects_corruption_before_memory(preflight_config, complete_host_request, mutation, wire):
     original, _ = complete_host_request
+    if wire:
+        from loopx.control_plane.turn_driver.host_candidate import complete_host_input
+        original = complete_host_input(original)
     request = copy.deepcopy(original)
     if mutation == "source":
         request["work_contract"]["goal_id"] = "different-goal"
@@ -303,6 +314,15 @@ def test_complete_cli_input_rejects_corruption_before_memory(config, provider, c
     else:
         request["work_contract"] = None
     with pytest.raises(ValueError, match="complete Turn contract rejected"):
-        execute(config, request)
-    assert provider.requests == []
-    assert not Path(config.state_dir).exists()
+        execute(preflight_config, request)
+    assert not Path(preflight_config.state_dir).exists()
+
+
+def test_unknown_host_version_never_opens_memory(preflight_config, complete_host_request):
+    from loopx.control_plane.turn_driver.host_candidate import complete_host_input
+
+    request, _ = complete_host_request
+    for original in (request, complete_host_input(request)):
+        with pytest.raises(AdapterError, match="invalid_request_schema"):
+            execute(preflight_config, {**original, "schema_version": "unsupported_host_fixture"})
+    assert not Path(preflight_config.state_dir).exists()

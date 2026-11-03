@@ -341,8 +341,13 @@ def test_unsafe_configuration_is_rejected(tmp_path, override):
 
 
 @pytest.mark.parametrize("checkpoint", ["completed", "running"])
-def test_complete_cli_input_reaches_sdk_and_replays_original_receipt(tmp_path, monkeypatch, complete_host_request, checkpoint):
+@pytest.mark.parametrize("wire", [False, True])
+def test_complete_cli_input_reaches_sdk_and_replays_original_receipt(tmp_path, monkeypatch, complete_host_request, checkpoint, wire):
     req, contract = complete_host_request
+    if wire:
+        from loopx.control_plane.turn_driver.host_candidate import complete_host_input
+        req = complete_host_input(req)
+        assert req["schema_version"] == "loopx_turn_host_request_v1" and "turn_envelope" not in req
     cfg = config(tmp_path, tools=False)
     provider = Provider([])
     checkpoints = []
@@ -378,8 +383,12 @@ def test_complete_cli_input_reaches_sdk_and_replays_original_receipt(tmp_path, m
 
 
 @pytest.mark.parametrize("mutation", ["source", "version", "binding", "missing"])
-def test_complete_cli_input_rejects_corruption_before_provider(tmp_path, complete_host_request, mutation):
+@pytest.mark.parametrize("wire", [False, True])
+def test_complete_cli_input_rejects_corruption_before_provider(tmp_path, complete_host_request, mutation, wire):
     original, _ = complete_host_request
+    if wire:
+        from loopx.control_plane.turn_driver.host_candidate import complete_host_input
+        original = complete_host_input(original)
     req = copy.deepcopy(original)
     if mutation == "source":
         req["work_contract"]["goal_id"] = "different-goal"
@@ -412,3 +421,14 @@ def test_complete_tool_identity_uses_the_shared_source_owner(complete_host_reque
     fixture = _fixture_module()
     assert require_request(request) == {"KEY": request["turn_key"],
         "GOAL_ID": fixture.GOAL_ID, "AGENT_ID": fixture.AGENT_ID, "TODO_ID": fixture.TODO_ID}
+
+
+def test_unknown_host_version_never_reaches_provider(tmp_path, complete_host_request):
+    from loopx.control_plane.turn_driver.host_candidate import complete_host_input
+
+    request, _ = complete_host_request
+    cfg, provider = config(tmp_path, tools=False), Provider([])
+    for original in (request, complete_host_input(request)):
+        with pytest.raises(AdapterError, match="request_schema_mismatch"):
+            asyncio.run(execute(provider, cfg, {**original, "schema_version": "unsupported_host_fixture"}))
+    assert provider.calls == [] and not cfg.state_dir.exists()

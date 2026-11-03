@@ -62,10 +62,12 @@ class Config:
 
 
 def require_request(request: Mapping[str, Any]) -> dict[str, str]:
-    from loopx.extensions.turn_host import extract_turn_work_identity
+    from loopx.extensions.turn_host import assert_turn_host_request_version, extract_turn_work_identity
 
-    if request.get("schema_version") != "loopx_turn_host_request_v0":
-        raise AdapterError("request_schema_mismatch")
+    try:
+        assert_turn_host_request_version(request)
+    except ValueError as exc:
+        raise AdapterError("request_schema_mismatch") from exc
     work = extract_turn_work_identity(request)
     key = request.get("turn_key")
     if not isinstance(key, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", key):

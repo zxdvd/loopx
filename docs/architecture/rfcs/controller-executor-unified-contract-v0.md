@@ -1310,8 +1310,11 @@ envelope from that wire and preserves the original contract, capture readers,
 Turn key and result transport. The shared checked-source owner validates v1
 directly; native adapters share version decoding, and the DSH stdio consumer
 accepts v1 as well as historical v0. Missing/invalid source, mixed carriers and
-capture drift refuse without selecting the historical decoder. The private
-executor adapter and versioned historical journal readers remain until their
+capture drift refuse without selecting the historical decoder. Ark and MemT
+distribution adapters also use the Core decoder through the
+existing supported Host seam; provider permissions, receipt recovery and exact
+memory-lifetime gates remain. Their matching-Core requirement is explicit.
+The private executor adapter and versioned historical journal readers remain until their
 own replacement is qualified. This source-level wire cutover requires external
 v0 adapters to migrate; it establishes neither installed adoption, original
 quota outcome/full-cost qualification nor model-retention benefit.

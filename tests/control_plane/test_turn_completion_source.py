@@ -360,7 +360,9 @@ calls.write_text(calls.read_text() + "x" if calls.exists() else "x")""",
     monkeypatch.setattr(executor, "_run_task_validator", change_after_real_validation)
     code, result = _cli([], *argv)
     request = json.loads((project / "request.json").read_text())
-    captured_todo = request["turn_envelope"]["action"]["selected_todo"]
+    assert request["schema_version"] == "loopx_turn_host_request_v1"
+    assert "turn_envelope" not in request
+    captured_todo = request["work_contract"]["selected_todo"]
     assert captured_todo["todo_id"] == "todo_fixture0001"
     assert captured_todo["text_source_verified"] is True
     current = _todo(prefix)["todo"]

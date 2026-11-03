@@ -981,7 +981,9 @@ C1 候选的 journal 检查、发布、按结算查找及受管重试，现在�
 这条 wire 移除第二份可执行 envelope，保留原契约、capture reader、Turn key 和结果
 传输。共享 checked-source owner 直接验证 v1；原生 adapter 共用版本解码，DSH stdio
 消费者同时接受 v1 与历史 v0。来源缺失／无效、混合载体或 capture 偏移会拒绝，不能
-选择历史 decoder。私有 executor adapter 和分版本历史 journal reader 仍保留，直到
+选择历史 decoder。Ark 与 MemT 分发 adapter 也通过既有受支持 Host seam 使用 Core
+decoder，provider 权限、receipt 恢复和精确 memory lifetime 门保持，并明确须匹配
+同一 Core。私有 executor adapter 和分版本历史 journal reader 仍保留，直到
 各自替换经过验收。此源码 wire 切换要求外部 v0 adapter 迁移；它不代表已安装采用、
 原 quota 成果／完整成本资格或模型保留收益。
 
