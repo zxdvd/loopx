@@ -1294,6 +1294,16 @@ model adoption. All-host defaults, other omitted material, trusted Host coverage
 writer/reader cutover and §9's outcome/full-cost comparison remain open. Index
 overhead participates in the existing full-versus-folded byte guard.
 
+The C1 candidate's journal inspection, publication, settlement lookup and managed
+retry now consume a present complete contract through the same checked-source
+owner as Host dispatch. A changed source, unsupported version or self-consistent
+but divergent executor adapter blocks recovery/publication; it cannot select the
+historical decoder. Native file reads and Python transport retain the original
+sparse numeric spellings. The old adapter-only decoder remains for historical
+journals without a complete contract. This is a source-integrity repair with
+additional validation cost, not installed adoption, full reader retirement or
+the original-quota outcome/net-cost qualification.
+
 C1's inventory is part of its usable replacement, not a standalone architecture
 framework. C3/C4/C5 can proceed independently once C1's contract is stable;
 C7 can prepare measurements before C6 but cannot claim two-session outcomes.

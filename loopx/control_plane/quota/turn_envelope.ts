@@ -1625,7 +1625,7 @@ export function requireCompleteTurnDecision(value: unknown, numberTokens?: unkno
 /** One checked source for model input and transport session identity. The
  * historical effect adapter may remain in the request during migration, but it
  * cannot redirect the complete contract to another Goal, Agent or work item. */
-function completeHostSource(request: JsonObject): {decision: JsonObject; projection: JsonObject} {
+export function completeHostSource(request: JsonObject): {decision: JsonObject; projection: JsonObject} {
   const decision = requireCompleteTurnDecision(request.payload, request.source_number_tokens);
   const envelope = requireJsonObject(request.envelope, "complete Turn executor envelope");
   assertTurnEnvelopeConsumerVersion(envelope);

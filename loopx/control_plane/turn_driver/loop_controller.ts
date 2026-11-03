@@ -341,7 +341,8 @@ export function decideManagedStep(params: JsonObject): JsonObject {
   requireThat(identity.goal_id === params.goal_id && identity.agent_id === params.agent_id,
     "Turn journal lineage does not match the requested goal/agent");
   const inspection = interpretTurnJournal({schema_version: "loopx_turn_journal_interpretation_request_v0",
-    journal, goal_id: text(params.goal_id), agent_id: text(params.agent_id), turn_key: text(params.turn_key)});
+    journal, goal_id: text(params.goal_id), agent_id: text(params.agent_id), turn_key: text(params.turn_key),
+    source_number_tokens: params.source_number_tokens});
   requireThat(inspection.journal_consistent, `Turn journal replay is blocked: ${inspection.violations.join(", ")}`);
   const decision = object(params.decision);
   for (const key of ["goal_id", "agent_id"])

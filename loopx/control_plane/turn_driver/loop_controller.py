@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from ..effect_program import SettlementIdentity
-from ..effect_runtime import effect_runtime_projection_result
+from ..effect_runtime import effect_runtime_projection_result, source_number_tokens
 from ..quota.turn_envelope import TurnControllerInput
 from .driver import _historical_route_text
 from .transaction import LoopXTurnResultKind
@@ -42,6 +42,11 @@ def _controller_result(operation: str, **facts: Any) -> dict[str, Any]:
             key: str(value) if type(value) is int else None for key, value in scalars.items()
         }
     request = {"operation": operation, **facts}
+    journal = facts.get("journal")
+    if isinstance(journal, Mapping):
+        tokens = source_number_tokens(journal)
+        if tokens:
+            request["source_number_tokens"] = tokens
     payload = effect_runtime_projection_result("turn.controller", request)
     if not isinstance(payload, dict):
         raise RuntimeError("TypeScript Turn controller returned an invalid response")

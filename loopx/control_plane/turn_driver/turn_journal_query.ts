@@ -17,7 +17,8 @@ import {
   parseExactGoalRef,
   type ExactGoalRef,
 } from "../goals/goal_instance_identity.ts";
-import { jsonObject, requireJsonObject, requireNonEmptyString } from "../runtime_decode.ts";
+import { jsonObject, parseJsonSource, parsedSourceNumberTokens, requireJsonObject,
+  requireNonEmptyString, type SourceNumbers } from "../runtime_decode.ts";
 import {
   interpretTurnJournal,
   parseTurnJournalGoalBinding,
@@ -78,6 +79,7 @@ function evidenceForJournal(
   turnKey: string,
   expected: BoundSettlementIdentity,
   expectedGoalRef: ExactGoalRef | null,
+  numbers: SourceNumbers,
 ): JournalEvidence | null {
   const journal = jsonObject(value);
   const plan = jsonObject(journal?.plan);
@@ -118,6 +120,7 @@ function evidenceForJournal(
   const inspection = interpretTurnJournal({
     schema_version: "loopx_turn_journal_interpretation_request_v0",
     journal, goal_id: expected.goal_id, agent_id: expected.agent_id, turn_key: turnKey,
+    source_number_tokens: parsedSourceNumberTokens(journal, numbers),
   });
   if (!inspection.journal_consistent) {
     journalConflict(`Turn journal history is inconsistent: ${inspection.violations.join(", ")}`);
@@ -153,7 +156,7 @@ async function querySettlementJournal(
   for (const entry of entries.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) {
     if (!/^[a-f0-9]{64}\.json$/u.test(entry.name)) continue;
     if (!entry.isFile()) journalConflict("Turn journal history contains a non-regular snapshot; reconcile it before retrying");
-    let value: unknown;
+    let parsed: ReturnType<typeof parseJsonSource>;
     // Journals are atomic-replace files. Read one complete version without
     // creating reader lock files; do not follow a replaced symlink. This is
     // not a snapshot of the directory or proof of provider-side absence.
@@ -161,7 +164,7 @@ async function querySettlementJournal(
     try {
       if (!(await handle.stat()).isFile()) journalConflict("Turn journal snapshot is not a regular file");
       try {
-        value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await handle.readFile()));
+        parsed = parseJsonSource(new TextDecoder("utf-8", { fatal: true }).decode(await handle.readFile()));
       } catch (error) {
         if (error instanceof SyntaxError || error instanceof TypeError) journalConflict("Turn journal history is unreadable; reconcile it before retrying");
         throw error;
@@ -170,10 +173,11 @@ async function querySettlementJournal(
       await handle.close();
     }
     const evidence = evidenceForJournal(
-      value,
+      parsed.value,
       `sha256:${entry.name.slice(0, -5)}`,
       identity,
       goalRef,
+      parsed.numbers,
     );
     if (evidence === null) continue;
     if (matched !== null) journalConflict("LoopX Turn settlement identity matched multiple journals");
