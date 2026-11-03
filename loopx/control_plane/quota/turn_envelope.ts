@@ -2019,6 +2019,11 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
       execution_profile_present: Object.keys(object(decision.execution_profile)).length > 0,
       ...(operation === "host_dispatch_context" ? {work_identity: completeWorkIdentity(decision)} : {})};
   }
+  if (operation === "selected_work_todo") {
+    const source = requireJsonObject(request.payload, "Turn work selection source");
+    const historical = scalarString(request.historical_primary_text, "historical primary Todo");
+    return contextProjectionChanges(source, {...source, selected_todo: selectedWorkTodo(source, historical)});
+  }
   if (operation === "driver_route") return {route: turnEnvelopeRoute(requireJsonObject(request.envelope, "Turn route envelope"),
     request.historical_route_text === undefined ? undefined : requireJsonObject(request.historical_route_text, "historical route text"))};
   if (operation === "driver_lineage") {
