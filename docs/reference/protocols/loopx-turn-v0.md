@@ -84,9 +84,9 @@ and an independent validator:
 
 1. Run `loopx turn plan` to inspect the live typed decision without launching
    the host or changing state.
-2. The host adapter reads one `loopx_turn_host_request_v0` JSON object from
+2. The host adapter reads one `loopx_turn_host_request_v1` JSON object from
    stdin, invokes the selected agent CLI in the governed workspace, and writes
-   exactly one `loopx_turn_host_result_v0` JSON object to stdout.
+   exactly one `loopx_turn_result_v0` JSON object to stdout.
 3. The validator reads the normalized host result from stdin and independently
    checks the claimed postcondition. Exit zero means passed; non-zero means the
    result is rejected. A timeout or unavailable validator is inconclusive.
@@ -100,6 +100,23 @@ turning that readback into a source-less host request. Existing structured
 consumers use `--include-transaction-detail`, which retains the complete source
 and session/transaction input. `turn run-once` retains and validates the original
 complete contract before dispatch; default inspect output does not replace it.
+
+Complete-source requests use Host request v1: `work_contract` is the complete
+admitted input; `turn_key`, session/result transport and original `detail_ref`
+readers retain their roles. The external stdin and native model prompt omit the
+private `turn_envelope` effect adapter. They do not contain a competing
+`turn_authority` decision. Unsupported versions, missing or invalid complete
+sources, mixed v1/adapter carriers and mismatched capture headers are rejected.
+This changes the complete-source Host wire; external adapters that read v0's
+`turn_envelope` must read v1's `work_contract` before accepting new Turns.
+
+The executor still retains and cross-checks its internal v0 request/adapter for
+journal, session and effect recovery. Historical v0 requests without a complete
+source keep their versioned decoder and original replay; a v1 request never
+falls back to it. The shipped DSH stdio adapter reads both versions. Retiring
+the remaining internal readers and qualifying whole-workflow outcomes and
+complete costs remain separate C1 requirements. Reverting this wire change
+does not rewrite saved captures, Turn identities or settlement receipts.
 
 The adapter and validator executable names below are placeholders supplied by
 the integration. They are separate programs because the executor must not

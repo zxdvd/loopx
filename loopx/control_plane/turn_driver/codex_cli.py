@@ -36,12 +36,11 @@ from .executor import (
     HOST_PROGRESS_OBSERVATION_JSON_MAX_CHARS,
     HOST_RESULT_EVIDENCE_LIMITS,
     HOST_RESULT_TEXT_LIMITS,
-    LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION,
 )
 from ..capability_hooks import capability_result_fields
 from .execution_profile import require_supported_reasoning_effort
 from .host_failure import BuiltInHostError
-from .host_candidate import execution_profile_present
+from .host_candidate import assert_turn_host_request_version, execution_profile_present
 from .host_process_transport import HostOutputLines, run_host_process
 from .transaction import LOOPX_TURN_RESULT_SCHEMA_VERSION, TRANSACTION_PHASES
 
@@ -328,7 +327,8 @@ def _checked_prompt_context(request: Mapping[str, Any]) -> dict[str, Any] | None
     except RuntimeError:
         # Preserve the historical diagnostic precedence for doubly malformed
         # input without imposing a second bridge call on valid requests.
-        assert_turn_envelope_consumer_version(envelope)
+        if "turn_envelope" in request:
+            assert_turn_envelope_consumer_version(envelope)
         raise
     return checked
 
@@ -792,8 +792,7 @@ def run_codex_cli_host(
     goal_admission: FirstPartyHostGoalAdmission | None = None,
     registry_path: Path | None = None,
 ) -> dict[str, Any]:
-    if request.get("schema_version") != LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION:
-        raise ValueError("unsupported LoopX Turn host request schema")
+    assert_turn_host_request_version(request)
     if sandbox not in CODEX_CLI_SANDBOXES:
         raise ValueError(f"Codex CLI sandbox must be one of {CODEX_CLI_SANDBOXES}")
     if reasoning_effort is not None:

@@ -39,6 +39,7 @@ from ..control_plane.turn_driver.host_candidate import (
     TEXT_LIMITS as TEXT_LIMITS,
     _canonical_hash,
     _mapping,
+    assert_turn_host_request_version,
     build_result as _build_host_result,
     extract_action_text as extract_action_text,
     extract_turn_authority as extract_turn_authority,
@@ -591,14 +592,15 @@ def run_dsh_host(
     the Turn journal records retryability instead of a bare ``unknown``.
     """
 
-    if (
-        not isinstance(request, Mapping)
-        or request.get("schema_version") != LOOPX_TURN_HOST_REQUEST_SCHEMA
-    ):
+    try:
+        if not isinstance(request, Mapping):
+            raise ValueError("Host request must be an object")
+        assert_turn_host_request_version(request)
+    except ValueError as exc:
         raise BuiltInHostError(
             "dsh_request_schema_mismatch",
             failure_kind="contract_rejected",
-        )
+        ) from exc
     try:
         authority = extract_turn_authority(request)
     except ValueError as exc:
@@ -679,8 +681,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (json.JSONDecodeError, ValueError) as exc:
         print(f"adapter: invalid request JSON on stdin: {exc}", file=sys.stderr)
         return 2
-    if not isinstance(request, dict) or request.get("schema_version") != LOOPX_TURN_HOST_REQUEST_SCHEMA:
-        print("adapter: stdin is not a loopx_turn_host_request_v0 object", file=sys.stderr)
+    try:
+        if not isinstance(request, dict):
+            raise ValueError("Host request must be an object")
+        assert_turn_host_request_version(request)
+    except ValueError as exc:
+        print(f"adapter: invalid LoopX Turn host request: {exc}", file=sys.stderr)
         return 2
 
     try:

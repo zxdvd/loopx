@@ -70,6 +70,8 @@ import json
 import pathlib
 import sys
 request = json.load(sys.stdin)
+assert request['schema_version'] == 'loopx_turn_host_request_v1'
+assert 'turn_envelope' not in request and 'turn_authority' not in request
 source = request['work_contract']
 work = source['interaction_contract']['agent_channel']['work_context']
 body = next(row['content']['todo']['text'] for row in work['sources']

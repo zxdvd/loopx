@@ -1304,6 +1304,18 @@ journals without a complete contract. This is a source-integrity repair with
 additional validation cost, not installed adoption, full reader retirement or
 the original-quota outcome/net-cost qualification.
 
+The candidate's external generic CLI stdin now uses the same complete-source
+Host request v1 as native model input. It removes the second executable
+envelope from that wire and preserves the original contract, capture readers,
+Turn key and result transport. The shared checked-source owner validates v1
+directly; native adapters share version decoding, and the DSH stdio consumer
+accepts v1 as well as historical v0. Missing/invalid source, mixed carriers and
+capture drift refuse without selecting the historical decoder. The private
+executor adapter and versioned historical journal readers remain until their
+own replacement is qualified. This source-level wire cutover requires external
+v0 adapters to migrate; it establishes neither installed adoption, original
+quota outcome/full-cost qualification nor model-retention benefit.
+
 C1's inventory is part of its usable replacement, not a standalone architecture
 framework. C3/C4/C5 can proceed independently once C1's contract is stable;
 C7 can prepare measurements before C6 but cannot claim two-session outcomes.

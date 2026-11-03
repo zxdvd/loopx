@@ -24,7 +24,7 @@ from .codex_cli import (
     prepare_codex_cli_input,
 )
 from .codex_sessions import _lineage, select_managed_operation_session
-from .executor import LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION
+from .host_candidate import assert_turn_host_request_version
 from .host_failure import BuiltInHostError
 from .operation_requests import (
     operation_request_source, request_reference_instruction,
@@ -51,8 +51,7 @@ def run_codex_operation_host(
     operation_request_file: Path | None = None,
     operation_request_sha256: str | None = None,
 ) -> dict[str, Any]:
-    if request.get("schema_version") != LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION:
-        raise ValueError("unsupported LoopX Turn host request schema")
+    assert_turn_host_request_version(request)
     if sandbox not in {"read-only", "workspace-write"}:
         raise ValueError("operation tools require a restricted Codex execution sandbox")
     if not model or not reasoning_effort:

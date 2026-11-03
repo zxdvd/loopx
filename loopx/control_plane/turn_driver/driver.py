@@ -151,13 +151,15 @@ def read_turn_execution_context(
 
 def turn_host_lineage(request: Mapping[str, Any]) -> dict[str, str]:
     """Read identity from the complete owner, with historical request decoding."""
-    if "work_contract" in request:
-        from ..quota.turn_envelope import _turn_envelope_result
+    from .host_candidate import _complete_host_source
 
-        return _turn_envelope_result(
-            "complete_host_lineage", payload=request["work_contract"],
-            envelope=request.get("turn_envelope"),
-        )
+    # Result validation and completion also read the private plan. Its schema
+    # is not a model wire version; adapt only its existing source carriers.
+    source = ({key: request[key] for key in ("work_contract", "turn_envelope") if key in request}
+              if request.get("schema_version") == LOOPX_TURN_PLAN_SCHEMA_VERSION else request)
+    checked = _complete_host_source(source, operation="complete_host_lineage")
+    if checked is not None:
+        return checked
     envelope = _mapping(request.get("turn_envelope"))
     todo = selected_turn_todo(envelope)
     return {

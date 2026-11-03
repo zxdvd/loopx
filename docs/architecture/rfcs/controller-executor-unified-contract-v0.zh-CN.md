@@ -977,6 +977,14 @@ C1 候选的 journal 检查、发布、按结算查找及受管重试，现在�
 原 adapter-only decoder。这是增加校验成本的来源完整性修复，不代表已安装采用、
 全部 reader 退役或原 quota 成果／净成本资格已完成。
 
+候选版的外部 generic CLI stdin 现在与原生模型输入共用完整来源的 Host request v1。
+这条 wire 移除第二份可执行 envelope，保留原契约、capture reader、Turn key 和结果
+传输。共享 checked-source owner 直接验证 v1；原生 adapter 共用版本解码，DSH stdio
+消费者同时接受 v1 与历史 v0。来源缺失／无效、混合载体或 capture 偏移会拒绝，不能
+选择历史 decoder。私有 executor adapter 和分版本历史 journal reader 仍保留，直到
+各自替换经过验收。此源码 wire 切换要求外部 v0 adapter 迁移；它不代表已安装采用、
+原 quota 成果／完整成本资格或模型保留收益。
+
 C1 盘点是可用替换的一部分，不单独建设架构框架。C1 契约稳定后，C3/C4/C5 可以独立
 推进；C7 可以提前准备测量，但不能提前宣称双会话成果。实现 PR 列明替换的调用方、剩余
 缺口、实际测试与回退。完整语言迁移或无关 manager 重写不是前置条件；新抽象能编译

@@ -150,6 +150,11 @@ JournalPersist = Callable[[Mapping[str, Any]], None]
 
 
 def build_loopx_turn_host_request(plan: Mapping[str, Any]) -> dict[str, Any]:
+    """Build the internal executor request, retaining its versioned adapter.
+
+    Complete model/stdin delivery uses host_candidate.complete_host_input;
+    native adapters retain this request for session/effect reconciliation.
+    """
     boundary = plan.get("boundary")
     if isinstance(boundary, Mapping) and boundary.get("inspection_only") is True:
         raise ValueError("LoopX Turn CLI inspection requires the explicit run-once execution surface")
@@ -815,6 +820,12 @@ def _run_host(
     project: Path,
     timeout_seconds: float | None,
 ) -> dict[str, Any]:
+    # Dispatch has checked the source and its internal effect adapter before
+    # journal/cadence admission. External stdin gets the same single complete
+    # input as native model prompts, not another executable authority carrier.
+    from .host_candidate import _captured_model_input
+
+    host_input = _captured_model_input(request) if "work_contract" in request else request
     stdout: list[str] = []
     stderr_chars = 0
 
@@ -826,7 +837,7 @@ def _run_host(
         observed = run_host_process(
             argv,
             project=project,
-            input_text=json.dumps(request, ensure_ascii=False, separators=(",", ":")),
+            input_text=json.dumps(host_input, ensure_ascii=False, separators=(",", ":")),
             timeout_seconds=timeout_seconds,
             stdout_limit_bytes=HOST_RESULT_MAX_BYTES,
             on_stdout=stdout.append,
@@ -1642,7 +1653,7 @@ def run_loopx_turn_once(
             # must not put otherwise eligible work into an interval wait.
             # Saved typed results retain their original finalization path.
             _complete_host_source(
-                capture.plan if capture is not None else request,
+                build_loopx_turn_host_request(capture.plan) if capture is not None else request,
                 operation="host_dispatch_context",
             )
         admission = None

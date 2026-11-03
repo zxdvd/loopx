@@ -19,6 +19,7 @@ from loopx.control_plane.testing.canary_harness import run_json_cli_result, writ
 from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
 from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request
 from loopx.control_plane.work_items.context_readback import _source_content
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 
 
 def _recording_host(tmp_path):
@@ -252,7 +253,7 @@ def test_captured_acceptance_does_not_replace_current_work_admission(acceptance_
     assert result.returncode == 0, result.stdout + result.stderr
     prompt = (project / "received.txt").read_text()
     authority = json.loads(prompt.split("Turn request:\n", 1)[1].split("\n\nWhen finished", 1)[0])
-    assert authority["schema_version"] == "loopx_turn_host_request_v0"
+    assert authority["schema_version"] == "loopx_turn_host_request_v1"
     assert authority["work_contract"] == first
     assert authority["work_contract"]["interaction_contract"]["agent_channel"]["work_context"] == first["interaction_contract"]["agent_channel"]["work_context"]
 
@@ -289,6 +290,17 @@ def test_captured_acceptance_does_not_replace_current_work_admission(acceptance_
     # changed work, remove a wait or silently rebind the owner's checks.
     code, current = run(*guard, "--todo-id", target, "--turn-instance-id", "current-delivery")
     assert code == (0 if change == "checks_removed" else 1), current
+    if code:
+        # Refused selection keeps its public failure wrapper. Inspect the
+        # digest-bound original capture for the unchanged no-delivery policy;
+        # reading that evidence neither admits work nor replaces the guard.
+        from loopx.control_plane.turn_driver.decision_capture import read_context_capture_file
+
+        assert current["error_code"] == "quota_action_selection_rejected"
+        original_failure = current["captured_decision"]
+        current = read_context_capture_file(original_failure["path"], original_failure["sha256"], private=True)[2]
+    else:
+        current = read_cli_policy_payload(json.dumps(current), returncode=code)
     channel = current["interaction_contract"]["agent_channel"]
     assert channel["delivery_allowed"] is (change == "checks_removed")
     if change != "checks_removed":
@@ -316,7 +328,7 @@ def test_captured_acceptance_does_not_replace_current_work_admission(acceptance_
         assert current["interaction_contract"]["user_channel"]["action_required"] is False
     # The unselected normal/replan/wait view follows the same current owner,
     # including all cumulative requirements whenever execution needs a read.
-    inspection = cli(*guard[:-1])
+    inspection = read_cli_policy_payload(json.dumps(cli(*guard[:-1])), returncode=0)
     current_context = inspection["interaction_contract"]["agent_channel"].get("work_context", {})
     for source in current_context.get("sources", []):
         if source.get("source") == "goal_acceptance":

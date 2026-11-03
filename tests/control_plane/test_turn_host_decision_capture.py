@@ -310,7 +310,7 @@ def test_real_host_reads_original_capture_after_source_change(
     # source gate on recovery. Reuse the real CLI journal and provider state;
     # none of these rejected calls may invoke a host or settlement callback.
     from copy import deepcopy
-    from loopx.control_plane.turn_driver.executor import run_loopx_turn_once
+    from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request, run_loopx_turn_once
 
     def unexpected_effect(*_args, **_kwargs):
         raise AssertionError("rejected recovery invoked an effect")
@@ -330,7 +330,7 @@ def test_real_host_reads_original_capture_after_source_change(
     rebound = prepare_turn_decision_capture(plan, journal_path=journal_path,
                                           decision=None, existing_journal=True)
     from loopx.control_plane.turn_driver.host_candidate import complete_host_input
-    rebound_input = complete_host_input(rebound)
+    rebound_input = complete_host_input(build_loopx_turn_host_request(rebound))
     assert rebound_input["detail_ref"] == detail
     assert rebound_input["work_contract"] == source_a
     replay = list(base)
@@ -374,7 +374,7 @@ def test_real_host_reads_original_capture_after_source_change(
             staged.publish()
         assert path.read_bytes() == changed
     path.write_text(json.dumps(dict(reversed(source_a.items()))))
-    assert complete_host_input(staged.publish())["detail_ref"] == detail
+    assert complete_host_input(build_loopx_turn_host_request(staged.publish()))["detail_ref"] == detail
     path.write_bytes(original)
     path.write_text(json.dumps({**source_a, "reason": "changed during admission"}))
     changed = path.read_bytes()
@@ -386,7 +386,7 @@ def test_real_host_reads_original_capture_after_source_change(
         staged.publish()
     assert not path.exists()
     path.write_bytes(original)
-    assert complete_host_input(staged.publish())["detail_ref"] == detail
+    assert complete_host_input(build_loopx_turn_host_request(staged.publish()))["detail_ref"] == detail
     assert path.read_bytes() == original
     # Corrupt/missing evidence cannot be replaced by the caller's new guard.
     path.write_text(json.dumps({**source_a, "reason": "wrong original"}))
@@ -531,7 +531,8 @@ def test_complete_dsh_binds_session_and_tools_to_shared_work(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_real_dsh_cli_preserves_complete_input_and_once_only_settlement(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("launch", ["builtin", "generic_stdio"])
+def test_real_dsh_cli_preserves_complete_input_and_once_only_settlement(tmp_path, monkeypatch, provider, launch):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     fixture = _fixture_module()
     project, runtime, workspace, registry = fixture._write_fixture(tmp_path, turn_count=2)
@@ -546,6 +547,7 @@ def test_real_dsh_cli_preserves_complete_input_and_once_only_settlement(tmp_path
         "def run_dsh_turn(**kwargs):\n"
         "    source, _ = json.JSONDecoder().raw_decode(kwargs['prompt'].split('Turn request:\\n', 1)[1])\n"
         "    contract = source['work_contract']\n"
+        "    assert source['schema_version'] == 'loopx_turn_host_request_v1'\n"
         "    assert contract['schema_version'] == 'loopx_turn_envelope_v1'\n"
         "    assert 'turn_envelope' not in source\n"
         f"    assert contract['goal_id'] == {fixture.GOAL_ID!r}\n"
@@ -563,10 +565,14 @@ def test_real_dsh_cli_preserves_complete_input_and_once_only_settlement(tmp_path
     )
     validator = [sys.executable, "-c", "import json,pathlib,sys; json.load(sys.stdin); "
                  f"assert pathlib.Path({fixture.MARKER_NAME!r}).read_text() == {fixture._marker_value(1)!r}"]
+    host_args = (["--host", "dsh", "--dsh-runner", str(runner)] if launch == "builtin" else [
+        "--host", "generic-cli", "--host-adapter-command-json", json.dumps([
+            sys.executable, "-m", "loopx.dsh_goal_mode", "--workspace", str(workspace),
+            "--dsh-runner", str(runner), "--dsh-home", str(tmp_path / "stdio-dsh-home")])])
     argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
             "turn", "run-once", "--goal-id", fixture.GOAL_ID, "--agent-id", fixture.AGENT_ID,
-            "--host", "dsh", "--execution-mode", "isolated-headless", "--project", str(workspace),
-            "--dsh-runner", str(runner), "--validation-command-json", json.dumps(validator),
+            *host_args, "--execution-mode", "isolated-headless", "--project", str(workspace),
+            "--validation-command-json", json.dumps(validator),
             "--validation-failure-kind", "repair_required", "--no-global-sync", "--timeout-seconds", "20"]
     code, first = fixture._run_cli([*argv, "--turn-instance-id", "dsh-complete-source", "--execute"])
     assert code == 0 and first["status"] == "committed", first

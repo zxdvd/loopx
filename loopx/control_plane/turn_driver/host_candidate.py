@@ -22,6 +22,7 @@ from .executor import (
 )
 
 LOOPX_TURN_HOST_REQUEST_SCHEMA = "loopx_turn_host_request_v0"
+COMPLETE_TURN_HOST_REQUEST_SCHEMA = "loopx_turn_host_request_v1"
 LOOPX_TURN_RESULT_SCHEMA = "loopx_turn_result_v0"
 COMPLETED_PHASES = ["host_execute", "typed_result"]
 
@@ -67,12 +68,28 @@ def _canonical_hash(value: Any) -> str:
 def _complete_host_source(
     request: Mapping[str, Any], *, operation: str = "host_context",
 ) -> dict[str, Any] | None:
+    if "schema_version" in request:
+        assert_turn_host_request_version(request)
     if "work_contract" not in request:
         return None
     from ..quota.turn_envelope import _turn_envelope_result
 
+    header = ({"complete_host_request": {key: request[key] for key in (
+        "schema_version", "turn_key", "source_decision_hash", "detail_ref",
+    ) if key in request}} if request.get("schema_version") == COMPLETE_TURN_HOST_REQUEST_SCHEMA else {})
     return _turn_envelope_result(operation, payload=request["work_contract"],
-                                 envelope=_mapping(request.get("turn_envelope")))
+                                 envelope=_mapping(request.get("turn_envelope")), **header)
+
+
+def assert_turn_host_request_version(request: Mapping[str, Any]) -> None:
+    """Decode the two published Host transports; neither grants authority."""
+    version = request.get("schema_version")
+    if version not in (LOOPX_TURN_HOST_REQUEST_SCHEMA, COMPLETE_TURN_HOST_REQUEST_SCHEMA):
+        raise ValueError("unsupported LoopX Turn host request schema")
+    if version == COMPLETE_TURN_HOST_REQUEST_SCHEMA and (
+        "work_contract" not in request or "turn_envelope" in request
+    ):
+        raise ValueError("complete Host request requires work_contract without an executor adapter")
 
 
 def execution_profile_present(request: Mapping[str, Any]) -> bool:
@@ -129,7 +146,8 @@ def extract_turn_work_identity(request: Mapping[str, Any]) -> dict[str, Any]:
 def _captured_model_input(request: Mapping[str, Any]) -> dict[str, Any]:
     """Transport original-reader metadata after complete-source validation."""
     envelope = _mapping(request.get("turn_envelope"))
-    model_input = {key: value for key, value in request.items() if key != "turn_envelope"}
+    model_input = {**{key: value for key, value in request.items() if key != "turn_envelope"},
+                   "schema_version": COMPLETE_TURN_HOST_REQUEST_SCHEMA}
     detail = _mapping(envelope.get("detail_ref"))
     captured = _mapping(detail.get("captured_decision"))
     if captured:
