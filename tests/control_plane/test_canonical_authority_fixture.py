@@ -77,7 +77,7 @@ body = next(row['content']['todo']['text'] for row in work['sources']
 payload = body.rsplit('Payload: ', 1)[1]
 pathlib.Path('docs/source-artifact.txt').write_text(payload)
 pathlib.Path('docs/observed-source.txt').write_text(body)
-calls = pathlib.Path('host-calls.txt')
+calls = pathlib.Path('docs/source-host-calls.txt')
 assert not calls.exists(), 'settlement replay relaunched the Host'
 calls.write_text('1')
 json.dump(dict(schema_version='loopx_turn_result_v0', turn_key=request['turn_key'],
@@ -107,5 +107,5 @@ json.dump(dict(schema_version='loopx_turn_result_v0', turn_key=request['turn_key
     assert fixture._quota_spend_count(runtime) == 1
     code, replay = fixture._run_cli([*argv, "--resume-turn-key", first["resume_turn_key"]])
     assert code == 0 and replay["status"] == "committed", replay
-    assert (workspace / "host-calls.txt").read_text() == "1"
+    assert (workspace / "docs/source-host-calls.txt").read_text() == "1"
     assert fixture._quota_spend_count(runtime) == 1
