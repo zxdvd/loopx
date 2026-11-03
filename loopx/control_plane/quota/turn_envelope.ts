@@ -836,7 +836,9 @@ function replanView(request: JsonObject): JsonObject {
     // Preserve executable shape and all settlement rules; decision advice and
     // duplicate context are available in the unchanged full captured source.
     const stride = {...object(packet.stride_control)};
-    for (const key of ["decision_followthrough", "explore_basis", "decision_value_review", "minimal_example"]) delete stride[key];
+    // The current nested review syntax belongs to authoring, not duplicate
+    // decision evidence. Top-level required_fields cannot describe that shape.
+    for (const key of ["decision_followthrough", "explore_basis", "decision_value_review"]) delete stride[key];
     const contract = replanAuthoringContract(payload);
     if (contract.vision_authoring) {
       const authoring = {...object(contract.vision_authoring)};
